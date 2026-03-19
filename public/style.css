@@ -637,10 +637,29 @@ body {
 }
 
 .session-tab-label {
-  pointer-events: none;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 120px;
+}
+
+/* Inline rename input */
+.session-rename-input {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 4px;
+  height: 18px;
+  border: 1px solid rgba(140, 198, 63, 0.4);
+  border-radius: 3px;
+  background: var(--glass-3);
+  color: var(--fg);
+  outline: none;
+  min-width: 40px;
+  max-width: 160px;
+}
+
+.session-rename-input:focus {
+  box-shadow: 0 0 0 2px var(--glow);
 }
 
 .session-tab-dot {

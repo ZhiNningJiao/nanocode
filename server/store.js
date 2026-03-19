@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from '
 import { randomUUID } from 'crypto'
 
 function emptyData() {
-  return { projects: [], settings: {}, archivedSessions: {}, managedSessions: {} }
+  return { projects: [], settings: {}, archivedSessions: {}, managedSessions: {}, sessionNames: {} }
 }
 
 export function createStore(filePath = ':memory:') {
@@ -20,6 +20,7 @@ export function createStore(filePath = ':memory:') {
     if (!data.settings) data.settings = {}
     if (!data.archivedSessions) data.archivedSessions = {}
     if (!data.managedSessions) data.managedSessions = {}
+    if (!data.sessionNames) data.sessionNames = {}
   }
 
   function save() {
@@ -74,6 +75,7 @@ export function createStore(filePath = ':memory:') {
     data.projects = data.projects.filter((p) => p.id !== id)
     delete data.archivedSessions[id]
     delete data.managedSessions[id]
+    delete data.sessionNames[id]
     save()
   }
 
@@ -140,6 +142,24 @@ export function createStore(filePath = ':memory:') {
     return [...(data.managedSessions[projectId] || [])]
   }
 
+  function getSessionName(projectId, sessionId) {
+    return data.sessionNames[projectId]?.[sessionId] || null
+  }
+
+  function setSessionName(projectId, sessionId, name) {
+    if (!data.sessionNames[projectId]) data.sessionNames[projectId] = {}
+    if (name) {
+      data.sessionNames[projectId][sessionId] = name
+    } else {
+      delete data.sessionNames[projectId][sessionId]
+    }
+    save()
+  }
+
+  function getAllSessionNames(projectId) {
+    return { ...(data.sessionNames[projectId] || {}) }
+  }
+
   function close() { /* no-op for JSON store */ }
 
   return {
@@ -148,6 +168,7 @@ export function createStore(filePath = ':memory:') {
     migrateProjectsJson, ensureStarterProject,
     archiveSession, unarchiveSession, listArchivedSessions,
     markSessionManaged, listManagedSessions,
+    getSessionName, setSessionName, getAllSessionNames,
     close,
   }
 }

@@ -81,6 +81,17 @@ export function fetchManagedDiskSessions(projectId, provider = 'claude') {
   ).catch(() => [])
 }
 
+export function fetchSessionNames(projectId) {
+  return request(`/projects/${projectId}/session-names`).catch(() => ({}))
+}
+
+export function updateSessionName(projectId, sessionId, name) {
+  return request(`/projects/${projectId}/sessions/${sessionId}/name`, {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+  })
+}
+
 export function fetchSshHosts() {
   return request('/ssh-hosts')
 }

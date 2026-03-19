@@ -316,6 +316,24 @@ export function createTerminalRoutes(store) {
     res.status(204).send()
   })
 
+  router.get('/api/projects/:id/session-names', (req, res) => {
+    const project = store.getProject(req.params.id)
+    if (!project) {
+      return res.status(404).json({ error: 'project not found' })
+    }
+    res.json(store.getAllSessionNames(req.params.id))
+  })
+
+  router.put('/api/projects/:id/sessions/:sessionId/name', (req, res) => {
+    const project = store.getProject(req.params.id)
+    if (!project) {
+      return res.status(404).json({ error: 'project not found' })
+    }
+    const { name } = req.body || {}
+    store.setSessionName(req.params.id, req.params.sessionId, name || '')
+    res.json({ ok: true })
+  })
+
   router.delete('/api/projects/:id/sessions/:sessionId', (req, res) => {
     const project = store.getProject(req.params.id)
     if (!project) {

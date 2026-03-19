@@ -14,6 +14,8 @@ import {
   fetchArchivedSessions,
   markSessionManaged,
   fetchManagedDiskSessions,
+  fetchSessionNames,
+  updateSessionName as apiUpdateSessionName,
 } from './api.js'
 import { state } from './state.js'
 
@@ -28,6 +30,7 @@ let runningSessions = []
 let activeSessionId = null
 let newSessionCounter = 0
 let currentProjectId = null
+let sessionNames = {}
 
 // Group dropdown state
 let expandedGroupKey = null
@@ -229,12 +232,14 @@ function createPanes(projectId) {
 async function fetchAndRenderSessions(projectId) {
   const provider = state.cliProvider
   const fetchDisk = managedOnly ? fetchManagedDiskSessions : fetchDiskSessions
-  const [disk, running] = await Promise.all([
+  const [disk, running, names] = await Promise.all([
     fetchDisk(projectId, provider).catch(() => []),
     fetchRunningSessions(projectId, provider).catch(() => []),
+    fetchSessionNames(projectId).catch(() => ({})),
   ])
   diskSessions = disk
   runningSessions = running
+  sessionNames = names
 
   if (!activeSessionId && diskSessions.length) {
     activeSessionId = diskSessions[0].sessionId
@@ -352,10 +357,21 @@ function renderSessionTabs() {
       tab.appendChild(dot)
     }
 
+    // Use custom name if set for any segment in the group
+    const customName = group.segments
+      .map((s) => sessionNames[s.sessionId])
+      .find((n) => n)
     const label = document.createElement('span')
     label.className = 'session-tab-label'
-    label.textContent = group.label
+    label.textContent = customName || group.label
+    if (customName) label.title = group.label // show original as tooltip
     tab.appendChild(label)
+
+    // Double-click to rename
+    label.addEventListener('dblclick', (e) => {
+      e.stopPropagation()
+      startRenameSession(group.segments[0].sessionId, label, customName || group.label)
+    })
 
     // Count badge for multi-segment groups
     if (group.isGroup) {
@@ -428,6 +444,41 @@ function switchClaudeSession(sessionId) {
     markSessionManaged(currentProjectId, sessionId).catch(() => {})
   }
   renderSessionTabs()
+}
+
+// --- Rename session ---
+
+function startRenameSession(sessionId, labelEl, currentName) {
+  const input = document.createElement('input')
+  input.className = 'session-rename-input'
+  input.type = 'text'
+  input.value = currentName
+  input.style.width = Math.max(60, labelEl.offsetWidth + 20) + 'px'
+
+  const parent = labelEl.parentNode
+  parent.replaceChild(input, labelEl)
+  input.focus()
+  input.select()
+
+  function commit() {
+    const newName = input.value.trim()
+    if (currentProjectId && newName !== currentName) {
+      sessionNames[sessionId] = newName || undefined
+      if (!newName) delete sessionNames[sessionId]
+      apiUpdateSessionName(currentProjectId, sessionId, newName).catch(() => {})
+    }
+    renderSessionTabs()
+  }
+
+  function cancel() {
+    renderSessionTabs()
+  }
+
+  input.addEventListener('blur', commit)
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur() }
+    if (e.key === 'Escape') { e.preventDefault(); input.removeEventListener('blur', commit); cancel() }
+  })
 }
 
 // --- Segment dropdown ---
@@ -1214,9 +1265,12 @@ function renderMobileSessionDrawer() {
       item.appendChild(dot)
     }
 
+    const drawerCustomName = group.segments
+      .map((s) => sessionNames[s.sessionId])
+      .find((n) => n)
     const label = document.createElement('span')
     label.className = 'session-drawer-item-label'
-    label.textContent = group.label
+    label.textContent = drawerCustomName || group.label
     item.appendChild(label)
 
     if (group.isGroup) {

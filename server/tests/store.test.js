@@ -104,4 +104,34 @@ describe('store', () => {
     assert.equal(project.ssh_port, null)
     assert.equal(project.ssh_key, null)
   })
+
+  it('sets, gets, and clears session names', () => {
+    const project = store.createProject('Alpha', '/tmp/alpha')
+
+    assert.equal(store.getSessionName(project.id, 'session-a'), null)
+
+    store.setSessionName(project.id, 'session-a', 'My Agent')
+    assert.equal(store.getSessionName(project.id, 'session-a'), 'My Agent')
+
+    store.setSessionName(project.id, 'session-b', 'Worker')
+    assert.deepEqual(store.getAllSessionNames(project.id), {
+      'session-a': 'My Agent',
+      'session-b': 'Worker',
+    })
+
+    // Clear a name
+    store.setSessionName(project.id, 'session-a', '')
+    assert.equal(store.getSessionName(project.id, 'session-a'), null)
+    assert.deepEqual(store.getAllSessionNames(project.id), {
+      'session-b': 'Worker',
+    })
+  })
+
+  it('removes session names when a project is deleted', () => {
+    const project = store.createProject('Alpha', '/tmp/alpha')
+    store.setSessionName(project.id, 'session-a', 'Named')
+
+    store.removeProject(project.id)
+    assert.deepEqual(store.getAllSessionNames(project.id), {})
+  })
 })
