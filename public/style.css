@@ -533,6 +533,43 @@ body {
   flex: 1;
   background: #0a0b0c;
   overflow: hidden;
+  position: relative;
+}
+
+/* Scroll-to-bottom floating button */
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--glass-border-hi);
+  border-radius: 50%;
+  background: rgba(16, 17, 20, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--fg-2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background var(--t-fast) ease,
+    color var(--t-fast) ease,
+    box-shadow var(--t-fast) ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.scroll-to-bottom-btn:hover {
+  background: rgba(140, 198, 63, 0.15);
+  color: var(--primary);
+  border-color: rgba(140, 198, 63, 0.3);
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.5),
+    0 0 8px var(--glow);
 }
 
 .pane.target-active .pane-header {

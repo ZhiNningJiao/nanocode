@@ -71,6 +71,8 @@ export class TerminalPane {
     this._resizeTimer = null
     this._pingInterval = null
     this._rttEwma = null
+    this._userScrolledUp = false
+    this._scrollBtn = null
 
     // Create xterm — reduced scrollback saves memory on constrained clients
     const mobile = window.matchMedia('(max-width: 768px)').matches
@@ -94,6 +96,9 @@ export class TerminalPane {
 
     // Open in container
     this.term.open(container)
+
+    // Track user scroll position for auto-scroll behavior
+    this._initScrollTracking(container)
 
     // Mobile: fix touch scrolling — xterm.js sets inline touch-action:none on
     // .xterm-screen which blocks all touch gestures. Override it and add manual
@@ -222,6 +227,50 @@ export class TerminalPane {
     )
   }
 
+  _initScrollTracking(container) {
+    // Detect when user scrolls up (away from bottom)
+    const viewport = container.querySelector('.xterm-viewport')
+    if (viewport) {
+      viewport.addEventListener('scroll', () => {
+        const atBottom = viewport.scrollTop >= viewport.scrollHeight - viewport.clientHeight - 5
+        this._userScrolledUp = !atBottom
+        this._updateScrollBtn()
+      })
+    }
+
+    // Also track programmatic scroll via xterm's scroll event
+    this.term.onScroll(() => {
+      // If at the bottom of the buffer, user is not scrolled up
+      const buf = this.term.buffer.active
+      this._userScrolledUp = buf.viewportY < buf.baseY
+      this._updateScrollBtn()
+    })
+
+    // Create scroll-to-bottom button
+    const btn = document.createElement('button')
+    btn.className = 'scroll-to-bottom-btn'
+    btn.type = 'button'
+    btn.innerHTML = '&#8595;'
+    btn.title = 'Scroll to bottom'
+    btn.hidden = true
+    btn.addEventListener('click', () => this.scrollToBottom())
+    container.style.position = 'relative'
+    container.appendChild(btn)
+    this._scrollBtn = btn
+  }
+
+  _updateScrollBtn() {
+    if (this._scrollBtn) {
+      this._scrollBtn.hidden = !this._userScrolledUp
+    }
+  }
+
+  scrollToBottom() {
+    this.term.scrollToBottom()
+    this._userScrolledUp = false
+    this._updateScrollBtn()
+  }
+
   _connect() {
     this._exited = false
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -258,10 +307,20 @@ export class TerminalPane {
       }
 
       if (msg.type === 'history') {
-        if (msg.data) this.term.write(msg.data)
+        if (msg.data) {
+          this.term.write(msg.data)
+          // After history load, scroll to bottom
+          requestAnimationFrame(() => this.scrollToBottom())
+        }
       } else if (msg.type === 'output') {
         const toWrite = this.localEcho.reconcile(msg.data)
-        if (toWrite) this.term.write(toWrite)
+        if (toWrite) {
+          this.term.write(toWrite)
+          // Auto-scroll if user hasn't manually scrolled up
+          if (!this._userScrolledUp) {
+            this.term.scrollToBottom()
+          }
+        }
       } else if (msg.type === 'pong') {
         this._onPong(msg.id)
       } else if (msg.type === 'exit') {
@@ -465,6 +524,7 @@ export class TerminalPane {
     this._resizeObserver.disconnect()
     this._dataDisposable.dispose()
     this._keyDisposable.dispose()
+    if (this._scrollBtn) this._scrollBtn.remove()
     if (this._ws) {
       this._ws.onclose = null
       this._ws.close()
