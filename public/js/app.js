@@ -8,6 +8,7 @@ import {
   isInitialized,
   switchProvider,
   updateProviderLabels,
+  applyFontSize,
 } from './terminal-view.js'
 import { showHosts, showProjects, hideLanding } from './landing.js'
 import { slugify, hostSlug, projectSlug, projectPath, navigateTo } from './router.js'
@@ -55,11 +56,20 @@ const cliProviderGroup = document.getElementById('cli-provider-group')
 const cliSaveBtn = document.getElementById('cli-save-btn')
 const cliStatusEl = document.getElementById('cli-status')
 
+const fontSizeRange = document.getElementById('font-size-range')
+const fontSizeValue = document.getElementById('font-size-value')
+const fontSizeSaveBtn = document.getElementById('font-size-save-btn')
+const fontSizeStatusEl = document.getElementById('font-size-status')
+
 function loadSettings() {
   const radios = cliProviderGroup?.querySelectorAll('input[name="cli-provider"]')
   if (!radios) return
   for (const radio of radios) {
     radio.checked = radio.value === state.cliProvider
+  }
+  if (fontSizeRange) {
+    fontSizeRange.value = state.fontSize
+    if (fontSizeValue) fontSizeValue.textContent = state.fontSize + 'px'
   }
 }
 
@@ -79,6 +89,32 @@ if (cliSaveBtn) {
       cliStatusEl.textContent = err.message
       cliStatusEl.className = 'settings-status error'
       setTimeout(() => { cliStatusEl.textContent = '' }, 3000)
+    }
+  })
+}
+
+// Font size range live preview
+if (fontSizeRange && fontSizeValue) {
+  fontSizeRange.addEventListener('input', () => {
+    fontSizeValue.textContent = fontSizeRange.value + 'px'
+  })
+}
+
+if (fontSizeSaveBtn) {
+  fontSizeSaveBtn.addEventListener('click', async () => {
+    const size = parseInt(fontSizeRange?.value, 10)
+    if (!size || size < 10 || size > 22) return
+    try {
+      await updateSetting('font_size', size)
+      state.fontSize = size
+      if (isInitialized()) applyFontSize(size)
+      fontSizeStatusEl.textContent = 'Saved'
+      fontSizeStatusEl.className = 'settings-status success'
+      setTimeout(() => { fontSizeStatusEl.textContent = '' }, 3000)
+    } catch (err) {
+      fontSizeStatusEl.textContent = err.message
+      fontSizeStatusEl.className = 'settings-status error'
+      setTimeout(() => { fontSizeStatusEl.textContent = '' }, 3000)
     }
   })
 }
@@ -153,6 +189,7 @@ async function init() {
   try {
     const settings = await fetchSettings()
     if (settings.cli_provider) state.cliProvider = settings.cli_provider
+    if (settings.font_size) state.fontSize = settings.font_size
   } catch {}
 
   const backBtn = document.getElementById('back-to-menu')

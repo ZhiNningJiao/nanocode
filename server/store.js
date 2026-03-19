@@ -25,7 +25,9 @@ export function createStore(filePath = ':memory:') {
 
   function save() {
     if (inMemory) return
-    writeFileSync(filePath, JSON.stringify(data, null, 2))
+    const tmp = filePath + '.tmp'
+    writeFileSync(tmp, JSON.stringify(data, null, 2))
+    renameSync(tmp, filePath)
   }
 
   // --- Settings ---

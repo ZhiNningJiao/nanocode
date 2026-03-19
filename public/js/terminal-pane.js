@@ -79,7 +79,7 @@ export class TerminalPane {
     this.term = new Terminal({
       theme: THEME,
       fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, monospace",
-      fontSize: mobile ? 13 : 14,
+      fontSize: opts.fontSize || (mobile ? 13 : 14),
       scrollback: mobile ? 2000 : 4000,
       cursorBlink: true,
       allowProposedApi: true,

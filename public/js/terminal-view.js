@@ -169,6 +169,21 @@ export function updateProviderLabels() {
  * pane with the new provider and refreshes the session list.
  * Called when the cli_provider setting changes via WebSocket.
  */
+/**
+ * Apply a new font size to both terminal panes.
+ * @param {number} size — font size in pixels
+ */
+export function applyFontSize(size) {
+  if (bashPane) {
+    bashPane.term.options.fontSize = size
+    requestAnimationFrame(() => bashPane.fitAddon.fit())
+  }
+  if (claudePane) {
+    claudePane.term.options.fontSize = size
+    requestAnimationFrame(() => claudePane.fitAddon.fit())
+  }
+}
+
 export function switchProvider() {
   if (!initialized || !currentProjectId) return
   const provider = state.cliProvider
@@ -219,6 +234,7 @@ function createPanes(projectId) {
   bashPane = new TerminalPane(bashContainer, {
     projectId,
     sessionType: 'bash',
+    fontSize: state.fontSize,
     onStatusChange: (s) => setStatus(statusBash, 'Bash', s),
   })
   claudePane = new TerminalPane(claudeContainer, {
@@ -226,6 +242,7 @@ function createPanes(projectId) {
     sessionType: 'claude',
     claudeSessionId: activeSessionId || '',
     cliProvider: state.cliProvider,
+    fontSize: state.fontSize,
     onStatusChange: (s) => setStatus(statusClaude, getProviderMeta().statusLabel, s),
   })
 }

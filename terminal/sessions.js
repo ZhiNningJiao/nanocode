@@ -6,6 +6,9 @@ import { homedir } from 'node:os'
 
 const OUTPUT_FLUSH_MS = 12
 const SCROLLBACK_SIZE = 100 * 1024 // 100KB
+const HEARTBEAT_TIMEOUT_MS = 30000 // 30s — disconnect if no ping received
+const HEARTBEAT_CHECK_MS = 10000 // check interval
+const SESSION_GC_DELAY_MS = 30 * 60 * 1000 // 30 min — GC exited sessions with no clients
 
 /** Circular buffer for raw terminal output; replay on reconnect */
 class ScrollbackBuffer {
@@ -48,7 +51,10 @@ class Session {
     this._scrollback = new ScrollbackBuffer()
     /** @type {Set<import('ws').WebSocket>} */
     this._clients = new Set()
+    /** @type {Map<import('ws').WebSocket, { lastPing: number, heartbeatTimer: ReturnType<typeof setInterval> | null }>} */
+    this._clientMeta = new Map()
     this._exited = false
+    this._gcTimer = null
     this._exitCode = null
     this._proc = null
     this._outBuf = ''
@@ -98,6 +104,7 @@ class Session {
       for (const ws of this._clients) {
         if (ws.readyState === 1) ws.send(msg)
       }
+      this._scheduleGc()
     })
   }
 
@@ -123,6 +130,7 @@ class Session {
       ws.send(JSON.stringify({ type: 'history', data: history }))
     }
     this._clients.add(ws)
+    if (this._gcTimer) { clearTimeout(this._gcTimer); this._gcTimer = null }
     if (this._proc && !this._exited) {
       try {
         this._proc.resize(Math.max(1, cols), Math.max(1, rows))
@@ -130,6 +138,15 @@ class Session {
         // ignore
       }
     }
+
+    // Heartbeat: track last ping from this client
+    const meta = { lastPing: Date.now(), heartbeatTimer: null }
+    this._clientMeta.set(ws, meta)
+    meta.heartbeatTimer = setInterval(() => {
+      if (Date.now() - meta.lastPing > HEARTBEAT_TIMEOUT_MS) {
+        ws.terminate()
+      }
+    }, HEARTBEAT_CHECK_MS)
 
     const onMessage = (raw) => {
       let msg
@@ -154,6 +171,7 @@ class Session {
           }
           break
         case 'ping':
+          meta.lastPing = Date.now()
           if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'pong', id: msg.id }))
           break
         case 'restart':
@@ -173,7 +191,11 @@ class Session {
    * @param {import('ws').WebSocket} ws
    */
   detach(ws) {
+    const meta = this._clientMeta.get(ws)
+    if (meta?.heartbeatTimer) clearInterval(meta.heartbeatTimer)
+    this._clientMeta.delete(ws)
     this._clients.delete(ws)
+    this._scheduleGc()
   }
 
   /**
@@ -195,8 +217,25 @@ class Session {
     this._spawn(cols, rows)
   }
 
+  /** Schedule GC if session has exited and has no clients. */
+  _scheduleGc() {
+    if (this._gcTimer) return
+    if (!this._exited || this._clients.size > 0) return
+    this._gcTimer = setTimeout(() => {
+      if (this._exited && this._clients.size === 0) {
+        this.destroy()
+        sessions.delete(this._key)
+      }
+    }, SESSION_GC_DELAY_MS)
+  }
+
   destroy() {
+    if (this._gcTimer) clearTimeout(this._gcTimer)
     if (this._flushTimer) clearTimeout(this._flushTimer)
+    for (const meta of this._clientMeta.values()) {
+      if (meta.heartbeatTimer) clearInterval(meta.heartbeatTimer)
+    }
+    this._clientMeta.clear()
     if (this._proc) {
       try {
         this._proc.kill()

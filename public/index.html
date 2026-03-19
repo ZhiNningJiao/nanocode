@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nanocode</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#8cc63f" />
 
     <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
     <link rel="stylesheet" href="/style.css" />
@@ -89,6 +92,22 @@
                   Save
                 </button>
                 <span class="settings-status" id="cli-status"></span>
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3 class="settings-section-title">Terminal Font Size</h3>
+              <p class="settings-desc">
+                Adjust the font size for terminal panes.
+              </p>
+              <div class="settings-range-row">
+                <input type="range" id="font-size-range" min="10" max="22" step="1" value="14" class="settings-range" />
+                <span class="settings-range-value" id="font-size-value">14px</span>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="btn btn-primary" id="font-size-save-btn">
+                  Save
+                </button>
+                <span class="settings-status" id="font-size-status"></span>
               </div>
             </section>
           </div>
