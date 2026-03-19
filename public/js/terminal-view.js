@@ -1109,6 +1109,13 @@ function setupModeToggle() {
       const target = panes[activeMode].pane()
       if (!target) return
       switch (action) {
+        case 'copy': {
+          const selection = target.term.getSelection()
+          if (selection) {
+            navigator.clipboard.writeText(selection).catch(() => {})
+          }
+          break
+        }
         case 'ctrl-c':
           target.sendRaw('\x03')
           break

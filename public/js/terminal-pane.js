@@ -138,9 +138,22 @@ export class TerminalPane {
       this._send({ type: 'input', data })
     })
 
-    // Paste handler — Ctrl+V / Ctrl+Shift+V
+    // Copy/Paste handler — Ctrl+C copies when selection exists, Ctrl+V pastes
     this._keyDisposable = this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
+
+      // Ctrl+C / Cmd+C — copy selection if text is selected, otherwise send ^C
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C') && !e.shiftKey) {
+        const selection = this.term.getSelection()
+        if (selection) {
+          navigator.clipboard.writeText(selection).catch(() => {})
+          return false // prevent xterm from sending ^C
+        }
+        // No selection — let xterm handle it (sends ^C to terminal)
+        return true
+      }
+
+      // Ctrl+V / Cmd+V — paste from clipboard
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
         navigator.clipboard
           .readText()
@@ -150,6 +163,7 @@ export class TerminalPane {
           .catch(() => {})
         return false
       }
+
       return true
     })
 
