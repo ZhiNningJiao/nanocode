@@ -70,10 +70,13 @@ function getProviderMeta(provider = state.cliProvider) {
   return PROVIDER_META[provider] || PROVIDER_META.claude
 }
 
-function setStatus(el, label, connected) {
+function setStatus(el, label, status) {
   if (!el) return
-  el.textContent = `${label}: ${connected ? 'connected' : 'disconnected'}`
-  el.classList.toggle('connected', connected)
+  // status: 'connected' | 'connecting' | 'disconnected'
+  el.textContent = `${label}: ${status}`
+  el.classList.remove('connected', 'connecting')
+  if (status === 'connected') el.classList.add('connected')
+  else if (status === 'connecting') el.classList.add('connecting')
 }
 
 /**
@@ -142,11 +145,11 @@ export function updateProviderLabels() {
   // Update pane header label
   const headerLabel = document.querySelector('.pane-right .pane-header-label')
   if (headerLabel) headerLabel.textContent = meta.paneLabel
-  setStatus(
-    statusClaude,
-    meta.statusLabel,
-    !!claudePane?._ws && claudePane._ws.readyState === WebSocket.OPEN
-  )
+  const wsState = claudePane?._ws?.readyState
+  const wsStatus = wsState === WebSocket.OPEN ? 'connected'
+    : wsState === WebSocket.CONNECTING ? 'connecting'
+    : 'disconnected'
+  setStatus(statusClaude, meta.statusLabel, wsStatus)
 
   // Update mode toggle button text (preserve the SVG icon)
   const modeClaudeBtn = document.getElementById('mode-claude')
@@ -216,14 +219,14 @@ function createPanes(projectId) {
   bashPane = new TerminalPane(bashContainer, {
     projectId,
     sessionType: 'bash',
-    onStatusChange: (c) => setStatus(statusBash, 'Bash', c),
+    onStatusChange: (s) => setStatus(statusBash, 'Bash', s),
   })
   claudePane = new TerminalPane(claudeContainer, {
     projectId,
     sessionType: 'claude',
     claudeSessionId: activeSessionId || '',
     cliProvider: state.cliProvider,
-    onStatusChange: (c) => setStatus(statusClaude, getProviderMeta().statusLabel, c),
+    onStatusChange: (s) => setStatus(statusClaude, getProviderMeta().statusLabel, s),
   })
 }
 

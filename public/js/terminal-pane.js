@@ -332,10 +332,11 @@ export class TerminalPane {
     this._exited = false
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     this._ws = new WebSocket(`${proto}//${location.host}${WS_PATH}`)
+    this.onStatusChange('connecting')
 
     this._ws.onopen = () => {
       this._reconnectAttempts = 0 // reset backoff on success
-      this.onStatusChange(true)
+      this.onStatusChange('connected')
       const { cols, rows } = this._dimensions()
       this._send({
         type: 'attach',
@@ -396,7 +397,7 @@ export class TerminalPane {
 
     this._ws.onclose = () => {
       this._stopPing()
-      this.onStatusChange(false)
+      this.onStatusChange('disconnected')
       if (!this._exited) {
         this._scheduleReconnect()
       }
