@@ -106,7 +106,7 @@ export async function showProjects(host, projects, navigate) {
   const cards = el('div', 'landing-cards')
 
   for (const proj of hostProjects) {
-    const subtitle = isLocal ? proj.cwd : proj.cwd
+    const subtitle = proj.cwd
     const card = makeProjectCard(proj.name, subtitle)
     card.addEventListener('click', () => {
       navigate(projectPath(proj, projects))
@@ -199,26 +199,44 @@ function showNewProjectForm(grid, hostname, hostProjects, allProjects, navigate,
   const key = existing?.ssh_key || sshMeta?.identityFile || null
 
   const form = el('div', 'landing-new-form')
-  form.innerHTML = `
-    <h3 class="landing-form-title">New project on ${hostname}</h3>
-    <label class="landing-form-label">Remote directory
-      <input class="landing-form-input" id="lf-dir" type="text" autocomplete="off"
-             placeholder="/home/${user}/project" value="/home/${user}/" />
-    </label>
-    <label class="landing-form-label">Project name
-      <input class="landing-form-input" id="lf-name" type="text" autocomplete="off"
-             placeholder="my-project" />
-    </label>
-    <div class="landing-form-actions">
-      <button type="button" class="btn-secondary" id="lf-cancel">Cancel</button>
-      <button type="button" class="btn-primary" id="lf-create">Create</button>
-    </div>
-  `
+
+  const title = el('h3', 'landing-form-title')
+  title.textContent = `New project on ${hostname}`
+  form.appendChild(title)
+
+  const dirLabel = el('label', 'landing-form-label', 'Remote directory')
+  const dirInput = document.createElement('input')
+  dirInput.className = 'landing-form-input'
+  dirInput.id = 'lf-dir'
+  dirInput.type = 'text'
+  dirInput.autocomplete = 'off'
+  dirInput.placeholder = `/home/${user}/project`
+  dirInput.value = `/home/${user}/`
+  dirLabel.appendChild(dirInput)
+  form.appendChild(dirLabel)
+
+  const nameLabel = el('label', 'landing-form-label', 'Project name')
+  const nameInput = document.createElement('input')
+  nameInput.className = 'landing-form-input'
+  nameInput.id = 'lf-name'
+  nameInput.type = 'text'
+  nameInput.autocomplete = 'off'
+  nameInput.placeholder = 'my-project'
+  nameLabel.appendChild(nameInput)
+  form.appendChild(nameLabel)
+
+  const actions = el('div', 'landing-form-actions')
+  const cancelBtn = el('button', 'btn-secondary', 'Cancel')
+  cancelBtn.type = 'button'
+  cancelBtn.id = 'lf-cancel'
+  const createBtn = el('button', 'btn-primary', 'Create')
+  createBtn.type = 'button'
+  createBtn.id = 'lf-create'
+  actions.appendChild(cancelBtn)
+  actions.appendChild(createBtn)
+  form.appendChild(actions)
 
   grid.appendChild(form)
-
-  const dirInput = form.querySelector('#lf-dir')
-  const nameInput = form.querySelector('#lf-name')
   dirInput.focus()
 
   // Auto-fill name from directory

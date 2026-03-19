@@ -262,11 +262,6 @@ export function listCliSessions(projectId, provider) {
   return ids
 }
 
-/** @deprecated Use listCliSessions instead */
-export function listClaudeSessions(projectId) {
-  return listCliSessions(projectId)
-}
-
 /**
  * Destroy a single session by key.
  * @param {string} sessionKey
