@@ -174,7 +174,7 @@ export class TerminalPane {
   /**
    * Fix touch scrolling on mobile. xterm.js sets inline touch-action:none on
    * .xterm-screen which blocks all touch gestures. We override that and handle
-   * vertical swipes by scrolling the terminal programmatically.
+   * vertical swipes by scrolling the terminal programmatically with momentum.
    */
   _initTouchScroll(container) {
     // Remove xterm's inline touch-action:none on the screen element
@@ -190,19 +190,55 @@ export class TerminalPane {
       viewport.style.overscrollBehavior = 'none'
     }
 
-    // Manual touch scroll — intercept vertical swipes, scroll the terminal,
-    // and preventDefault to stop iOS from also scrolling the page.
+    // Manual touch scroll with momentum
     let touchStartY = 0
     let touchActive = false
     let accumDy = 0
+    let velocity = 0
+    let lastMoveTime = 0
+    let momentumFrame = null
+
+    const getCellHeight = () =>
+      container.clientHeight / (this.term.rows || 24) || 17
+
+    const flushScroll = () => {
+      const cellHeight = getCellHeight()
+      const lines = Math.trunc(accumDy / cellHeight)
+      if (lines !== 0) {
+        this.term.scrollLines(lines)
+        accumDy -= lines * cellHeight
+      }
+    }
+
+    const stopMomentum = () => {
+      if (momentumFrame) {
+        cancelAnimationFrame(momentumFrame)
+        momentumFrame = null
+      }
+      velocity = 0
+    }
+
+    const runMomentum = () => {
+      if (Math.abs(velocity) < 0.5) {
+        velocity = 0
+        accumDy = 0
+        return
+      }
+      accumDy += velocity
+      velocity *= 0.92 // friction
+      flushScroll()
+      momentumFrame = requestAnimationFrame(runMomentum)
+    }
 
     container.addEventListener(
       'touchstart',
       (e) => {
         if (e.touches.length !== 1) return
+        stopMomentum()
         touchStartY = e.touches[0].clientY
         touchActive = true
         accumDy = 0
+        lastMoveTime = Date.now()
       },
       { passive: true }
     )
@@ -212,21 +248,19 @@ export class TerminalPane {
       'touchmove',
       (e) => {
         if (!touchActive || e.touches.length !== 1) return
-
-        // Always prevent default to stop iOS page scroll
         e.preventDefault()
 
+        const now = Date.now()
         const dy = touchStartY - e.touches[0].clientY
         touchStartY = e.touches[0].clientY
 
-        // Accumulate sub-line pixel deltas for smooth scrolling
+        // Track velocity for momentum (pixels per frame at ~16ms)
+        const dt = Math.max(1, now - lastMoveTime)
+        velocity = (dy / dt) * 16
+        lastMoveTime = now
+
         accumDy += dy
-        const cellHeight = container.clientHeight / (this.term.rows || 24) || 17
-        const lines = Math.trunc(accumDy / cellHeight)
-        if (lines !== 0) {
-          this.term.scrollLines(lines)
-          accumDy -= lines * cellHeight
-        }
+        flushScroll()
       },
       { passive: false }
     )
@@ -235,10 +269,19 @@ export class TerminalPane {
       'touchend',
       () => {
         touchActive = false
-        accumDy = 0
+        // Start momentum if flinging
+        if (Math.abs(velocity) > 2) {
+          accumDy = 0
+          runMomentum()
+        } else {
+          accumDy = 0
+          velocity = 0
+        }
       },
       { passive: true }
     )
+
+    this._momentumCleanup = stopMomentum
   }
 
   _initScrollTracking(container) {
@@ -539,6 +582,7 @@ export class TerminalPane {
     this._dataDisposable.dispose()
     this._keyDisposable.dispose()
     if (this._scrollBtn) this._scrollBtn.remove()
+    if (this._momentumCleanup) this._momentumCleanup()
     if (this._ws) {
       this._ws.onclose = null
       this._ws.close()
