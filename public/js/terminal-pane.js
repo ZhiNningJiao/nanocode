@@ -285,23 +285,19 @@ export class TerminalPane {
   }
 
   _initScrollTracking(container) {
-    // Detect when user scrolls up (away from bottom)
-    const viewport = container.querySelector('.xterm-viewport')
-    if (viewport) {
-      viewport.addEventListener('scroll', () => {
-        const atBottom = viewport.scrollTop >= viewport.scrollHeight - viewport.clientHeight - 5
-        this._userScrolledUp = !atBottom
-        this._updateScrollBtn()
-      })
+    // Detect when user scrolls up (away from bottom).
+    // Use requestAnimationFrame to ensure xterm has rendered .xterm-viewport.
+    const attachViewportListener = () => {
+      const viewport = container.querySelector('.xterm-viewport')
+      if (viewport) {
+        viewport.addEventListener('scroll', () => {
+          const atBottom = viewport.scrollTop >= viewport.scrollHeight - viewport.clientHeight - 5
+          this._userScrolledUp = !atBottom
+          this._updateScrollBtn()
+        })
+      }
     }
-
-    // Also track programmatic scroll via xterm's scroll event
-    this.term.onScroll(() => {
-      // If at the bottom of the buffer, user is not scrolled up
-      const buf = this.term.buffer.active
-      this._userScrolledUp = buf.viewportY < buf.baseY
-      this._updateScrollBtn()
-    })
+    requestAnimationFrame(attachViewportListener)
 
     // Create scroll-to-bottom button
     const btn = document.createElement('button')
