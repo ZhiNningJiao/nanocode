@@ -786,6 +786,7 @@ function setupModeToggle() {
   const modeIndicator = document.getElementById('mode-indicator')
   const chatInput = document.getElementById('chat-input')
   const sendBtn = document.getElementById('send-btn')
+  const micBtn = document.getElementById('mic-btn')
   const suggestionsDropdown = document.getElementById('suggestions-dropdown')
 
   if (!modeBashBtn || !modeClaudeBtn || !modeIndicator || !chatInput || !sendBtn) return
@@ -998,6 +999,50 @@ function setupModeToggle() {
   modeBashBtn.addEventListener('click', () => setMode('bash'))
   modeClaudeBtn.addEventListener('click', () => setMode('claude'))
   sendBtn.addEventListener('click', sendInput)
+
+  // Voice input via Web Speech API
+  if (micBtn) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition()
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.lang = '' // auto-detect
+
+      let baseText = ''
+      let insertPos = 0
+
+      recognition.addEventListener('result', (e) => {
+        let full = ''
+        for (let i = 0; i < e.results.length; i++) {
+          full += e.results[i][0].transcript
+        }
+        chatInput.value = baseText.slice(0, insertPos) + full + baseText.slice(insertPos)
+        autoResize()
+      })
+
+      recognition.addEventListener('end', () => {
+        micBtn.classList.remove('recording')
+      })
+
+      recognition.addEventListener('error', () => {
+        micBtn.classList.remove('recording')
+      })
+
+      micBtn.addEventListener('click', () => {
+        if (micBtn.classList.contains('recording')) {
+          recognition.stop()
+        } else {
+          baseText = chatInput.value
+          insertPos = chatInput.selectionStart
+          micBtn.classList.add('recording')
+          recognition.start()
+        }
+      })
+    } else {
+      micBtn.style.display = 'none'
+    }
+  }
 
   chatInput.addEventListener('input', () => {
     autoResize()
