@@ -53,22 +53,38 @@ app.put('/api/settings', (req, res) => {
   res.json({ ok: true })
 })
 
-// TTS proxy — forwards text to a local GPT-SoVITS (or compatible) service
+// TTS proxy — forwards text to a local GPT-SoVITS v3 service
 const TTS_BASE = process.env.TTS_URL || 'http://127.0.0.1:9880'
 
+// TTS settings stored in nanocode settings
+function getTtsConfig() {
+  const s = store.getAllSettings()
+  return {
+    ref_audio_path: s.tts_ref_audio || '',
+    prompt_text: s.tts_prompt_text || '',
+    prompt_lang: s.tts_prompt_lang || 'zh',
+    text_lang: s.tts_text_lang || 'auto',
+    media_type: s.tts_media_type || 'ogg',
+  }
+}
+
+// Non-streaming TTS — POST /tts, returns full audio
 app.post('/api/tts', async (req, res) => {
-  const { text, lang } = req.body || {}
+  const { text } = req.body || {}
   if (!text) return res.status(400).json({ error: 'text required' })
+  const cfg = getTtsConfig()
   try {
     const ttsRes = await fetch(`${TTS_BASE}/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text,
-        text_lang: lang || 'auto',
-        ref_audio_path: '',
-        prompt_lang: '',
-        prompt_text: '',
+        text_lang: cfg.text_lang,
+        ref_audio_path: cfg.ref_audio_path,
+        prompt_text: cfg.prompt_text,
+        prompt_lang: cfg.prompt_lang,
+        media_type: cfg.media_type,
+        streaming_mode: false,
       }),
     })
     if (!ttsRes.ok) {
@@ -82,12 +98,77 @@ app.post('/api/tts', async (req, res) => {
   }
 })
 
+// Streaming TTS — proxies chunked audio from GPT-SoVITS GET /tts endpoint
+app.get('/api/tts/stream', async (req, res) => {
+  const { text } = req.query
+  if (!text) return res.status(400).json({ error: 'text required' })
+  const cfg = getTtsConfig()
+  const params = new URLSearchParams({
+    text,
+    text_lang: cfg.text_lang,
+    ref_audio_path: cfg.ref_audio_path,
+    prompt_text: cfg.prompt_text,
+    prompt_lang: cfg.prompt_lang,
+    media_type: cfg.media_type,
+    streaming_mode: 'true',
+  })
+  try {
+    const ttsRes = await fetch(`${TTS_BASE}/tts?${params}`)
+    if (!ttsRes.ok) {
+      return res.status(502).json({ error: `TTS service returned ${ttsRes.status}` })
+    }
+    res.set('Content-Type', ttsRes.headers.get('content-type') || `audio/${cfg.media_type}`)
+    res.set('Transfer-Encoding', 'chunked')
+    // Pipe the stream directly to the client
+    const reader = ttsRes.body.getReader()
+    const pump = async () => {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) { res.end(); return }
+        if (!res.write(value)) {
+          await new Promise(resolve => res.once('drain', resolve))
+        }
+      }
+    }
+    pump().catch(() => res.end())
+    req.on('close', () => reader.cancel())
+  } catch (err) {
+    res.status(503).json({ error: 'TTS service unavailable', detail: err.message })
+  }
+})
+
+// Voice reference configuration
+app.post('/api/tts/voice', async (req, res) => {
+  const { ref_audio_path, prompt_text, prompt_lang } = req.body || {}
+  if (!ref_audio_path) return res.status(400).json({ error: 'ref_audio_path required' })
+  try {
+    // Set reference audio on GPT-SoVITS
+    const r = await fetch(`${TTS_BASE}/change_refer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        refer_wav_path: ref_audio_path,
+        prompt_text: prompt_text || '',
+        prompt_language: prompt_lang || 'zh',
+      }),
+    })
+    if (!r.ok) return res.status(502).json({ error: `change_refer returned ${r.status}` })
+    // Persist in nanocode settings
+    store.setSetting('tts_ref_audio', ref_audio_path)
+    if (prompt_text) store.setSetting('tts_prompt_text', prompt_text)
+    if (prompt_lang) store.setSetting('tts_prompt_lang', prompt_lang)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(503).json({ error: 'TTS service unavailable', detail: err.message })
+  }
+})
+
 app.get('/api/tts/status', async (_req, res) => {
   try {
     const r = await fetch(TTS_BASE, { signal: AbortSignal.timeout(2000) })
-    res.json({ available: r.ok })
+    res.json({ available: r.ok, config: getTtsConfig() })
   } catch {
-    res.json({ available: false })
+    res.json({ available: false, config: getTtsConfig() })
   }
 })
 
