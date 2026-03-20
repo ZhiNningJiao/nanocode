@@ -1,5 +1,6 @@
 node_modules/
 data/
+.pm2/
 *.db
 *.db-wal
 *.db-shm
@@ -7,3 +8,6 @@ data/
 .claude/
 terminal/projects.json
 terminal/slack-settings.json
+TODO.md
+work-log.md
+proposals.md

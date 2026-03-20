@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "node --watch server/index.js",
     "start": "node server/index.js",
+    "pm2:start": "PM2_HOME=.pm2 PORT=3001 pm2 start server/index.js --name nanocode",
+    "pm2:stop": "PM2_HOME=.pm2 pm2 stop nanocode",
+    "pm2:logs": "PM2_HOME=.pm2 pm2 logs nanocode",
     "test": "node --test server/tests/*.test.js"
   },
   "dependencies": {
