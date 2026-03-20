@@ -1337,6 +1337,11 @@ body {
   background: #e53935;
 }
 
+.tts-status-text {
+  font-size: 0.8rem;
+  margin-left: var(--s-1);
+}
+
 .mic-btn {
   display: inline-flex;
   align-items: center;

@@ -111,16 +111,35 @@
               </div>
             </section>
             <section class="settings-section">
-              <h3 class="settings-section-title">Text-to-Speech</h3>
+              <h3 class="settings-section-title">Text-to-Speech (GPT-SoVITS)</h3>
               <p class="settings-desc">
-                Read Claude output aloud using a local TTS service (GPT-SoVITS / Fish Speech).
+                Read Claude output aloud using a local TTS service.
+                <span class="tts-status-dot" id="tts-status-dot" title="TTS service status"></span>
+                <span class="tts-status-text" id="tts-status-text"></span>
               </p>
               <div class="settings-toggle-row">
                 <label class="toggle-label">
                   <input type="checkbox" id="tts-enabled" />
                   <span>Enable TTS for Claude output</span>
                 </label>
-                <span class="tts-status-dot" id="tts-status-dot" title="TTS service status"></span>
+              </div>
+              <div class="settings-toggle-row">
+                <label class="toggle-label">
+                  <input type="checkbox" id="tts-streaming" />
+                  <span>Streaming mode (lower latency)</span>
+                </label>
+              </div>
+              <div class="settings-field" style="margin-top: var(--s-2)">
+                <label class="settings-label">Reference audio path</label>
+                <input type="text" id="tts-ref-audio" class="settings-input" placeholder="/path/to/catgirl_voice.wav" />
+              </div>
+              <div class="settings-field">
+                <label class="settings-label">Reference prompt text</label>
+                <input type="text" id="tts-prompt-text" class="settings-input" placeholder="Reference audio transcript" />
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="btn btn-primary" id="tts-save-btn">Save Voice</button>
+                <span class="settings-status" id="tts-status"></span>
               </div>
             </section>
           </div>
