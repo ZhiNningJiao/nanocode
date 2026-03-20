@@ -1660,6 +1660,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--s-6);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .settings-heading {
