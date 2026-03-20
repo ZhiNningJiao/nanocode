@@ -60,11 +60,11 @@ const TTS_BASE = process.env.TTS_URL || 'http://127.0.0.1:9880'
 function getTtsConfig() {
   const s = store.getAllSettings()
   return {
-    ref_audio_path: s.tts_ref_audio || '',
-    prompt_text: s.tts_prompt_text || '',
+    ref_audio_path: s.tts_ref_audio || '/storage/home/zhiningjiao/code/GPT-SoVITS/ref_audio.wav',
+    prompt_text: s.tts_prompt_text || '这是猫娘秘书的声音喵，主人你好呀',
     prompt_lang: s.tts_prompt_lang || 'zh',
     text_lang: s.tts_text_lang || 'auto',
-    media_type: s.tts_media_type || 'ogg',
+    media_type: s.tts_media_type || 'wav',
   }
 }
 
@@ -165,8 +165,10 @@ app.post('/api/tts/voice', async (req, res) => {
 
 app.get('/api/tts/status', async (_req, res) => {
   try {
-    const r = await fetch(TTS_BASE, { signal: AbortSignal.timeout(2000) })
-    res.json({ available: r.ok, config: getTtsConfig() })
+    // GPT-SoVITS returns 400 on /tts without params (not 404), proving the service is up
+    const r = await fetch(`${TTS_BASE}/tts`, { signal: AbortSignal.timeout(2000) })
+    // Any response (even 400/405) means the service is reachable
+    res.json({ available: true, config: getTtsConfig() })
   } catch {
     res.json({ available: false, config: getTtsConfig() })
   }
