@@ -190,24 +190,23 @@ export class TerminalPane {
       viewport.style.overscrollBehavior = 'none'
     }
 
-    // Manual touch scroll with momentum
+    // Pixel-level touch scroll with momentum.
+    // Previous implementation used term.scrollLines() which only scrolls by
+    // whole lines (~17px each), making small swipes feel unresponsive.
+    // Now we directly manipulate viewport.scrollTop for smooth pixel scrolling.
     let touchStartY = 0
     let touchActive = false
-    let accumDy = 0
     let velocity = 0
     let lastMoveTime = 0
     let momentumFrame = null
 
-    const getCellHeight = () =>
-      container.clientHeight / (this.term.rows || 24) || 17
+    const SCROLL_MULTIPLIER = 1.5
 
-    const flushScroll = () => {
-      const cellHeight = getCellHeight()
-      const lines = Math.trunc(accumDy / cellHeight)
-      if (lines !== 0) {
-        this.term.scrollLines(lines)
-        accumDy -= lines * cellHeight
-      }
+    const getViewport = () => container.querySelector('.xterm-viewport')
+
+    const applyScroll = (dy) => {
+      const vp = getViewport()
+      if (vp) vp.scrollTop += dy
     }
 
     const stopMomentum = () => {
@@ -221,12 +220,10 @@ export class TerminalPane {
     const runMomentum = () => {
       if (Math.abs(velocity) < 0.5) {
         velocity = 0
-        accumDy = 0
         return
       }
-      accumDy += velocity
+      applyScroll(velocity)
       velocity *= 0.92 // friction
-      flushScroll()
       momentumFrame = requestAnimationFrame(runMomentum)
     }
 
@@ -237,7 +234,6 @@ export class TerminalPane {
         stopMomentum()
         touchStartY = e.touches[0].clientY
         touchActive = true
-        accumDy = 0
         lastMoveTime = Date.now()
       },
       { passive: true }
@@ -259,8 +255,7 @@ export class TerminalPane {
         velocity = (dy / dt) * 16
         lastMoveTime = now
 
-        accumDy += dy
-        flushScroll()
+        applyScroll(dy * SCROLL_MULTIPLIER)
       },
       { passive: false }
     )
@@ -271,10 +266,8 @@ export class TerminalPane {
         touchActive = false
         // Start momentum if flinging
         if (Math.abs(velocity) > 2) {
-          accumDy = 0
           runMomentum()
         } else {
-          accumDy = 0
           velocity = 0
         }
       },
