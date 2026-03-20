@@ -53,6 +53,44 @@ app.put('/api/settings', (req, res) => {
   res.json({ ok: true })
 })
 
+// TTS proxy — forwards text to a local GPT-SoVITS (or compatible) service
+const TTS_BASE = process.env.TTS_URL || 'http://127.0.0.1:9880'
+
+app.post('/api/tts', async (req, res) => {
+  const { text, lang } = req.body || {}
+  if (!text) return res.status(400).json({ error: 'text required' })
+  try {
+    const ttsRes = await fetch(`${TTS_BASE}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        text_lang: lang || 'auto',
+        ref_audio_path: '',
+        prompt_lang: '',
+        prompt_text: '',
+      }),
+    })
+    if (!ttsRes.ok) {
+      return res.status(502).json({ error: `TTS service returned ${ttsRes.status}` })
+    }
+    res.set('Content-Type', ttsRes.headers.get('content-type') || 'audio/wav')
+    const arrayBuf = await ttsRes.arrayBuffer()
+    res.send(Buffer.from(arrayBuf))
+  } catch (err) {
+    res.status(503).json({ error: 'TTS service unavailable', detail: err.message })
+  }
+})
+
+app.get('/api/tts/status', async (_req, res) => {
+  try {
+    const r = await fetch(TTS_BASE, { signal: AbortSignal.timeout(2000) })
+    res.json({ available: r.ok })
+  } catch {
+    res.json({ available: false })
+  }
+})
+
 const server = createServer(app)
 
 const deflateOpts = {

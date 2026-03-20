@@ -1261,6 +1261,82 @@ body {
     inset 0 0 20px rgba(140, 198, 63, 0.02);
 }
 
+.tts-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--t-fast) ease,
+    color var(--t-fast) ease,
+    transform var(--t-fast) ease;
+}
+
+.tts-btn:hover {
+  background: var(--surface-3);
+  color: var(--fg-1);
+}
+
+.tts-btn:active {
+  transform: scale(0.94);
+}
+
+.tts-btn.active {
+  background: var(--primary);
+  color: var(--primary-fg);
+}
+
+.tts-btn.active .tts-wave {
+  stroke: var(--primary-fg);
+}
+
+.tts-btn:not(.active) .tts-wave {
+  display: none;
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  cursor: pointer;
+  color: var(--fg-2);
+  font-size: 0.85rem;
+}
+
+.toggle-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.tts-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+
+.tts-status-dot.available {
+  background: #4caf50;
+}
+
+.tts-status-dot.unavailable {
+  background: #e53935;
+}
+
 .mic-btn {
   display: inline-flex;
   align-items: center;

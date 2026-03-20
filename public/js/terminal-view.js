@@ -25,6 +25,7 @@ const isMobile = () => mobileQuery.matches
 let initialized = false
 let bashPane = null
 let claudePane = null
+let _ttsOutputCallback = null
 let diskSessions = []
 let runningSessions = []
 let activeSessionId = null
@@ -244,6 +245,7 @@ function createPanes(projectId) {
     cliProvider: state.cliProvider,
     fontSize: state.fontSize,
     onStatusChange: (s) => setStatus(statusClaude, getProviderMeta().statusLabel, s),
+    onOutput: (data) => { if (_ttsOutputCallback) _ttsOutputCallback(data) },
   })
 }
 
@@ -1058,6 +1060,121 @@ function setupModeToggle() {
       micBtn.style.display = 'none'
     }
   }
+
+  // TTS — Text-to-Speech for Claude output
+  const ttsBtn = document.getElementById('tts-btn')
+  const ttsCheckbox = document.getElementById('tts-enabled')
+  const ttsStatusDot = document.getElementById('tts-status-dot')
+  let ttsEnabled = localStorage.getItem('ttsEnabled') === 'true'
+  let ttsAvailable = false
+  let ttsAudio = null
+  let ttsQueue = []
+  let ttsPlaying = false
+  // Buffer to accumulate output text, debounce TTS calls
+  let ttsBuffer = ''
+  let ttsDebounceTimer = null
+  const TTS_DEBOUNCE_MS = 1500
+
+  function updateTtsUi() {
+    if (ttsBtn) ttsBtn.classList.toggle('active', ttsEnabled)
+    if (ttsBtn) ttsBtn.title = ttsEnabled ? 'Text-to-Speech (on)' : 'Text-to-Speech (off)'
+    if (ttsCheckbox) ttsCheckbox.checked = ttsEnabled
+  }
+
+  function setTtsEnabled(v) {
+    ttsEnabled = v
+    localStorage.setItem('ttsEnabled', v)
+    updateTtsUi()
+    if (!v) stopTts()
+  }
+
+  function stopTts() {
+    if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
+    ttsQueue = []
+    ttsPlaying = false
+    ttsBuffer = ''
+    if (ttsDebounceTimer) { clearTimeout(ttsDebounceTimer); ttsDebounceTimer = null }
+  }
+
+  function stripAnsi(s) {
+    return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\r/g, '')
+  }
+
+  async function playNextTts() {
+    if (ttsPlaying || !ttsQueue.length) return
+    const text = ttsQueue.shift()
+    if (!text.trim()) { playNextTts(); return }
+    ttsPlaying = true
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) { ttsPlaying = false; return }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      ttsAudio = new Audio(url)
+      ttsAudio.onended = () => {
+        URL.revokeObjectURL(url)
+        ttsAudio = null
+        ttsPlaying = false
+        playNextTts()
+      }
+      ttsAudio.onerror = () => {
+        URL.revokeObjectURL(url)
+        ttsAudio = null
+        ttsPlaying = false
+        playNextTts()
+      }
+      ttsAudio.play()
+    } catch {
+      ttsPlaying = false
+    }
+  }
+
+  function enqueueTts(text) {
+    if (!ttsEnabled || !ttsAvailable) return
+    ttsQueue.push(text)
+    playNextTts()
+  }
+
+  function onClaudeOutput(rawData) {
+    if (!ttsEnabled || !ttsAvailable) return
+    const clean = stripAnsi(rawData)
+    if (!clean.trim()) return
+    ttsBuffer += clean
+    if (ttsDebounceTimer) clearTimeout(ttsDebounceTimer)
+    ttsDebounceTimer = setTimeout(() => {
+      const text = ttsBuffer.trim()
+      ttsBuffer = ''
+      if (text) enqueueTts(text)
+    }, TTS_DEBOUNCE_MS)
+  }
+
+  // Check TTS service availability
+  async function checkTtsStatus() {
+    try {
+      const res = await fetch('/api/tts/status')
+      const data = await res.json()
+      ttsAvailable = data.available
+    } catch {
+      ttsAvailable = false
+    }
+    if (ttsStatusDot) {
+      ttsStatusDot.className = 'tts-status-dot ' + (ttsAvailable ? 'available' : 'unavailable')
+      ttsStatusDot.title = ttsAvailable ? 'TTS service connected' : 'TTS service unavailable'
+    }
+  }
+
+  _ttsOutputCallback = onClaudeOutput
+  updateTtsUi()
+  checkTtsStatus()
+  // Re-check TTS status periodically
+  setInterval(checkTtsStatus, 30000)
+
+  if (ttsBtn) ttsBtn.addEventListener('click', () => setTtsEnabled(!ttsEnabled))
+  if (ttsCheckbox) ttsCheckbox.addEventListener('change', () => setTtsEnabled(ttsCheckbox.checked))
 
   chatInput.addEventListener('input', () => {
     autoResize()

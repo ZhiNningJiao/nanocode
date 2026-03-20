@@ -63,6 +63,7 @@ export class TerminalPane {
     this.claudeSessionId = opts.claudeSessionId ?? ''
     this.cliProvider = opts.cliProvider || 'claude'
     this.onStatusChange = opts.onStatusChange || (() => {})
+    this.onOutput = opts.onOutput || null
 
     this._ws = null
     this._exited = false
@@ -371,13 +372,11 @@ export class TerminalPane {
         const toWrite = this.localEcho.reconcile(msg.data)
         if (toWrite) {
           this.term.write(toWrite, () => {
-            // Auto-scroll after xterm has rendered the new content.
-            // The callback fires after the write is processed, ensuring
-            // scrollToBottom targets the correct scrollHeight.
             if (!this._userScrolledUp) {
               this.term.scrollToBottom()
             }
           })
+          if (this.onOutput) this.onOutput(msg.data)
         }
       } else if (msg.type === 'pong') {
         this._onPong(msg.id)
