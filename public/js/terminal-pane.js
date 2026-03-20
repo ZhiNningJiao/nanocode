@@ -72,6 +72,7 @@ export class TerminalPane {
     this._pingInterval = null
     this._rttEwma = null
     this._userScrolledUp = false
+    this._programmaticScroll = false
     this._scrollBtn = null
 
     // Create xterm — reduced scrollback saves memory on constrained clients
@@ -284,7 +285,11 @@ export class TerminalPane {
       const viewport = container.querySelector('.xterm-viewport')
       if (viewport) {
         viewport.addEventListener('scroll', () => {
-          const atBottom = viewport.scrollTop >= viewport.scrollHeight - viewport.clientHeight - 5
+          // Skip scroll events triggered by our own scrollToBottom()
+          if (this._programmaticScroll) return
+          // Use a generous threshold (10px) to avoid false positives from
+          // sub-pixel rounding or scroll events firing mid-render.
+          const atBottom = viewport.scrollTop >= viewport.scrollHeight - viewport.clientHeight - 10
           this._userScrolledUp = !atBottom
           this._updateScrollBtn()
         })
@@ -312,9 +317,12 @@ export class TerminalPane {
   }
 
   scrollToBottom() {
+    this._programmaticScroll = true
     this.term.scrollToBottom()
     this._userScrolledUp = false
     this._updateScrollBtn()
+    // Clear the guard after the scroll event has fired
+    requestAnimationFrame(() => { this._programmaticScroll = false })
   }
 
   _connect() {
@@ -362,11 +370,14 @@ export class TerminalPane {
       } else if (msg.type === 'output') {
         const toWrite = this.localEcho.reconcile(msg.data)
         if (toWrite) {
-          this.term.write(toWrite)
-          // Auto-scroll if user hasn't manually scrolled up
-          if (!this._userScrolledUp) {
-            this.term.scrollToBottom()
-          }
+          this.term.write(toWrite, () => {
+            // Auto-scroll after xterm has rendered the new content.
+            // The callback fires after the write is processed, ensuring
+            // scrollToBottom targets the correct scrollHeight.
+            if (!this._userScrolledUp) {
+              this.term.scrollToBottom()
+            }
+          })
         }
       } else if (msg.type === 'pong') {
         this._onPong(msg.id)

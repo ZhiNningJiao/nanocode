@@ -959,7 +959,11 @@ function setupModeToggle() {
     if (panes.bash.el) panes.bash.el.classList.toggle('target-active', mode === 'bash')
     if (panes.claude.el)
       panes.claude.el.classList.toggle('target-active', mode === 'claude')
-    chatInput.placeholder = mode === 'bash' ? 'Type a command\u2026' : 'Ask Claude\u2026'
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
+    const sendKey = isMac ? '\u2318\u23CE' : 'Ctrl+\u23CE'
+    chatInput.placeholder = mode === 'bash'
+      ? `Type a command\u2026  (${sendKey} or Enter\u00d72 to send)`
+      : `Ask Claude\u2026  (${sendKey} or Enter\u00d72 to send)`
     positionIndicator()
     resetHistoryNav()
     hideSuggestions()
@@ -1001,12 +1005,25 @@ function setupModeToggle() {
     showSuggestions(chatInput.value)
   })
 
+  // Track last Enter press time for double-Enter-to-send
+  let lastEnterTime = 0
+  const DOUBLE_ENTER_MS = 400
+
   chatInput.addEventListener('keydown', (e) => {
     const suggestionsOpen = suggestionsDropdown && !suggestionsDropdown.hidden
 
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      if (suggestionsOpen && selectedSuggestion >= 0) {
+    if (e.key === 'Enter') {
+      // Ctrl+Enter or Cmd+Enter always sends
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        sendInput()
+        lastEnterTime = 0
+        return
+      }
+
+      // When suggestions are open, Enter accepts the suggestion
+      if (!e.shiftKey && suggestionsOpen && selectedSuggestion >= 0) {
+        e.preventDefault()
         const text = getSelectedSuggestionText()
         if (text) {
           chatInput.value = text
@@ -1015,7 +1032,19 @@ function setupModeToggle() {
         hideSuggestions()
         return
       }
-      sendInput()
+
+      // Double-Enter sends (second Enter within 400ms)
+      const now = Date.now()
+      if (!e.shiftKey && now - lastEnterTime < DOUBLE_ENTER_MS) {
+        e.preventDefault()
+        // Remove the newline from the first Enter before sending
+        chatInput.value = chatInput.value.replace(/\n$/, '')
+        sendInput()
+        lastEnterTime = 0
+        return
+      }
+      lastEnterTime = now
+      // Single Enter = newline (default textarea behavior, don't preventDefault)
       return
     }
 
