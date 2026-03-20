@@ -938,9 +938,24 @@ function setupModeToggle() {
   }
 
   function autoResize() {
+    // Save terminal viewport scroll positions before layout change to prevent
+    // the textarea height reset from causing xterm viewports to jump to top.
+    const activePanes = [panes.bash.pane(), panes.claude.pane()].filter(Boolean)
+    const savedViewports = activePanes.map(p => {
+      const vp = p.container.querySelector('.xterm-viewport')
+      return vp ? { pane: p, vp, top: vp.scrollTop } : null
+    }).filter(Boolean)
+    activePanes.forEach(p => { p._programmaticScroll = true })
+
     chatInput.style.height = 'auto'
     chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px'
     chatInput.style.overflowY = chatInput.scrollHeight > 120 ? 'auto' : 'hidden'
+
+    // Restore scroll positions after layout settles
+    requestAnimationFrame(() => {
+      savedViewports.forEach(({ vp, top }) => { vp.scrollTop = top })
+      activePanes.forEach(p => { p._programmaticScroll = false })
+    })
   }
 
   function positionIndicator() {
