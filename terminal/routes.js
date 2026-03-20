@@ -11,7 +11,9 @@ import {
   readSync,
   closeSync,
   unlinkSync,
+  createReadStream,
 } from 'node:fs'
+import { createInterface } from 'node:readline'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import * as sessions from './sessions.js'
@@ -55,19 +57,24 @@ export function createTerminalRoutes(store) {
     return VALID_CLI_PROVIDERS.has(rawProvider) ? rawProvider : undefined
   }
 
-  function listClaudeSessions(projectId, cwd) {
+  async function listClaudeSessions(projectId, cwd) {
     const encoded = cwd.replace(/\//g, '-')
     const claudeDir = join(homedir(), '.claude', 'projects', encoded)
     const result = []
 
     if (!existsSync(claudeDir)) return result
 
+    // Stream-read history.jsonl line by line to avoid loading the entire
+    // (potentially large) file into memory as a single string.
     const historyMap = new Map()
     const historyPath = join(homedir(), '.claude', 'history.jsonl')
     if (existsSync(historyPath)) {
       try {
-        const lines = readFileSync(historyPath, 'utf-8').split('\n')
-        for (const line of lines) {
+        const rl = createInterface({
+          input: createReadStream(historyPath, { encoding: 'utf-8' }),
+          crlfDelay: Infinity,
+        })
+        for await (const line of rl) {
           if (!line.trim()) continue
           try {
             const entry = JSON.parse(line)
@@ -171,9 +178,9 @@ export function createTerminalRoutes(store) {
     }
   }
 
-  function listProviderSessions(projectId, cwd, provider) {
+  async function listProviderSessions(projectId, cwd, provider) {
     if (provider === 'opencode') return listOpencodeSessions(cwd)
-    if (provider === 'claude') return listClaudeSessions(projectId, cwd)
+    if (provider === 'claude') return await listClaudeSessions(projectId, cwd)
     return []
   }
 
@@ -245,7 +252,7 @@ export function createTerminalRoutes(store) {
     res.json(sessions.listCliSessions(req.params.id, provider))
   })
 
-  router.get('/api/projects/:id/claude-sessions', (req, res) => {
+  router.get('/api/projects/:id/claude-sessions', async (req, res) => {
     const project = store.getProject(req.params.id)
     if (!project) {
       return res.status(404).json({ error: 'project not found' })
@@ -253,7 +260,7 @@ export function createTerminalRoutes(store) {
 
     const cwd = project.cwd.replace(/\/+$/, '')
     const provider = getCliProvider(req.query.provider) || 'claude'
-    const result = listProviderSessions(req.params.id, cwd, provider)
+    const result = await listProviderSessions(req.params.id, cwd, provider)
 
     const archivedIds = new Set(store.listArchivedSessions(req.params.id))
     let filtered =
@@ -273,7 +280,7 @@ export function createTerminalRoutes(store) {
     res.json(filtered)
   })
 
-  router.get('/api/projects/:id/archived-sessions', (req, res) => {
+  router.get('/api/projects/:id/archived-sessions', async (req, res) => {
     const project = store.getProject(req.params.id)
     if (!project) {
       return res.status(404).json({ error: 'project not found' })
@@ -284,10 +291,8 @@ export function createTerminalRoutes(store) {
 
     const cwd = project.cwd.replace(/\/+$/, '')
     const provider = getCliProvider(req.query.provider) || 'claude'
-    const result = listProviderSessions(req.params.id, cwd, provider).filter((session) =>
-      archivedIds.has(session.sessionId)
-    )
-    res.json(result)
+    const result = await listProviderSessions(req.params.id, cwd, provider)
+    res.json(result.filter((session) => archivedIds.has(session.sessionId)))
   })
 
   router.post('/api/projects/:id/sessions/:sessionId/archive', (req, res) => {
