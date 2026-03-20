@@ -2302,19 +2302,19 @@ body {
     font-size: 16px;
   }
 
-  /* xterm mobile overrides */
+  /* xterm mobile: pan-y 启用原生惯性滚动 */
   .pane-terminal {
     overscroll-behavior: contain;
-    touch-action: none;
+    touch-action: pan-y;
   }
 
   .xterm-viewport {
     overscroll-behavior: contain;
-    touch-action: none !important;
+    touch-action: pan-y !important;
   }
 
   .xterm-screen {
-    touch-action: none !important;
+    touch-action: manipulation;
   }
   .xterm {
     padding: 4px;

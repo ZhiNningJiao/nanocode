@@ -1258,20 +1258,21 @@ function setupMobile() {
     )
   }
 
-  // iOS keyboard scroll fix
+  // iOS keyboard：只收掉 document 层多余滚动，避免全局 scroll 监听与终端内部滚动争抢
   const chatInput = document.getElementById('chat-input')
-  const killScroll = () => {
+  const killDocumentScroll = () => {
+    const dy = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop
+    if (dy === 0) return
     window.scrollTo(0, 0)
     document.documentElement.scrollTop = 0
     document.body.scrollTop = 0
   }
-  window.addEventListener('scroll', killScroll)
-  document.addEventListener('scroll', killScroll)
+  window.addEventListener('scroll', killDocumentScroll, { passive: true })
   if (chatInput) {
     chatInput.addEventListener('focus', () => {
-      setTimeout(killScroll, 50)
-      setTimeout(killScroll, 150)
-      setTimeout(killScroll, 300)
+      setTimeout(killDocumentScroll, 50)
+      setTimeout(killDocumentScroll, 150)
+      setTimeout(killDocumentScroll, 300)
     })
   }
   if (window.visualViewport) {
@@ -1280,9 +1281,9 @@ function setupMobile() {
         '--vvh',
         `${window.visualViewport.height}px`
       )
-      killScroll()
+      killDocumentScroll()
     })
-    window.visualViewport.addEventListener('scroll', killScroll)
+    window.visualViewport.addEventListener('scroll', killDocumentScroll, { passive: true })
   }
 }
 
