@@ -1099,9 +1099,26 @@ function setupModeToggle() {
   document.addEventListener('click', unlockAudio, { once: false })
   document.addEventListener('touchstart', unlockAudio, { once: false })
 
+  function showTtsToast(msg, duration = 4000) {
+    let el = document.getElementById('tts-toast')
+    if (!el) {
+      el = document.createElement('div')
+      el.id = 'tts-toast'
+      el.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(30,30,30,0.95);color:#f0f0f0;padding:10px 20px;border-radius:10px;font-size:14px;z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.3s;backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);'
+      document.body.appendChild(el)
+    }
+    el.textContent = msg
+    el.style.opacity = '1'
+    clearTimeout(el._timer)
+    el._timer = setTimeout(() => { el.style.opacity = '0' }, duration)
+  }
+
   function updateTtsUi() {
-    if (ttsBtn) ttsBtn.classList.toggle('active', ttsEnabled)
-    if (ttsBtn) ttsBtn.title = ttsEnabled ? 'Text-to-Speech (on)' : 'Text-to-Speech (off)'
+    if (ttsBtn) {
+      ttsBtn.classList.toggle('active', ttsEnabled)
+      ttsBtn.classList.toggle('tts-pulse', ttsAvailable && !ttsEnabled)
+      ttsBtn.title = ttsEnabled ? 'Text-to-Speech (on)' : 'Text-to-Speech (off)'
+    }
     if (ttsCheckbox) ttsCheckbox.checked = ttsEnabled
     if (ttsStreamingCheckbox) ttsStreamingCheckbox.checked = ttsStreaming
   }
@@ -1190,12 +1207,13 @@ function setupModeToggle() {
     }, TTS_DEBOUNCE_MS)
   }
 
+  let ttsFirstCheck = true
   async function checkTtsStatus() {
+    const wasPreviouslyAvailable = ttsAvailable
     try {
       const res = await fetch('/api/tts/status')
       const data = await res.json()
       ttsAvailable = data.available
-      // Populate settings fields from server config
       if (data.config) {
         if (ttsRefAudioInput && !ttsRefAudioInput.value) ttsRefAudioInput.value = data.config.ref_audio_path || ''
         if (ttsPromptTextInput && !ttsPromptTextInput.value) ttsPromptTextInput.value = data.config.prompt_text || ''
@@ -1210,6 +1228,12 @@ function setupModeToggle() {
       ttsStatusText.textContent = ttsAvailable ? 'Service connected' : 'Service unavailable'
       ttsStatusText.style.color = ttsAvailable ? '#4caf50' : 'var(--fg-3)'
     }
+    // Toast on first check if TTS service is available but not enabled
+    if (ttsFirstCheck && ttsAvailable && !ttsEnabled) {
+      showTtsToast('TTS available — tap 🔊 to enable voice')
+    }
+    updateTtsUi()
+    ttsFirstCheck = false
   }
 
   _ttsOutputCallback = onClaudeOutput

@@ -1305,6 +1305,15 @@ body {
   display: none;
 }
 
+.tts-btn.tts-pulse {
+  animation: tts-pulse 2s ease-in-out infinite;
+}
+
+@keyframes tts-pulse {
+  0%, 100% { box-shadow: none; }
+  50% { box-shadow: 0 0 10px var(--glow), 0 0 20px var(--glow); }
+}
+
 .settings-toggle-row {
   display: flex;
   align-items: center;
