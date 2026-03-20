@@ -1061,16 +1061,22 @@ function setupModeToggle() {
     }
   }
 
-  // TTS — Text-to-Speech for Claude output
+  // TTS — Text-to-Speech for Claude output (GPT-SoVITS v3)
   const ttsBtn = document.getElementById('tts-btn')
   const ttsCheckbox = document.getElementById('tts-enabled')
+  const ttsStreamingCheckbox = document.getElementById('tts-streaming')
   const ttsStatusDot = document.getElementById('tts-status-dot')
+  const ttsStatusText = document.getElementById('tts-status-text')
+  const ttsRefAudioInput = document.getElementById('tts-ref-audio')
+  const ttsPromptTextInput = document.getElementById('tts-prompt-text')
+  const ttsSaveBtn = document.getElementById('tts-save-btn')
+  const ttsSaveStatus = document.getElementById('tts-status')
   let ttsEnabled = localStorage.getItem('ttsEnabled') === 'true'
+  let ttsStreaming = localStorage.getItem('ttsStreaming') === 'true'
   let ttsAvailable = false
   let ttsAudio = null
   let ttsQueue = []
   let ttsPlaying = false
-  // Buffer to accumulate output text, debounce TTS calls
   let ttsBuffer = ''
   let ttsDebounceTimer = null
   const TTS_DEBOUNCE_MS = 1500
@@ -1079,6 +1085,7 @@ function setupModeToggle() {
     if (ttsBtn) ttsBtn.classList.toggle('active', ttsEnabled)
     if (ttsBtn) ttsBtn.title = ttsEnabled ? 'Text-to-Speech (on)' : 'Text-to-Speech (off)'
     if (ttsCheckbox) ttsCheckbox.checked = ttsEnabled
+    if (ttsStreamingCheckbox) ttsStreamingCheckbox.checked = ttsStreaming
   }
 
   function setTtsEnabled(v) {
@@ -1100,37 +1107,47 @@ function setupModeToggle() {
     return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\r/g, '')
   }
 
+  async function playTtsNonStreaming(text) {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    if (!res.ok) return
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    ttsAudio = new Audio(url)
+    await new Promise((resolve) => {
+      ttsAudio.onended = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
+      ttsAudio.onerror = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
+      ttsAudio.play().catch(resolve)
+    })
+  }
+
+  async function playTtsStreaming(text) {
+    const url = '/api/tts/stream?' + new URLSearchParams({ text })
+    ttsAudio = new Audio(url)
+    await new Promise((resolve) => {
+      ttsAudio.onended = () => { ttsAudio = null; resolve() }
+      ttsAudio.onerror = () => { ttsAudio = null; resolve() }
+      ttsAudio.play().catch(resolve)
+    })
+  }
+
   async function playNextTts() {
     if (ttsPlaying || !ttsQueue.length) return
     const text = ttsQueue.shift()
     if (!text.trim()) { playNextTts(); return }
     ttsPlaying = true
     try {
-      const res = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      })
-      if (!res.ok) { ttsPlaying = false; return }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      ttsAudio = new Audio(url)
-      ttsAudio.onended = () => {
-        URL.revokeObjectURL(url)
-        ttsAudio = null
-        ttsPlaying = false
-        playNextTts()
+      if (ttsStreaming) {
+        await playTtsStreaming(text)
+      } else {
+        await playTtsNonStreaming(text)
       }
-      ttsAudio.onerror = () => {
-        URL.revokeObjectURL(url)
-        ttsAudio = null
-        ttsPlaying = false
-        playNextTts()
-      }
-      ttsAudio.play()
-    } catch {
-      ttsPlaying = false
-    }
+    } catch { /* ignore */ }
+    ttsPlaying = false
+    playNextTts()
   }
 
   function enqueueTts(text) {
@@ -1152,29 +1169,55 @@ function setupModeToggle() {
     }, TTS_DEBOUNCE_MS)
   }
 
-  // Check TTS service availability
   async function checkTtsStatus() {
     try {
       const res = await fetch('/api/tts/status')
       const data = await res.json()
       ttsAvailable = data.available
+      // Populate settings fields from server config
+      if (data.config) {
+        if (ttsRefAudioInput && !ttsRefAudioInput.value) ttsRefAudioInput.value = data.config.ref_audio_path || ''
+        if (ttsPromptTextInput && !ttsPromptTextInput.value) ttsPromptTextInput.value = data.config.prompt_text || ''
+      }
     } catch {
       ttsAvailable = false
     }
     if (ttsStatusDot) {
       ttsStatusDot.className = 'tts-status-dot ' + (ttsAvailable ? 'available' : 'unavailable')
-      ttsStatusDot.title = ttsAvailable ? 'TTS service connected' : 'TTS service unavailable'
+    }
+    if (ttsStatusText) {
+      ttsStatusText.textContent = ttsAvailable ? 'Service connected' : 'Service unavailable'
+      ttsStatusText.style.color = ttsAvailable ? '#4caf50' : 'var(--fg-3)'
     }
   }
 
   _ttsOutputCallback = onClaudeOutput
   updateTtsUi()
   checkTtsStatus()
-  // Re-check TTS status periodically
   setInterval(checkTtsStatus, 30000)
 
   if (ttsBtn) ttsBtn.addEventListener('click', () => setTtsEnabled(!ttsEnabled))
   if (ttsCheckbox) ttsCheckbox.addEventListener('change', () => setTtsEnabled(ttsCheckbox.checked))
+  if (ttsStreamingCheckbox) ttsStreamingCheckbox.addEventListener('change', () => {
+    ttsStreaming = ttsStreamingCheckbox.checked
+    localStorage.setItem('ttsStreaming', ttsStreaming)
+  })
+  if (ttsSaveBtn) ttsSaveBtn.addEventListener('click', async () => {
+    const ref = ttsRefAudioInput?.value?.trim()
+    const prompt = ttsPromptTextInput?.value?.trim()
+    if (!ref) { if (ttsSaveStatus) ttsSaveStatus.textContent = 'Reference audio path required'; return }
+    try {
+      const res = await fetch('/api/tts/voice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref_audio_path: ref, prompt_text: prompt, prompt_lang: 'zh' }),
+      })
+      const data = await res.json()
+      if (ttsSaveStatus) ttsSaveStatus.textContent = data.ok ? 'Saved!' : (data.error || 'Error')
+    } catch {
+      if (ttsSaveStatus) ttsSaveStatus.textContent = 'Failed to save'
+    }
+  })
 
   chatInput.addEventListener('input', () => {
     autoResize()
