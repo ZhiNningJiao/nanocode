@@ -22,6 +22,10 @@
   --glass-1: rgba(255, 255, 255, 0.04);
   --glass-2: rgba(255, 255, 255, 0.06);
   --glass-3: rgba(255, 255, 255, 0.09);
+
+  /* Surface layers (button backgrounds) */
+  --surface-2: rgba(255, 255, 255, 0.08);
+  --surface-3: rgba(255, 255, 255, 0.12);
   --glass-border: rgba(255, 255, 255, 0.07);
   --glass-border-hi: rgba(255, 255, 255, 0.12);
   --glass-edge: rgba(255, 255, 255, 0.15);
