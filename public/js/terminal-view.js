@@ -1070,16 +1070,34 @@ function setupModeToggle() {
   const ttsRefAudioInput = document.getElementById('tts-ref-audio')
   const ttsPromptTextInput = document.getElementById('tts-prompt-text')
   const ttsSaveBtn = document.getElementById('tts-save-btn')
+  const ttsTestBtn = document.getElementById('tts-test-btn')
   const ttsSaveStatus = document.getElementById('tts-status')
   let ttsEnabled = localStorage.getItem('ttsEnabled') === 'true'
   let ttsStreaming = localStorage.getItem('ttsStreaming') === 'true'
   let ttsAvailable = false
+  let ttsAudioUnlocked = false
   let ttsAudio = null
   let ttsQueue = []
   let ttsPlaying = false
   let ttsBuffer = ''
   let ttsDebounceTimer = null
   const TTS_DEBOUNCE_MS = 1500
+
+  // Unlock audio playback on first user interaction (required by iOS Safari & Chrome autoplay policy)
+  function unlockAudio() {
+    if (ttsAudioUnlocked) return
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const buf = ctx.createBuffer(1, 1, 22050)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(ctx.destination)
+    src.start(0)
+    ttsAudioUnlocked = true
+    document.removeEventListener('click', unlockAudio)
+    document.removeEventListener('touchstart', unlockAudio)
+  }
+  document.addEventListener('click', unlockAudio, { once: false })
+  document.addEventListener('touchstart', unlockAudio, { once: false })
 
   function updateTtsUi() {
     if (ttsBtn) ttsBtn.classList.toggle('active', ttsEnabled)
@@ -1113,14 +1131,14 @@ function setupModeToggle() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     })
-    if (!res.ok) return
+    if (!res.ok) { console.warn('[TTS] fetch failed:', res.status); return }
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
     ttsAudio = new Audio(url)
     await new Promise((resolve) => {
       ttsAudio.onended = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-      ttsAudio.onerror = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-      ttsAudio.play().catch(resolve)
+      ttsAudio.onerror = (e) => { console.warn('[TTS] audio error:', e); URL.revokeObjectURL(url); ttsAudio = null; resolve() }
+      ttsAudio.play().catch((e) => { console.warn('[TTS] play blocked:', e.message); resolve() })
     })
   }
 
@@ -1129,8 +1147,8 @@ function setupModeToggle() {
     ttsAudio = new Audio(url)
     await new Promise((resolve) => {
       ttsAudio.onended = () => { ttsAudio = null; resolve() }
-      ttsAudio.onerror = () => { ttsAudio = null; resolve() }
-      ttsAudio.play().catch(resolve)
+      ttsAudio.onerror = (e) => { console.warn('[TTS] stream error:', e); ttsAudio = null; resolve() }
+      ttsAudio.play().catch((e) => { console.warn('[TTS] play blocked:', e.message); resolve() })
     })
   }
 
@@ -1216,6 +1234,16 @@ function setupModeToggle() {
       if (ttsSaveStatus) ttsSaveStatus.textContent = data.ok ? 'Saved!' : (data.error || 'Error')
     } catch {
       if (ttsSaveStatus) ttsSaveStatus.textContent = 'Failed to save'
+    }
+  })
+  if (ttsTestBtn) ttsTestBtn.addEventListener('click', async () => {
+    unlockAudio()
+    if (ttsSaveStatus) ttsSaveStatus.textContent = 'Testing...'
+    try {
+      await playTtsNonStreaming('你好，TTS 语音测试成功了喵。')
+      if (ttsSaveStatus) ttsSaveStatus.textContent = 'Test complete!'
+    } catch (e) {
+      if (ttsSaveStatus) ttsSaveStatus.textContent = 'Test failed: ' + e.message
     }
   })
 
