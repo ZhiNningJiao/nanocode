@@ -1126,29 +1126,32 @@ function setupModeToggle() {
   }
 
   async function playTtsNonStreaming(text) {
+    console.log('[TTS] requesting:', text.slice(0, 50))
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     })
-    if (!res.ok) { console.warn('[TTS] fetch failed:', res.status); return }
+    if (!res.ok) { console.warn('[TTS] fetch failed:', res.status); throw new Error(`TTS fetch ${res.status}`) }
     const blob = await res.blob()
+    console.log('[TTS] received blob:', blob.size, 'bytes, type:', blob.type)
     const url = URL.createObjectURL(blob)
     ttsAudio = new Audio(url)
-    await new Promise((resolve) => {
-      ttsAudio.onended = () => { URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-      ttsAudio.onerror = (e) => { console.warn('[TTS] audio error:', e); URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-      ttsAudio.play().catch((e) => { console.warn('[TTS] play blocked:', e.message); resolve() })
+    await new Promise((resolve, reject) => {
+      ttsAudio.onended = () => { console.log('[TTS] playback ended'); URL.revokeObjectURL(url); ttsAudio = null; resolve() }
+      ttsAudio.onerror = (e) => { console.warn('[TTS] audio error:', e); URL.revokeObjectURL(url); ttsAudio = null; reject(new Error('Audio decode error')) }
+      ttsAudio.play().then(() => console.log('[TTS] play() started')).catch((e) => { console.warn('[TTS] play blocked:', e.message); reject(e) })
     })
   }
 
   async function playTtsStreaming(text) {
+    console.log('[TTS] streaming:', text.slice(0, 50))
     const url = '/api/tts/stream?' + new URLSearchParams({ text })
     ttsAudio = new Audio(url)
-    await new Promise((resolve) => {
-      ttsAudio.onended = () => { ttsAudio = null; resolve() }
-      ttsAudio.onerror = (e) => { console.warn('[TTS] stream error:', e); ttsAudio = null; resolve() }
-      ttsAudio.play().catch((e) => { console.warn('[TTS] play blocked:', e.message); resolve() })
+    await new Promise((resolve, reject) => {
+      ttsAudio.onended = () => { console.log('[TTS] stream ended'); ttsAudio = null; resolve() }
+      ttsAudio.onerror = (e) => { console.warn('[TTS] stream error:', e); ttsAudio = null; reject(new Error('Stream decode error')) }
+      ttsAudio.play().then(() => console.log('[TTS] stream play() started')).catch((e) => { console.warn('[TTS] play blocked:', e.message); reject(e) })
     })
   }
 
@@ -1163,7 +1166,7 @@ function setupModeToggle() {
       } else {
         await playTtsNonStreaming(text)
       }
-    } catch { /* ignore */ }
+    } catch (e) { console.warn('[TTS] queue item failed:', e.message) }
     ttsPlaying = false
     playNextTts()
   }
@@ -1238,12 +1241,13 @@ function setupModeToggle() {
   })
   if (ttsTestBtn) ttsTestBtn.addEventListener('click', async () => {
     unlockAudio()
-    if (ttsSaveStatus) ttsSaveStatus.textContent = 'Testing...'
+    if (ttsSaveStatus) ttsSaveStatus.textContent = 'Fetching audio...'
     try {
       await playTtsNonStreaming('你好，TTS 语音测试成功了喵。')
-      if (ttsSaveStatus) ttsSaveStatus.textContent = 'Test complete!'
+      if (ttsSaveStatus) ttsSaveStatus.textContent = 'Test OK! Audio played.'
     } catch (e) {
-      if (ttsSaveStatus) ttsSaveStatus.textContent = 'Test failed: ' + e.message
+      console.error('[TTS] test failed:', e)
+      if (ttsSaveStatus) ttsSaveStatus.textContent = 'Failed: ' + e.message
     }
   })
 

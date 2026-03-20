@@ -64,7 +64,7 @@ function getTtsConfig() {
     prompt_text: s.tts_prompt_text || '这是猫娘秘书的声音喵，主人你好呀',
     prompt_lang: s.tts_prompt_lang || 'zh',
     text_lang: s.tts_text_lang || 'auto',
-    media_type: s.tts_media_type || 'wav',
+    media_type: s.tts_media_type || 'ogg',
   }
 }
 
@@ -90,7 +90,7 @@ app.post('/api/tts', async (req, res) => {
     if (!ttsRes.ok) {
       return res.status(502).json({ error: `TTS service returned ${ttsRes.status}` })
     }
-    res.set('Content-Type', ttsRes.headers.get('content-type') || 'audio/wav')
+    res.set('Content-Type', ttsRes.headers.get('content-type') || `audio/${cfg.media_type}`)
     const arrayBuf = await ttsRes.arrayBuffer()
     res.send(Buffer.from(arrayBuf))
   } catch (err) {
