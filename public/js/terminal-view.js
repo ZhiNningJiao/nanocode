@@ -1213,7 +1213,7 @@ function setupModeToggle() {
       ttsPlayedHashes.delete(first)
     }
     ttsLastText = text
-    if (ttsReplayBtn) ttsReplayBtn.style.display = 'inline-flex'
+    if (ttsReplayBtn) ttsReplayBtn.classList.remove('disabled')
     ttsQueue.push(text)
     playNextTts()
   }
@@ -1278,7 +1278,7 @@ function setupModeToggle() {
 
   if (ttsBtn) ttsBtn.addEventListener('click', () => setTtsEnabled(!ttsEnabled))
   if (ttsReplayBtn) {
-    ttsReplayBtn.style.display = 'none'
+    ttsReplayBtn.classList.add('disabled')
     ttsReplayBtn.addEventListener('click', () => {
       if (!ttsLastText) return
       unlockAudio()

@@ -1315,18 +1315,23 @@ body {
 }
 
 .tts-replay-btn {
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   border: none;
   border-radius: var(--r-sm);
   background: var(--surface-2);
   color: var(--fg-2);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background var(--t-fast) ease, color var(--t-fast) ease;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, opacity var(--t-fast) ease;
+}
+
+.tts-replay-btn.disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .tts-replay-btn:hover {
