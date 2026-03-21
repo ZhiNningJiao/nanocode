@@ -371,11 +371,15 @@ export class TerminalPane {
       } else if (msg.type === 'output') {
         const toWrite = this.localEcho.reconcile(msg.data)
         if (toWrite) {
-          this.term.write(toWrite, () => {
-            if (!this._userScrolledUp) {
-              this.term.scrollToBottom()
-            }
-          })
+          // Strip [TTS_START]...[TTS_END] markers from terminal display
+          const displayText = toWrite.replace(/\[TTS_START\]/g, '').replace(/\[TTS_END\]/g, '')
+          if (displayText) {
+            this.term.write(displayText, () => {
+              if (!this._userScrolledUp) {
+                this.term.scrollToBottom()
+              }
+            })
+          }
           if (this.onOutput) this.onOutput(msg.data)
         }
       } else if (msg.type === 'pong') {

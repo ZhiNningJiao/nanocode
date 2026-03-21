@@ -1206,9 +1206,20 @@ function setupModeToggle() {
     ttsBuffer += clean
     if (ttsDebounceTimer) clearTimeout(ttsDebounceTimer)
     ttsDebounceTimer = setTimeout(() => {
-      const text = ttsBuffer.trim()
+      const buf = ttsBuffer
       ttsBuffer = ''
-      if (text) enqueueTts(text)
+      // Extract only content between [TTS_START]...[TTS_END] markers
+      const re = /\[TTS_START\]([\s\S]*?)\[TTS_END\]/g
+      let match
+      const parts = []
+      while ((match = re.exec(buf)) !== null) {
+        const t = match[1].trim()
+        if (t) parts.push(t)
+      }
+      if (parts.length) {
+        console.log('[TTS] extracted:', parts.join(' | ').slice(0, 80))
+        enqueueTts(parts.join('。'))
+      }
     }, TTS_DEBOUNCE_MS)
   }
 
