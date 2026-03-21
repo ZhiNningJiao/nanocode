@@ -1085,6 +1085,21 @@ function setupModeToggle() {
   const ttsPlayedHashes = new Set()
   let ttsLastText = ''
   const ttsReplayBtn = document.getElementById('tts-replay-btn')
+  const ttsLogPanel = document.getElementById('tts-log-panel')
+
+  function ttsLog(msg, level = 'ok') {
+    const ts = new Date().toLocaleTimeString()
+    const line = `[${ts}] ${msg}`
+    console.log('[TTS]', msg)
+    if (ttsLogPanel) {
+      const el = document.createElement('div')
+      el.className = 'tts-log-entry ' + level
+      el.textContent = line
+      ttsLogPanel.appendChild(el)
+      if (ttsLogPanel.children.length > 100) ttsLogPanel.removeChild(ttsLogPanel.firstChild)
+      ttsLogPanel.scrollTop = ttsLogPanel.scrollHeight
+    }
+  }
 
   // Unlock audio playback on first user interaction (required by iOS Safari & Chrome autoplay policy)
   function unlockAudio() {
@@ -1146,32 +1161,32 @@ function setupModeToggle() {
   }
 
   async function playTtsNonStreaming(text) {
-    console.log('[TTS] requesting:', text.slice(0, 50))
+    ttsLog('Requesting: ' + text.slice(0, 50))
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     })
-    if (!res.ok) { console.warn('[TTS] fetch failed:', res.status); throw new Error(`TTS fetch ${res.status}`) }
+    if (!res.ok) { ttsLog('Fetch failed: ' + res.status, 'err'); throw new Error(`TTS fetch ${res.status}`) }
     const blob = await res.blob()
-    console.log('[TTS] received blob:', blob.size, 'bytes, type:', blob.type)
+    ttsLog('Received: ' + blob.size + ' bytes, type: ' + blob.type)
     const url = URL.createObjectURL(blob)
     ttsAudio = new Audio(url)
     await new Promise((resolve, reject) => {
-      ttsAudio.onended = () => { console.log('[TTS] playback ended'); URL.revokeObjectURL(url); ttsAudio = null; resolve() }
-      ttsAudio.onerror = (e) => { console.warn('[TTS] audio error:', e); URL.revokeObjectURL(url); ttsAudio = null; reject(new Error('Audio decode error')) }
-      ttsAudio.play().then(() => console.log('[TTS] play() started')).catch((e) => { console.warn('[TTS] play blocked:', e.message); reject(e) })
+      ttsAudio.onended = () => { ttsLog('Playback ended', 'ok'); URL.revokeObjectURL(url); ttsAudio = null; resolve() }
+      ttsAudio.onerror = (e) => { ttsLog('Audio decode error', 'err'); URL.revokeObjectURL(url); ttsAudio = null; reject(new Error('Audio decode error')) }
+      ttsAudio.play().then(() => ttsLog('Playing...', 'ok')).catch((e) => { ttsLog('Play blocked: ' + e.message, 'err'); reject(e) })
     })
   }
 
   async function playTtsStreaming(text) {
-    console.log('[TTS] streaming:', text.slice(0, 50))
+    ttsLog('Streaming: ' + text.slice(0, 50))
     const url = '/api/tts/stream?' + new URLSearchParams({ text })
     ttsAudio = new Audio(url)
     await new Promise((resolve, reject) => {
-      ttsAudio.onended = () => { console.log('[TTS] stream ended'); ttsAudio = null; resolve() }
-      ttsAudio.onerror = (e) => { console.warn('[TTS] stream error:', e); ttsAudio = null; reject(new Error('Stream decode error')) }
-      ttsAudio.play().then(() => console.log('[TTS] stream play() started')).catch((e) => { console.warn('[TTS] play blocked:', e.message); reject(e) })
+      ttsAudio.onended = () => { ttsLog('Stream ended', 'ok'); ttsAudio = null; resolve() }
+      ttsAudio.onerror = (e) => { ttsLog('Stream error', 'err'); ttsAudio = null; reject(new Error('Stream decode error')) }
+      ttsAudio.play().then(() => ttsLog('Stream playing...', 'ok')).catch((e) => { ttsLog('Play blocked: ' + e.message, 'err'); reject(e) })
     })
   }
 
@@ -1187,7 +1202,7 @@ function setupModeToggle() {
         await playTtsNonStreaming(text)
       }
     } catch (e) {
-      console.warn('[TTS] queue item failed:', e.message)
+      ttsLog('Failed: ' + e.message, 'err')
       if (e.message.includes('502') || e.message.includes('503') || e.message.includes('fetch')) {
         showTtsToast('Voice service restarting, please wait...')
       }
@@ -1205,7 +1220,7 @@ function setupModeToggle() {
   function enqueueTts(text) {
     if (!ttsEnabled || !ttsAvailable) return
     const hash = simpleHash(text)
-    if (ttsPlayedHashes.has(hash)) { console.log('[TTS] skipped duplicate:', text.slice(0, 40)); return }
+    if (ttsPlayedHashes.has(hash)) { ttsLog('Skipped duplicate: ' + text.slice(0, 40), 'skip'); return }
     ttsPlayedHashes.add(hash)
     // Keep set bounded
     if (ttsPlayedHashes.size > 200) {
@@ -1235,7 +1250,7 @@ function setupModeToggle() {
         if (t) parts.push(t)
       }
       if (parts.length) {
-        console.log('[TTS] extracted:', parts.join(' | ').slice(0, 80))
+        ttsLog('Extracted: ' + parts.join(' | ').slice(0, 80))
         enqueueTts(parts.join('。'))
       }
     }, TTS_DEBOUNCE_MS)
@@ -1321,7 +1336,7 @@ function setupModeToggle() {
       setLastTtsText(testText)
       if (ttsSaveStatus) ttsSaveStatus.textContent = 'Test OK! Audio played.'
     } catch (e) {
-      console.error('[TTS] test failed:', e)
+      ttsLog('Test failed: ' + e.message, 'err')
       if (ttsSaveStatus) ttsSaveStatus.textContent = 'Failed: ' + e.message
     }
   })

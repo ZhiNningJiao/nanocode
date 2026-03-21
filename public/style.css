@@ -1384,6 +1384,36 @@ body {
   margin-left: var(--s-1);
 }
 
+.tts-log-details {
+  margin-top: var(--s-3);
+}
+
+.tts-log-summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--fg-3);
+  user-select: none;
+}
+
+.tts-log-panel {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: var(--s-2);
+  padding: var(--s-2);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: var(--r-sm);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+
+.tts-log-entry { margin-bottom: 2px; }
+.tts-log-entry.ok { color: #4caf50; }
+.tts-log-entry.warn { color: #fbbf24; }
+.tts-log-entry.err { color: #ff6b6b; }
+.tts-log-entry.skip { color: var(--fg-3); }
+
 .mic-btn {
   display: inline-flex;
   align-items: center;
