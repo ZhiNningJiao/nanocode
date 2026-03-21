@@ -1212,8 +1212,7 @@ function setupModeToggle() {
       const first = ttsPlayedHashes.values().next().value
       ttsPlayedHashes.delete(first)
     }
-    ttsLastText = text
-    if (ttsReplayBtn) ttsReplayBtn.classList.remove('disabled')
+    setLastTtsText(text)
     ttsQueue.push(text)
     playNextTts()
   }
@@ -1308,11 +1307,18 @@ function setupModeToggle() {
       if (ttsSaveStatus) ttsSaveStatus.textContent = 'Failed to save'
     }
   })
+  function setLastTtsText(text) {
+    ttsLastText = text
+    if (ttsReplayBtn) ttsReplayBtn.classList.remove('disabled')
+  }
+
   if (ttsTestBtn) ttsTestBtn.addEventListener('click', async () => {
     unlockAudio()
     if (ttsSaveStatus) ttsSaveStatus.textContent = 'Fetching audio...'
+    const testText = '你好，TTS 语音测试成功了喵。'
     try {
-      await playTtsNonStreaming('你好，TTS 语音测试成功了喵。')
+      await playTtsNonStreaming(testText)
+      setLastTtsText(testText)
       if (ttsSaveStatus) ttsSaveStatus.textContent = 'Test OK! Audio played.'
     } catch (e) {
       console.error('[TTS] test failed:', e)
