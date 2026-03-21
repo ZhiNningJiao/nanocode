@@ -68,33 +68,44 @@ function getTtsConfig() {
   }
 }
 
-// Non-streaming TTS — POST /tts, returns full audio
+// Non-streaming TTS — POST /tts, returns full audio (with retry)
 app.post('/api/tts', async (req, res) => {
   const { text } = req.body || {}
   if (!text) return res.status(400).json({ error: 'text required' })
   const cfg = getTtsConfig()
-  try {
-    const ttsRes = await fetch(`${TTS_BASE}/tts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        text_lang: cfg.text_lang,
-        ref_audio_path: cfg.ref_audio_path,
-        prompt_text: cfg.prompt_text,
-        prompt_lang: cfg.prompt_lang,
-        media_type: cfg.media_type,
-        streaming_mode: false,
-      }),
-    })
-    if (!ttsRes.ok) {
-      return res.status(502).json({ error: `TTS service returned ${ttsRes.status}` })
+  const payload = {
+    text,
+    text_lang: cfg.text_lang,
+    ref_audio_path: cfg.ref_audio_path,
+    prompt_text: cfg.prompt_text,
+    prompt_lang: cfg.prompt_lang,
+    media_type: cfg.media_type,
+    streaming_mode: false,
+  }
+  const maxRetries = 2
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const ttsRes = await fetch(`${TTS_BASE}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(60000),
+      })
+      if (!ttsRes.ok) {
+        const detail = await ttsRes.text().catch(() => '')
+        console.warn(`[TTS] attempt ${attempt}: service returned ${ttsRes.status}`, detail.slice(0, 200))
+        if (attempt < maxRetries) continue
+        return res.status(502).json({ error: `TTS service returned ${ttsRes.status}`, detail: detail.slice(0, 200) })
+      }
+      res.set('Content-Type', ttsRes.headers.get('content-type') || `audio/${cfg.media_type}`)
+      const arrayBuf = await ttsRes.arrayBuffer()
+      res.send(Buffer.from(arrayBuf))
+      return
+    } catch (err) {
+      console.warn(`[TTS] attempt ${attempt}: ${err.message}`)
+      if (attempt < maxRetries) continue
+      res.status(503).json({ error: 'TTS service unavailable', detail: err.message })
     }
-    res.set('Content-Type', ttsRes.headers.get('content-type') || `audio/${cfg.media_type}`)
-    const arrayBuf = await ttsRes.arrayBuffer()
-    res.send(Buffer.from(arrayBuf))
-  } catch (err) {
-    res.status(503).json({ error: 'TTS service unavailable', detail: err.message })
   }
 })
 

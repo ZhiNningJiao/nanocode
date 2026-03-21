@@ -1183,7 +1183,12 @@ function setupModeToggle() {
       } else {
         await playTtsNonStreaming(text)
       }
-    } catch (e) { console.warn('[TTS] queue item failed:', e.message) }
+    } catch (e) {
+      console.warn('[TTS] queue item failed:', e.message)
+      if (e.message.includes('502') || e.message.includes('503')) {
+        showTtsToast('TTS service error — retrying next time')
+      }
+    }
     ttsPlaying = false
     playNextTts()
   }
