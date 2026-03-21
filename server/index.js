@@ -153,17 +153,10 @@ app.post('/api/tts/voice', async (req, res) => {
   const { ref_audio_path, prompt_text, prompt_lang } = req.body || {}
   if (!ref_audio_path) return res.status(400).json({ error: 'ref_audio_path required' })
   try {
-    // Set reference audio on GPT-SoVITS
-    const r = await fetch(`${TTS_BASE}/change_refer`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        refer_wav_path: ref_audio_path,
-        prompt_text: prompt_text || '',
-        prompt_language: prompt_lang || 'zh',
-      }),
-    })
-    if (!r.ok) return res.status(502).json({ error: `change_refer returned ${r.status}` })
+    // Set reference audio on GPT-SoVITS (v2 uses GET /set_refer_audio)
+    const params = new URLSearchParams({ refer_audio_path: ref_audio_path })
+    const r = await fetch(`${TTS_BASE}/set_refer_audio?${params}`)
+    if (!r.ok) return res.status(502).json({ error: `set_refer_audio returned ${r.status}` })
     // Persist in nanocode settings
     store.setSetting('tts_ref_audio', ref_audio_path)
     if (prompt_text) store.setSetting('tts_prompt_text', prompt_text)
