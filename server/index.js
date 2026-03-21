@@ -63,7 +63,7 @@ function getTtsConfig() {
     ref_audio_path: s.tts_ref_audio || '/storage/home/zhiningjiao/code/GPT-SoVITS/ref_audio.wav',
     prompt_text: s.tts_prompt_text || '这是猫娘秘书的声音喵，主人你好呀',
     prompt_lang: s.tts_prompt_lang || 'zh',
-    text_lang: s.tts_text_lang || 'auto',
+    text_lang: s.tts_text_lang || 'en',
     media_type: s.tts_media_type || 'ogg',
   }
 }
@@ -120,7 +120,7 @@ async function handleTts(req, res) {
       res.status(503).json({ error: 'TTS service unavailable', detail: err.message })
     }
   }
-})
+}
 
 // Streaming TTS — proxies chunked audio from GPT-SoVITS GET /tts endpoint
 app.get('/api/tts/stream', async (req, res) => {
