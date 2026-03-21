@@ -334,6 +334,9 @@ export class TerminalPane {
 
     this._ws.onopen = () => {
       this._reconnectAttempts = 0 // reset backoff on success
+      this._historyDone = false
+      // If no history message arrives within 2s, assume fresh session
+      setTimeout(() => { this._historyDone = true }, 2000)
       this.onStatusChange('connected')
       const { cols, rows } = this._dimensions()
       this._send({
@@ -363,11 +366,13 @@ export class TerminalPane {
       }
 
       if (msg.type === 'history') {
+        this._historyDone = false
         if (msg.data) {
           this.term.write(msg.data)
           // After history load, scroll to bottom
           requestAnimationFrame(() => this.scrollToBottom())
         }
+        this._historyDone = true
       } else if (msg.type === 'output') {
         const toWrite = this.localEcho.reconcile(msg.data)
         if (toWrite) {
@@ -380,7 +385,8 @@ export class TerminalPane {
               }
             })
           }
-          if (this.onOutput) this.onOutput(msg.data)
+          // Only forward to TTS after history is loaded (skip replayed data)
+          if (this._historyDone && this.onOutput) this.onOutput(msg.data)
         }
       } else if (msg.type === 'pong') {
         this._onPong(msg.id)
