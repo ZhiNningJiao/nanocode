@@ -1188,8 +1188,8 @@ function setupModeToggle() {
       }
     } catch (e) {
       console.warn('[TTS] queue item failed:', e.message)
-      if (e.message.includes('502') || e.message.includes('503')) {
-        showTtsToast('TTS service error — retrying next time')
+      if (e.message.includes('502') || e.message.includes('503') || e.message.includes('fetch')) {
+        showTtsToast('Voice service restarting, please wait...')
       }
     }
     ttsPlaying = false
