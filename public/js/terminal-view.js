@@ -1250,9 +1250,9 @@ function setupModeToggle() {
         const t = match[1].trim()
         if (t) parts.push(t)
       }
-      if (parts.length) {
-        ttsLog('Extracted: ' + parts.join(' | ').slice(0, 80))
-        enqueueTts(parts.join('。'))
+      for (const part of parts) {
+        ttsLog('Extracted: ' + part.slice(0, 80))
+        enqueueTts(part)
       }
     }, TTS_DEBOUNCE_MS)
   }

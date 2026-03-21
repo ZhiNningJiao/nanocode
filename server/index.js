@@ -68,10 +68,23 @@ function getTtsConfig() {
   }
 }
 
+// Serial queue for GPT-SoVITS (single-threaded inference, no concurrency)
+let ttsQueueTail = Promise.resolve()
+function ttsSerialize(fn) {
+  const p = ttsQueueTail.then(fn, fn)
+  ttsQueueTail = p.catch(() => {})
+  return p
+}
+
 // Non-streaming TTS — POST /tts, returns full audio (with retry)
-app.post('/api/tts', async (req, res) => {
+app.post('/api/tts', (req, res) => {
   const { text } = req.body || {}
   if (!text) return res.status(400).json({ error: 'text required' })
+  ttsSerialize(() => handleTts(req, res))
+})
+
+async function handleTts(req, res) {
+  const { text } = req.body || {}
   const cfg = getTtsConfig()
   const payload = {
     text,
