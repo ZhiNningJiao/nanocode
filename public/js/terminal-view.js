@@ -1082,6 +1082,9 @@ function setupModeToggle() {
   let ttsBuffer = ''
   let ttsDebounceTimer = null
   const TTS_DEBOUNCE_MS = 1500
+  const ttsPlayedHashes = new Set()
+  let ttsLastText = ''
+  const ttsReplayBtn = document.getElementById('tts-replay-btn')
 
   // Unlock audio playback on first user interaction (required by iOS Safari & Chrome autoplay policy)
   function unlockAudio() {
@@ -1193,8 +1196,24 @@ function setupModeToggle() {
     playNextTts()
   }
 
+  function simpleHash(s) {
+    let h = 0
+    for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
+    return h.toString(36)
+  }
+
   function enqueueTts(text) {
     if (!ttsEnabled || !ttsAvailable) return
+    const hash = simpleHash(text)
+    if (ttsPlayedHashes.has(hash)) { console.log('[TTS] skipped duplicate:', text.slice(0, 40)); return }
+    ttsPlayedHashes.add(hash)
+    // Keep set bounded
+    if (ttsPlayedHashes.size > 200) {
+      const first = ttsPlayedHashes.values().next().value
+      ttsPlayedHashes.delete(first)
+    }
+    ttsLastText = text
+    if (ttsReplayBtn) ttsReplayBtn.style.display = 'inline-flex'
     ttsQueue.push(text)
     playNextTts()
   }
@@ -1258,6 +1277,16 @@ function setupModeToggle() {
   setInterval(checkTtsStatus, 30000)
 
   if (ttsBtn) ttsBtn.addEventListener('click', () => setTtsEnabled(!ttsEnabled))
+  if (ttsReplayBtn) {
+    ttsReplayBtn.style.display = 'none'
+    ttsReplayBtn.addEventListener('click', () => {
+      if (!ttsLastText) return
+      unlockAudio()
+      // Bypass dedup for replay
+      ttsQueue.push(ttsLastText)
+      playNextTts()
+    })
+  }
   if (ttsCheckbox) ttsCheckbox.addEventListener('change', () => setTtsEnabled(ttsCheckbox.checked))
   if (ttsStreamingCheckbox) ttsStreamingCheckbox.addEventListener('change', () => {
     ttsStreaming = ttsStreamingCheckbox.checked

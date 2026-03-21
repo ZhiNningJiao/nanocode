@@ -1314,6 +1314,30 @@ body {
   50% { box-shadow: 0 0 10px var(--glow), 0 0 20px var(--glow); }
 }
 
+.tts-replay-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease;
+}
+
+.tts-replay-btn:hover {
+  background: var(--surface-3);
+  color: var(--fg-1);
+}
+
+.tts-replay-btn:active {
+  transform: scale(0.94);
+}
+
 .settings-toggle-row {
   display: flex;
   align-items: center;
