@@ -1218,9 +1218,10 @@ function setupModeToggle() {
   }
 
   function enqueueTts(text) {
-    if (!ttsEnabled || !ttsAvailable) return
+    if (!ttsEnabled || !ttsAvailable) { ttsLog('Skipped: ttsEnabled=' + ttsEnabled + ' ttsAvailable=' + ttsAvailable, 'skip'); return }
     const hash = simpleHash(text)
     if (ttsPlayedHashes.has(hash)) { ttsLog('Skipped duplicate: ' + text.slice(0, 40), 'skip'); return }
+    ttsLog('Enqueued: ' + text.slice(0, 50))
     ttsPlayedHashes.add(hash)
     // Keep set bounded
     if (ttsPlayedHashes.size > 200) {
@@ -1294,7 +1295,8 @@ function setupModeToggle() {
   if (ttsReplayBtn) {
     ttsReplayBtn.classList.add('disabled')
     ttsReplayBtn.addEventListener('click', () => {
-      if (!ttsLastText) return
+      if (!ttsLastText) { ttsLog('Replay: nothing to replay', 'warn'); return }
+      ttsLog('Replay: ' + ttsLastText.slice(0, 50))
       unlockAudio()
       // Bypass dedup for replay
       ttsQueue.push(ttsLastText)
