@@ -5,6 +5,7 @@ import path from 'path'
 import { WebSocketServer } from 'ws'
 import { getStore } from './store.js'
 import { createTerminalRoutes } from '../terminal/routes.js'
+import { startQaWatcher } from './qa-watcher.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -203,11 +204,17 @@ const terminalWss = new WebSocketServer({
   perMessageDeflate: deflateOpts,
 })
 
+const notifyWss = new WebSocketServer({ noServer: true })
+
 server.on('upgrade', (req, socket, head) => {
   const { pathname } = new URL(req.url, `http://${req.headers.host}`)
   if (pathname === '/ws/terminal') {
     terminalWss.handleUpgrade(req, socket, head, (ws) => {
       terminalWss.emit('connection', ws, req)
+    })
+  } else if (pathname === '/ws/notify') {
+    notifyWss.handleUpgrade(req, socket, head, (ws) => {
+      notifyWss.emit('connection', ws, req)
     })
   } else {
     socket.destroy()
@@ -217,6 +224,19 @@ server.on('upgrade', (req, socket, head) => {
 terminalWss.on('connection', (ws) => {
   handleTerminalWs(ws)
 })
+
+notifyWss.on('connection', (ws) => {
+  ws.on('error', () => {})
+})
+
+function broadcastNotify(msg) {
+  const data = JSON.stringify(msg)
+  for (const ws of notifyWss.clients) {
+    if (ws.readyState === 1) ws.send(data)
+  }
+}
+
+startQaWatcher(broadcastNotify)
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Nanocode running on http://0.0.0.0:${PORT}`)

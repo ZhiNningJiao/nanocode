@@ -15,6 +15,39 @@ import { slugify, hostSlug, projectSlug, projectPath, navigateTo } from './route
 
 let workspaceReady = false
 
+// --- QA notification WebSocket ---
+
+function showNotifyToast(msg, duration = 6000) {
+  let el = document.getElementById('notify-toast')
+  if (!el) {
+    el = document.createElement('div')
+    el.id = 'notify-toast'
+    el.style.cssText = 'position:fixed;top:20px;right:20px;background:rgba(20,20,40,0.96);color:#f0f0f0;padding:12px 20px;border-radius:10px;font-size:13px;z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.3s;backdrop-filter:blur(12px);border:1px solid rgba(100,180,255,0.3);max-width:300px;'
+    document.body.appendChild(el)
+  }
+  el.textContent = msg
+  el.style.opacity = '1'
+  clearTimeout(el._timer)
+  el._timer = setTimeout(() => { el.style.opacity = '0' }, duration)
+}
+
+function initNotifyWs() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const ws = new WebSocket(`${proto}//${location.host}/ws/notify`)
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data)
+      if (msg.type === 'qa_notify') {
+        const text = `[QA] ${msg.repo}: ${msg.task}`
+        showNotifyToast(text)
+        console.log('[notify]', text)
+      }
+    } catch {}
+  }
+  ws.onclose = () => setTimeout(initNotifyWs, 5000)
+  ws.onerror = () => {}
+}
+
 // --- Tab bar ---
 
 const tabs = ['terminal', 'settings']
@@ -183,6 +216,7 @@ async function onProjectSwitch(projectId) {
 // --- Init ---
 
 async function init() {
+  initNotifyWs()
   try { state.projects = await fetchProjects() } catch { state.projects = [] }
   initSidebar(onProjectSwitch)
   initTabBar()
