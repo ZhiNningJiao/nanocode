@@ -1335,7 +1335,6 @@ function setupModeToggle() {
     const testText = '你好，TTS 语音测试成功了喵。'
     try {
       await playTtsNonStreaming(testText)
-      setLastTtsText(testText)
       if (ttsSaveStatus) ttsSaveStatus.textContent = 'Test OK! Audio played.'
     } catch (e) {
       ttsLog('Test failed: ' + e.message, 'err')
