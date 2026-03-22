@@ -1298,7 +1298,7 @@ function setupModeToggle() {
       if (!ttsLastText) { ttsLog('Replay: nothing to replay', 'warn'); return }
       ttsLog('Replay: ' + ttsLastText.slice(0, 50))
       unlockAudio()
-      // Bypass dedup for replay
+      stopTts()
       ttsQueue.push(ttsLastText)
       playNextTts()
     })
