@@ -1157,7 +1157,12 @@ function setupModeToggle() {
   }
 
   function stripAnsi(s) {
-    return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\r/g, '')
+    return s
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')     // CSI sequences
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences
+      .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, '')  // DCS/SOS/PM/APC sequences
+      .replace(/\x1b[^[\]PX^_\r\n]/g, '')         // 2-char escapes (e.g. \x1b(B)
+      .replace(/\r/g, '')
   }
 
   async function playTtsNonStreaming(text) {
@@ -1221,6 +1226,7 @@ function setupModeToggle() {
     if (!ttsEnabled || !ttsAvailable) { ttsLog('Skipped: ttsEnabled=' + ttsEnabled + ' ttsAvailable=' + ttsAvailable, 'skip'); return }
     const hash = simpleHash(text)
     if (ttsPlayedHashes.has(hash)) { ttsLog('Skipped duplicate: ' + text.slice(0, 40), 'skip'); return }
+    if (ttsQueue.some(t => simpleHash(t) === hash)) { ttsLog('Skipped queued: ' + text.slice(0, 40), 'skip'); return }
     ttsLog('Enqueued: ' + text.slice(0, 50))
     ttsPlayedHashes.add(hash)
     // Keep set bounded

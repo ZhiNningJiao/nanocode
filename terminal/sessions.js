@@ -126,9 +126,8 @@ class Session {
    */
   attach(ws, cols, rows) {
     const history = this._scrollback.getContents()
-    if (history) {
-      ws.send(JSON.stringify({ type: 'history', data: history }))
-    }
+    // Always send history message (even empty) so client sets _historyDone=true immediately
+    ws.send(JSON.stringify({ type: 'history', data: history || '' }))
     this._clients.add(ws)
     if (this._gcTimer) { clearTimeout(this._gcTimer); this._gcTimer = null }
     if (this._proc && !this._exited) {
