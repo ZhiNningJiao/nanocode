@@ -38,9 +38,15 @@ function initNotifyWs() {
     try {
       const msg = JSON.parse(e.data)
       if (msg.type === 'qa_notify') {
-        const text = `[QA] ${msg.repo}: ${msg.task}`
+        const text = `[QA] ${msg.repo}: ${msg.task}${msg.summary ? ' — ' + msg.summary.slice(0, 60) : ''}`
         showNotifyToast(text)
         console.log('[notify]', text)
+      } else if (msg.type === 'done_notify') {
+        const text = `[DONE] ${msg.repo}: ${msg.task} (${msg.reviewer})`
+        showNotifyToast(text, 8000)
+        console.log('[notify]', text)
+      } else if (msg.type === 'activity') {
+        console.log('[activity]', msg.repo, msg.heading)
       }
     } catch {}
   }
