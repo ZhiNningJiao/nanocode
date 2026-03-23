@@ -136,7 +136,7 @@ export function startQaWatcher(broadcast) {
   readNewJsonlEntries(DONE_SIGNAL_PATH, 'done')
 
   // Watch signal files with poll-based watchFile (works on CephFS/NFS)
-  const opts = { persistent: false, interval: POLL_INTERVAL_MS }
+  const opts = { persistent: true, interval: POLL_INTERVAL_MS }
 
   watchFile(QA_SIGNAL_PATH, opts, () => handleQaEntries(broadcast))
   console.log('[watcher] polling', QA_SIGNAL_PATH)
