@@ -2515,3 +2515,43 @@ body {
     padding: 4px;
   }
 }
+
+/* ── Services health widget ──────────────────────────────────────────────── */
+.services-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.service-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: 13px;
+}
+
+.service-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fg-3);
+  transition: background 0.3s;
+}
+
+.service-dot.up   { background: #4caf50; }
+.service-dot.down { background: #f44336; animation: svc-blink 1s ease-in-out infinite; }
+
+@keyframes svc-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+.service-name { color: var(--fg); }
+.service-port { color: var(--fg-3); font-size: 11px; }
+
+.services-checked-at {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: var(--s-1);
+}

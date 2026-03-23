@@ -1,5 +1,6 @@
 import express from 'express'
 import { createServer } from 'http'
+import { createConnection } from 'net'
 import { fileURLToPath } from 'url'
 import path from 'path'
 import { WebSocketServer } from 'ws'
@@ -192,6 +193,46 @@ app.get('/api/tts/status', async (_req, res) => {
   }
 })
 
+// ─── Service port health checker ─────────────────────────────────────────────
+
+const WATCHED_SERVICES = [
+  { name: 'mblend',      host: '10.18.8.55', port: 5050 },
+  { name: 'dccpipeline', host: '10.18.8.55', port: 8765 },
+  { name: 'regression',  host: '10.18.8.55', port: 8000 },
+  { name: 'nanocode',    host: 'localhost',  port: 3001 },
+  { name: 'TTS',         host: 'localhost',  port: 9880 },
+]
+const SERVICE_CHECK_MS = 30_000
+const serviceStatus = {}
+for (const s of WATCHED_SERVICES) serviceStatus[s.name] = { status: 'unknown', checkedAt: null }
+
+function checkPort(host, port) {
+  return new Promise((resolve) => {
+    const sock = createConnection({ host, port }, () => { sock.destroy(); resolve(true) })
+    sock.setTimeout(2000)
+    sock.on('timeout', () => { sock.destroy(); resolve(false) })
+    sock.on('error', () => resolve(false))
+  })
+}
+
+async function runServiceChecks(broadcast) {
+  for (const svc of WATCHED_SERVICES) {
+    const prev = serviceStatus[svc.name].status
+    const up = await checkPort(svc.host, svc.port)
+    const status = up ? 'up' : 'down'
+    const checkedAt = new Date().toISOString()
+    serviceStatus[svc.name] = { status, checkedAt }
+    if (prev !== 'unknown' && prev !== status) {
+      console.warn(`[health] ${svc.name}:${svc.port} ${prev} → ${status}`)
+      broadcast({ type: 'service_status', name: svc.name, status, checkedAt })
+    }
+  }
+}
+
+app.get('/api/services', (_req, res) => {
+  res.json(serviceStatus)
+})
+
 const server = createServer(app)
 
 const deflateOpts = {
@@ -237,6 +278,10 @@ function broadcastNotify(msg) {
 }
 
 startQaWatcher(broadcastNotify)
+
+// Run initial check after startup, then every 30s
+setTimeout(() => runServiceChecks(broadcastNotify), 5000)
+setInterval(() => runServiceChecks(broadcastNotify), SERVICE_CHECK_MS)
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Nanocode running on http://0.0.0.0:${PORT}`)

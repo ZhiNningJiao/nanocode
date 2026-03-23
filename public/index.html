@@ -149,6 +149,33 @@
                 <div class="tts-log-panel" id="tts-log-panel"></div>
               </details>
             </section>
+            <section class="settings-section">
+              <h3 class="settings-section-title">Services</h3>
+              <p class="settings-desc">Port health of background services (checked every 30s).</p>
+              <div class="services-grid" id="services-grid">
+                <div class="service-item" data-svc="mblend">
+                  <span class="service-dot" id="svc-dot-mblend"></span>
+                  <span class="service-name">mblend <span class="service-port">:5050</span></span>
+                </div>
+                <div class="service-item" data-svc="dccpipeline">
+                  <span class="service-dot" id="svc-dot-dccpipeline"></span>
+                  <span class="service-name">dccpipeline <span class="service-port">:8765</span></span>
+                </div>
+                <div class="service-item" data-svc="regression">
+                  <span class="service-dot" id="svc-dot-regression"></span>
+                  <span class="service-name">regression <span class="service-port">:8000</span></span>
+                </div>
+                <div class="service-item" data-svc="nanocode">
+                  <span class="service-dot" id="svc-dot-nanocode"></span>
+                  <span class="service-name">nanocode <span class="service-port">:3001</span></span>
+                </div>
+                <div class="service-item" data-svc="TTS">
+                  <span class="service-dot" id="svc-dot-TTS"></span>
+                  <span class="service-name">TTS <span class="service-port">:9880</span></span>
+                </div>
+              </div>
+              <p class="services-checked-at" id="services-checked-at"></p>
+            </section>
           </div>
         </div>
 

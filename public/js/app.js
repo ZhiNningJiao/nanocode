@@ -49,6 +49,8 @@ function initNotifyWs() {
         const text = `[BLOCKED] ${msg.repo}: ${msg.task}${msg.reason ? ' — ' + msg.reason.slice(0, 80) : ''}`
         showNotifyToast(text, 10000)
         console.log('[notify]', text)
+      } else if (msg.type === 'service_status') {
+        updateServiceDot(msg.name, msg.status, msg.checkedAt)
       } else if (msg.type === 'activity') {
         console.log('[activity]', msg.repo, msg.heading)
       }
@@ -56,6 +58,29 @@ function initNotifyWs() {
   }
   ws.onclose = () => setTimeout(initNotifyWs, 5000)
   ws.onerror = () => {}
+}
+
+// --- Services health ----
+
+function updateServiceDot(name, status, checkedAt) {
+  const dot = document.getElementById(`svc-dot-${name}`)
+  if (dot) {
+    dot.className = `service-dot ${status}`
+    dot.title = `${name}: ${status}${checkedAt ? ' (checked ' + checkedAt.slice(11, 16) + ' UTC)' : ''}`
+  }
+}
+
+async function loadServices() {
+  try {
+    const data = await fetch('/api/services').then(r => r.json())
+    let lastChecked = null
+    for (const [name, info] of Object.entries(data)) {
+      updateServiceDot(name, info.status, info.checkedAt)
+      if (info.checkedAt && (!lastChecked || info.checkedAt > lastChecked)) lastChecked = info.checkedAt
+    }
+    const el = document.getElementById('services-checked-at')
+    if (el && lastChecked) el.textContent = `Last checked: ${lastChecked.slice(0, 16).replace('T', ' ')} UTC`
+  } catch {}
 }
 
 // --- Tab bar ---
@@ -90,6 +115,7 @@ function switchTab(tab) {
     else fitTerminals()
   } else if (tab === 'settings') {
     loadSettings()
+    loadServices()
   }
 }
 
