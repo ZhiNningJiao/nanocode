@@ -125,6 +125,14 @@ class Session {
    * @param {number} rows
    */
   attach(ws, cols, rows) {
+    // Flush any pending output to existing clients before snapshotting history.
+    // This prevents the new client's history from overlapping with subsequent output
+    // messages — which would cause TTS to re-read content already in the scrollback.
+    if (this._flushTimer) {
+      clearTimeout(this._flushTimer)
+      this._flushTimer = null
+      this._flush()
+    }
     const history = this._scrollback.getContents()
     // Always send history message (even empty) so client sets _historyDone=true immediately
     ws.send(JSON.stringify({ type: 'history', data: history || '' }))

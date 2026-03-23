@@ -372,7 +372,9 @@ export class TerminalPane {
           // After history load, scroll to bottom
           requestAnimationFrame(() => this.scrollToBottom())
         }
-        this._historyDone = true
+        // Add a short cooldown after history to absorb any in-flight output messages
+        // that were buffered server-side before the flush (belt-and-suspenders guard).
+        setTimeout(() => { this._historyDone = true }, 300)
       } else if (msg.type === 'output') {
         const toWrite = this.localEcho.reconcile(msg.data)
         if (toWrite) {
