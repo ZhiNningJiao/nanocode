@@ -51,15 +51,30 @@ function tmux(target, message) {
 function handleQaEntries(broadcast) {
   const entries = readNewJsonlEntries(QA_SIGNAL_PATH, 'qa')
   for (const entry of entries) {
-    console.log('[watcher] QA signal:', entry.repo, entry.task)
-    tmux('watchdog:reviewer', '新 QA 到了，读 TODO')
-    broadcast({
-      type: 'qa_notify',
-      repo: entry.repo,
-      task: entry.task,
-      summary: entry.summary || '',
-      time: entry.time,
-    })
+    if (entry.status === 'blocked') {
+      // blocked signal → notify secretary (nanocode window), not reviewer
+      console.log('[watcher] blocked signal:', entry.repo, entry.task, entry.reason || '')
+      tmux('watchdog:nanocode', `有 agent blocked 了：[${entry.repo}] ${entry.task} — ${entry.reason || ''}`)
+      broadcast({
+        type: 'blocked_notify',
+        repo: entry.repo,
+        task: entry.task,
+        reason: entry.reason || '',
+        summary: entry.summary || '',
+        time: entry.time,
+      })
+    } else {
+      // QA signal → notify reviewer
+      console.log('[watcher] QA signal:', entry.repo, entry.task)
+      tmux('watchdog:reviewer', '新 QA 到了，读 TODO')
+      broadcast({
+        type: 'qa_notify',
+        repo: entry.repo,
+        task: entry.task,
+        summary: entry.summary || '',
+        time: entry.time,
+      })
+    }
   }
 }
 

@@ -45,6 +45,10 @@ function initNotifyWs() {
         const text = `[DONE] ${msg.repo}: ${msg.task} (${msg.reviewer})`
         showNotifyToast(text, 8000)
         console.log('[notify]', text)
+      } else if (msg.type === 'blocked_notify') {
+        const text = `[BLOCKED] ${msg.repo}: ${msg.task}${msg.reason ? ' — ' + msg.reason.slice(0, 80) : ''}`
+        showNotifyToast(text, 10000)
+        console.log('[notify]', text)
       } else if (msg.type === 'activity') {
         console.log('[activity]', msg.repo, msg.heading)
       }
