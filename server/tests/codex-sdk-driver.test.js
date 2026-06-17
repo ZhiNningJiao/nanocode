@@ -61,6 +61,7 @@ describe('codex sdk driver', () => {
     const textEvents = []
     const rawEvents = []
     const metadataUpdates = []
+    const streamTextEvents = []
     const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
     const store = {
       getSetting(key) {
@@ -89,8 +90,12 @@ describe('codex sdk driver', () => {
 
     const driver = createCodexSdkDriver({
       store,
-      codexBroadcast: (_cs, text) => { textEvents.push(text) },
+      codexBroadcast: (_cs, text, opts = {}) => {
+        _cs.scrollback += text
+        if (!opts.historyOnly) textEvents.push(text)
+      },
       codexBroadcastEvent: (_cs, event) => { rawEvents.push(event) },
+      codexBroadcastStreamText: (_cs, payload) => { streamTextEvents.push(payload) },
       rerunTurn: () => { throw new Error('rerunTurn should not be called') },
       CodexImpl: FakeCodex,
     })
@@ -101,6 +106,7 @@ describe('codex sdk driver', () => {
       turnCount: 0,
       queue: [],
       clients: new Set(),
+      scrollback: '',
     }
 
     await driver.runCodexTurn(cs, 'summarize repo', 'project-1:codex:tab-1', '/tmp/workspace')
@@ -133,16 +139,73 @@ describe('codex sdk driver', () => {
       'item.completed',
       'turn.completed',
     ])
+    // Agent message text is streamed and recorded to scrollback; it is no longer
+    // emitted as a single live output block.
     assert.deepEqual(textEvents, [
       '› summarize repo\n',
       'Running: ls -la\n',
       'file-a\nfile-b\n',
       'patch: update src/app.js\n',
-      'Done.\n',
       '────────────\n',
     ])
+    assert.deepEqual(streamTextEvents, [
+      { itemId: 'msg-1', textDelta: 'Done.' },
+    ])
+    assert.ok(cs.scrollback.includes('Done.\n'))
     assert.equal(cs.busy, false)
     assert.equal(cs.currentProc, null)
+  })
+
+  it('streams agent_message text via deltas and flushes remaining text on completion', async () => {
+    const textEvents = []
+    const streamTextEvents = []
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    const store = { getSetting() { return null } }
+    const FakeCodex = createCodexImplFactory([
+      {
+        events: [
+          { type: 'thread.started', thread_id: 'thread-2' },
+          { type: 'item.started', item: { type: 'agent_message', id: 'msg-2' } },
+          { type: 'agent_message_content_delta', item_id: 'msg-2', delta: { text: 'Hello, ' } },
+          { type: 'agent_message_content_delta', item_id: 'msg-2', delta: { text: 'world!' } },
+          { type: 'item.completed', item: { type: 'agent_message', id: 'msg-2', text: 'Hello, world!' } },
+          { type: 'turn.completed', usage: {} },
+        ],
+      },
+    ], calls)
+
+    const driver = createCodexSdkDriver({
+      store,
+      codexBroadcast: (_cs, text, opts = {}) => {
+        _cs.scrollback += text
+        if (!opts.historyOnly) textEvents.push(text)
+      },
+      codexBroadcastEvent: () => {},
+      codexBroadcastStreamText: (_cs, payload) => { streamTextEvents.push(payload) },
+      rerunTurn: () => {},
+      CodexImpl: FakeCodex,
+    })
+
+    const cs = {
+      codexThreadId: null,
+      busy: false,
+      turnCount: 0,
+      queue: [],
+      clients: new Set(),
+      scrollback: '',
+    }
+
+    await driver.runCodexTurn(cs, 'greet', 'project-1:codex:tab-1', '/tmp/workspace')
+
+    assert.deepEqual(streamTextEvents, [
+      { itemId: 'msg-2', textDelta: 'Hello, ' },
+      { itemId: 'msg-2', textDelta: 'world!' },
+    ])
+    assert.deepEqual(textEvents, [
+      '› greet\n',
+      '────────────\n',
+    ])
+    assert.ok(cs.scrollback.includes('Hello, world!\n'))
   })
 
   it('resumes existing threads and drains queued prompts one turn at a time', async () => {
