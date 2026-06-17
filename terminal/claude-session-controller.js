@@ -74,6 +74,20 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     },
     agent: () => 'agent --force --approve-mcps; exec bash -l',
     opencode: () => 'opencode .; exec bash -l',
+    // meshy-aigw: opencode with Kimi K2.7 Code via Meshy AIGW proxy
+    // Config lives in ~/.config/opencode/opencode.json (kimi provider, model kimi/litellm/SGLang-Kimi-K2.7-Code)
+    // MESHY_AIGW_KEY is injected from ~/.config/meshy-aigw.key at launch time so the child shell
+    // picks it up without permanently polluting the nanocode server environment.
+    'meshy-aigw': () => {
+      const keyFile = join(home || process.env.HOME, '.config', 'meshy-aigw.key')
+      const keyExists = existsSync(keyFile)
+      if (keyExists) {
+        // Read key at launch time so the PTY env has it
+        return `export MESHY_AIGW_KEY=$(cat ${keyFile}); opencode .; exec bash -l`
+      }
+      // Fallback: assume MESHY_AIGW_KEY already in env
+      return 'opencode .; exec bash -l'
+    },
   }
 
   function sessionKeyFor(projectId, tabId) {
