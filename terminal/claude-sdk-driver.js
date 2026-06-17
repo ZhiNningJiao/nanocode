@@ -35,6 +35,13 @@ function resolvePermissionMode(store) {
   return 'bypassPermissions'
 }
 
+// When a force interrupt is requested we ask the SDK to stop the current turn
+// via q.interrupt().  If the SDK does not settle the turn within this window
+// (unresponsive interrupt — the exact failure that locks the user out), we
+// settle the pending turn locally so the UI/backend unlock.  We NEVER close the
+// claude process here, so detached sub-agents keep running (red line).
+const FORCE_UNLOCK_MS = 4000
+
 function makeResultEvent(subtype, sessionId = null) {
   const event = { type: 'result', subtype }
   if (sessionId) event.session_id = sessionId
@@ -136,12 +143,13 @@ function getClaudeCodeExecutableOverride() {
 // A StreamingSession wraps one long-lived query() call.
 // cs._streamingSession is set when the session is alive; null when torn down.
 class StreamingSession {
-  constructor({ queryImpl, options, sessionKey, onEvent, onDone }) {
+  constructor({ queryImpl, options, sessionKey, onEvent, onDone, forceUnlockMs = FORCE_UNLOCK_MS }) {
     this._queryImpl = queryImpl
     this._options = options          // SDK query options (cwd, permissionMode, etc.)
     this._sessionKey = sessionKey
     this._onEvent = onEvent          // (event) → void — broadcast to clients
     this._onDone = onDone            // () → void — called when generator exhausts
+    this._forceUnlockMs = forceUnlockMs
 
     this._msgStream = createMessageStream()
     this._closed = false
@@ -151,9 +159,56 @@ class StreamingSession {
     // SDKResultMessage arrives (or when the stream crashes).
     this._turnResolve = null
     this._turnReject = null
+    // Watchdog timer for force interrupts (see _armForceUnlock).
+    this._forceTimer = null
 
     // Start consuming events in the background.
     this._consumePromise = this._startConsume()
+  }
+
+  // Resolve the pending turn promise exactly once and tear down the force
+  // watchdog.  Used by result events, force-unlock, and close().
+  _settlePendingTurn(payload) {
+    if (this._forceTimer) {
+      clearTimeout(this._forceTimer)
+      this._forceTimer = null
+    }
+    const resolve = this._turnResolve
+    this._turnResolve = null
+    this._turnReject = null
+    if (resolve) resolve(payload)
+  }
+
+  // Reject the pending turn promise once (stream crash) and clear the watchdog.
+  _rejectPendingTurn(err) {
+    if (this._forceTimer) {
+      clearTimeout(this._forceTimer)
+      this._forceTimer = null
+    }
+    const reject = this._turnReject
+    this._turnResolve = null
+    this._turnReject = null
+    if (reject) reject(err)
+    return !!reject
+  }
+
+  // Arm a watchdog that settles the turn locally if the SDK interrupt does not
+  // produce a result in time.  Keeps the process (and sub-agents) alive.
+  _armForceUnlock(ms = this._forceUnlockMs) {
+    if (this._forceTimer || this._closed) return
+    this._forceTimer = setTimeout(() => {
+      this._forceTimer = null
+      if (!this._turnResolve) return
+      console.warn(`[sdk:streaming] ${this._sessionKey}: force-unlock fired (interrupt unresponsive); settling turn locally, process kept alive`)
+      const event = makeResultEvent('error_during_execution')
+      // Broadcast the synthetic result so clients leave the thinking state
+      // (the real result never came). runStreamingSdkTurn's sawResult guard then
+      // prevents a duplicate broadcast.
+      try { this._onEvent(event) } catch {}
+      this._settlePendingTurn({ event, interrupted: true })
+    }, ms)
+    // NOTE: intentionally NOT unref'd — this is a short one-shot (<=FORCE_UNLOCK_MS)
+    // that must run to deliver the unlock; it self-clears as soon as it fires.
   }
 
   // Build the SDK query options, merging the turn-specific options.
@@ -181,19 +236,13 @@ class StreamingSession {
 
         // Resolve the pending turn promise when we see a result event.
         if (event?.type === 'result') {
-          const resolve = this._turnResolve
-          this._turnResolve = null
-          this._turnReject = null
-          if (resolve) resolve({ event, interrupted: false })
+          this._settlePendingTurn({ event, interrupted: this._interrupted })
         }
       }
     } catch (err) {
       // Generator threw — reject the pending turn if any.
-      const reject = this._turnReject
-      this._turnResolve = null
-      this._turnReject = null
-      if (reject) reject(err)
-      else {
+      const hadPending = this._rejectPendingTurn(err)
+      if (!hadPending) {
         // No pending turn — just log; the session will be torn down.
         console.warn(`[sdk:streaming] ${this._sessionKey}: unhandled stream error: ${err?.message}`)
       }
@@ -207,6 +256,9 @@ class StreamingSession {
   // Returns a Promise that resolves with { event, interrupted } when the
   // result arrives, or rejects on error.
   sendAndWait(text) {
+    // Each turn starts fresh — clear any interrupt flag left over from a prior
+    // turn so the new turn's result isn't mis-tagged as interrupted.
+    this._interrupted = false
     return new Promise((resolve, reject) => {
       this._turnResolve = resolve
       this._turnReject = reject
@@ -214,17 +266,29 @@ class StreamingSession {
     })
   }
 
-  // Interrupt the current turn (soft).
-  interrupt() {
+  // Interrupt the current MAIN turn.  Both soft and force use q.interrupt(),
+  // which stops the running turn but keeps the claude process — and therefore
+  // its detached sub-agents — alive (red line: 打断只停主回合，绝不杀 sub-agent).
+  //
+  // force=true additionally arms a watchdog so the user is never locked out if
+  // the SDK interrupt is unresponsive; it settles the turn locally without
+  // killing the process.
+  interrupt({ force = false } = {}) {
     this._interrupted = true
-    return this._handle?.kill('SIGINT')
+    const r = this._handle?.kill('SIGINT')
+    if (force) this._armForceUnlock()
+    return r
   }
 
-  // Force-close the stream (hard kill).
+  // Tear down the streaming session entirely (reset / fatal error path only).
+  // This DOES close the claude process; it must never be used for a plain
+  // interrupt.  Settles any pending turn so the awaiting runStreamingSdkTurn
+  // unblocks and resets cs.busy (otherwise the tab locks up forever).
   close() {
     this._closed = true
     this._msgStream.close()
     this._handle?.kill('SIGKILL')
+    this._settlePendingTurn({ event: makeResultEvent('error_during_execution'), interrupted: this._interrupted })
   }
 
   get isAlive() {
@@ -243,23 +307,33 @@ export function createClaudeSdkDriver({
   rerunTurn,
   runCliFallback,
   queryImpl = defaultQuery,
+  // Test hook: force streaming mode even with an injected queryImpl. In
+  // production streaming is auto-selected (queryImpl === defaultQuery).
+  forceStreaming = false,
+  // Watchdog window for force interrupts (ms). Overridable for fast tests.
+  forceUnlockMs = FORCE_UNLOCK_MS,
 }) {
   // Whether to use streaming mode (single persistent query per session).
-  // Falls back to per-turn mode when queryImpl is overridden (test mocks).
-  const useStreamingMode = queryImpl === defaultQuery
+  // Falls back to per-turn mode when queryImpl is overridden (test mocks),
+  // unless forceStreaming is set.
+  const useStreamingMode = forceStreaming || queryImpl === defaultQuery
 
   // ── Per-turn mode (tests / legacy) ─────────────────────────────────────────
   // Kept exactly as before so existing tests pass without modification.
 
   async function runPerTurnSdkTurn(cs, userText, sessionKey, cwd) {
+    const quietQueue = cs._quietQueueOnce === true
+    cs._quietQueueOnce = false
     if (cs.busy) {
       if (!Array.isArray(cs.queue)) cs.queue = []
       cs.queue.push(userText)
-      claudeBroadcast(cs, {
-        type: 'system',
-        subtype: 'queued',
-        text: `Message queued (position ${cs.queue.length}). Will run after current turn.`,
-      })
+      if (!quietQueue) {
+        claudeBroadcast(cs, {
+          type: 'system',
+          subtype: 'queued',
+          text: `Message queued (position ${cs.queue.length}). Will run after current turn.`,
+        })
+      }
       return
     }
 
@@ -404,11 +478,13 @@ export function createClaudeSdkDriver({
 
       if (!Array.isArray(cs.queue)) cs.queue = []
       const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'
+      const forceFlush = cs._forceFlushQueue === true
+      cs._forceFlushQueue = false
       if (cs.queue.length > 0) {
-        if (!wasInterrupted || autoFlushOnInterrupt) {
+        if (forceFlush || !wasInterrupted || autoFlushOnInterrupt) {
           const allQueued = cs.queue.splice(0)
           const combinedText = allQueued.join('\n\n')
-          if (wasInterrupted) {
+          if (wasInterrupted && !forceFlush) {
             claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
           }
           setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
@@ -476,8 +552,9 @@ export function createClaudeSdkDriver({
 
     const options = buildStreamingOptions(cs, cwd)
     const ss = new StreamingSession({
-      queryImpl: defaultQuery,
+      queryImpl,
       options,
+      forceUnlockMs,
       sessionKey,
       onEvent: (event) => {
         // Track session_id from any event.
@@ -505,14 +582,20 @@ export function createClaudeSdkDriver({
   }
 
   async function runStreamingSdkTurn(cs, userText, sessionKey, cwd) {
+    // A "send now" message rides the normal queue path but must not show the
+    // "Message queued" banner — it is about to be flushed by an interrupt.
+    const quietQueue = cs._quietQueueOnce === true
+    cs._quietQueueOnce = false
     if (cs.busy) {
       if (!Array.isArray(cs.queue)) cs.queue = []
       cs.queue.push(userText)
-      claudeBroadcast(cs, {
-        type: 'system',
-        subtype: 'queued',
-        text: `Message queued (position ${cs.queue.length}). Will run after current turn.`,
-      })
+      if (!quietQueue) {
+        claudeBroadcast(cs, {
+          type: 'system',
+          subtype: 'queued',
+          text: `Message queued (position ${cs.queue.length}). Will run after current turn.`,
+        })
+      }
       return
     }
 
@@ -541,18 +624,16 @@ export function createClaudeSdkDriver({
     try {
       const ss = ensureStreamingSession(cs, sessionKey, cwd)
 
-      // Set cs.currentProc so interrupt() from routes.js can kill the turn.
+      // Set cs.currentProc so interrupt() from routes.js can stop the turn.
+      // Both soft (SIGINT) and force (SIGKILL) only stop the MAIN turn via
+      // q.interrupt(); we never call ss.close() here, so the claude process and
+      // its detached sub-agents survive (red line). force=true just arms a
+      // local unlock watchdog so an unresponsive interrupt can't lock the user.
       cs.currentProc = {
         _nanocodeInterrupted: false,
         kill(signal = 'SIGINT') {
           this._nanocodeInterrupted = true
-          if (signal === 'SIGKILL') {
-            ss.close()
-            // Tear down streaming session on hard kill.
-            cs._streamingSession = null
-          } else {
-            ss.interrupt()
-          }
+          ss.interrupt({ force: signal === 'SIGKILL' })
         },
       }
 
@@ -647,11 +728,15 @@ export function createClaudeSdkDriver({
 
       if (!Array.isArray(cs.queue)) cs.queue = []
       const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'
+      // _forceFlushQueue is set by an explicit "send now" interrupt — it must
+      // flush regardless of the auto-flush setting so the message is never lost.
+      const forceFlush = cs._forceFlushQueue === true
+      cs._forceFlushQueue = false
       if (cs.queue.length > 0) {
-        if (!wasInterrupted || autoFlushOnInterrupt) {
+        if (forceFlush || !wasInterrupted || autoFlushOnInterrupt) {
           const allQueued = cs.queue.splice(0)
           const combinedText = allQueued.join('\n\n')
-          if (wasInterrupted) {
+          if (wasInterrupted && !forceFlush) {
             claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
           }
           setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))

@@ -391,11 +391,13 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       if (!Array.isArray(cs.queue)) cs.queue = []
       // On interrupt: auto-flush queued messages unless setting disabled.
       const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'
+      const forceFlush = cs._forceFlushQueue === true
+      cs._forceFlushQueue = false
       if (cs.queue.length > 0) {
-        if (!wasInterrupted || autoFlushOnInterrupt) {
+        if (forceFlush || !wasInterrupted || autoFlushOnInterrupt) {
           const allQueued = cs.queue.splice(0)
           const combinedText = allQueued.join('\n\n')
-          if (wasInterrupted) {
+          if (wasInterrupted && !forceFlush) {
             claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
           }
           setImmediate(() => dispatchClaudeTurn(cs, combinedText, sessionKey, cwd))
@@ -412,14 +414,18 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
   }
 
   function runClaudeCliTurn(cs, userText, sessionKey, cwd) {
+    const quietQueue = cs._quietQueueOnce === true
+    cs._quietQueueOnce = false
     if (cs.busy) {
       if (!Array.isArray(cs.queue)) cs.queue = []
       cs.queue.push(userText)
-      const queuedEvent = {
-        type: 'system', subtype: 'queued',
-        text: `Message queued (position ${cs.queue.length}). Will run after current turn.`,
+      if (!quietQueue) {
+        const queuedEvent = {
+          type: 'system', subtype: 'queued',
+          text: `Message queued (position ${cs.queue.length}). Will run after current turn.`,
+        }
+        claudeBroadcast(cs, queuedEvent)
       }
-      claudeBroadcast(cs, queuedEvent)
       return
     }
     cs.busy = true
@@ -611,12 +617,14 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       // On interrupt: auto-flush queued messages as a new turn unless setting disabled.
       // default true — matches user expectation: interrupt clears the run, queued msgs fire next.
       const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'
+      const forceFlush = cs._forceFlushQueue === true
+      cs._forceFlushQueue = false
       if (cs.queue.length > 0) {
-        if (!wasInterrupted || autoFlushOnInterrupt) {
+        if (forceFlush || !wasInterrupted || autoFlushOnInterrupt) {
           const allQueued = cs.queue.splice(0)
           const combinedText = allQueued.join('\n\n')
-          console.log(`[claude:queue] sessionKey=${sessionKey} flushing ${allQueued.length} queued message(s) as one turn (interrupted=${wasInterrupted})`)
-          if (wasInterrupted) {
+          console.log(`[claude:queue] sessionKey=${sessionKey} flushing ${allQueued.length} queued message(s) as one turn (interrupted=${wasInterrupted}, force=${forceFlush})`)
+          if (wasInterrupted && !forceFlush) {
             claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
           }
           setImmediate(() => dispatchClaudeTurn(cs, combinedText, sessionKey, cwd))
@@ -845,6 +853,9 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
           _nonce: msg._nonce || null,
         }
         claudeBroadcast(cs, userEvent)
+        // "send now": suppress the "Message queued" banner if this lands while a
+        // turn is still winding down — it's about to be flushed by the interrupt.
+        if (msg._sendNow === true) cs._quietQueueOnce = true
         dispatchClaudeTurn(cs, msg.text, sessionKey, project.cwd)
       } else if (msg.type === 'ping') {
         try { ws.send(JSON.stringify({ type: 'pong', id: msg.id })) } catch {}
@@ -953,16 +964,25 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         return res.status(500).json({ error: err.message })
       }
     }
-    if (!cs.busy || !cs.currentProc) return res.json({ ok: false, reason: 'not busy' })
+    // andFlush=true (set by "send now"): guarantee any queued message flushes
+    // after this interrupt, regardless of the auto_flush_queue_on_interrupt
+    // setting, so the user's message is never silently dropped.
+    const andFlush = req.query.flush === '1' || req.body?.andFlush === true
+    if (andFlush) cs._forceFlushQueue = true
+    if (!cs.busy || !cs.currentProc) {
+      // Nothing running to interrupt. If a flush was requested and something is
+      // queued server-side, there is no turn whose exit will drain it — but the
+      // normal not-busy dispatch path will pick it up, so this is a no-op here.
+      return res.json({ ok: false, reason: 'not busy', andFlush })
+    }
     const force = req.query.force === '1' || req.body?.force === true
     try {
       cs.currentProc._nanocodeInterrupted = true
-      if (force) {
-        cs.currentProc.kill('SIGKILL')
-      } else {
-        cs.currentProc.kill('SIGINT')
-      }
-      res.json({ ok: true, force: !!force })
+      // force → SIGKILL. In SDK streaming mode this is remapped to a guaranteed
+      // turn-unlock that keeps the process (and sub-agents) alive; it does NOT
+      // kill the claude process. soft → SIGINT (q.interrupt()).
+      cs.currentProc.kill(force ? 'SIGKILL' : 'SIGINT')
+      res.json({ ok: true, force: !!force, andFlush })
     } catch (err) {
       res.status(500).json({ error: err.message })
     }
@@ -977,11 +997,21 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       try { cs.currentProc.kill('SIGKILL') } catch {}
       cs.currentProc = null
     }
+    // Reset means "new session" — fully tear down the persistent streaming
+    // session so the next turn rebuilds with the fresh sessionId/context.
+    // (A plain interrupt never does this; reset is the deliberate destructive
+    // action, so closing the claude process here is expected.)
+    if (cs._streamingSession) {
+      try { cs._streamingSession.close() } catch {}
+      cs._streamingSession = null
+    }
 
     const discarded = (cs.queue || []).length
     cs.busy = false
     cs.queue = []
     cs._conflictRetries = 0
+    cs._forceFlushQueue = false
+    cs._quietQueueOnce = false
 
     const oldSessionId = cs.claudeSessionId
     const newSessionId = randomUUID()
