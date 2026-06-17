@@ -483,7 +483,10 @@ function setupChatInput() {
     queueTray.innerHTML =
       `<div class="cq-header">` +
         `<span class="cq-header-label">排队中 (${_pendingQueue.length})</span>` +
-        `<button class="cq-send-now" title="Interrupt current turn and send all queued messages immediately">Send now</button>` +
+        `<span class="cq-header-actions">` +
+          `<button class="cq-send-now" title="强制中止当前回合并立即发送所有排队消息（只停主回合，不杀后台 sub-agent）">立刻发送</button>` +
+          `<button class="cq-clear" title="清空所有排队消息（不发送）">清空</button>` +
+        `</span>` +
       `</div>` +
       _pendingQueue.map((text, i) => {
         const truncated = text.length > 72 ? text.slice(0, 72) + '…' : text
@@ -493,7 +496,7 @@ function setupChatInput() {
           `<button class="cq-remove" data-idx="${i}" aria-label="Remove queued message" title="Remove from queue">×</button>` +
           `</div>`
       }).join('') +
-      `<div class="cq-hint">↑ 取回编辑 · Claude 空闲时自动发送</div>`
+      `<div class="cq-hint">↑ 取回编辑 · 立刻发送=打断当前回合马上发 · 空闲时自动发送 · Esc 可清空</div>`
     queueTray.querySelectorAll('.cq-remove').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -502,47 +505,60 @@ function setupChatInput() {
         updateQueueTray()
       })
     })
-    // "立即发送" button: interrupt current turn then immediately flush pending queue
+    // "立即发送" button: force-interrupt the current turn AND submit the queued
+    // messages right now. The backend owns ordering atomically — the message
+    // rides the server queue and the andFlush interrupt guarantees it runs as
+    // the next turn regardless of timing or the auto-flush setting. No fragile
+    // wait-for-idle / 3s-fallback dance (which used to re-queue into a busy
+    // backend = the "立刻发送却还排队" bug).
     const sendNowBtn = queueTray.querySelector('.cq-send-now')
     if (sendNowBtn) {
-      sendNowBtn.addEventListener('click', async (e) => {
+      sendNowBtn.addEventListener('click', (e) => {
         e.stopPropagation()
-        if (_pendingQueue.length === 0) return
-        // Grab all queued messages before interrupting
-        const all = _pendingQueue.splice(0)
-        _schedulePersist()
-        updateQueueTray()
-        // Interrupt the current turn, then wait for the result event (thinking=false)
-        // before sending so the backend is idle and ready for the new turn.
-        const combined = all.join('\n\n')
-        let sent = false
-        const doSend = () => {
-          if (sent) return
-          sent = true
-          if (activePane) activePane.sendInputWithEcho(combined)
-          pushHistory(combined)
-          resetHistoryNav()
-          chatInput.focus()
-        }
-        // One-shot listener: fires when Claude goes idle after the interrupt
-        const onIdle = (ev) => {
-          const detail = ev.detail || {}
-          const activeId = tabManager ? tabManager.activeId : null
-          if (activeId && detail.tabId !== activeId) return  // wrong tab
-          if (detail.thinking) return  // still thinking
-          document.removeEventListener('nanocode:claude-thinking', onIdle)
-          doSend()
-        }
-        document.addEventListener('nanocode:claude-thinking', onIdle)
-        // Interrupt the current turn (fires SIGINT → triggers WS result event → onIdle)
-        await doInterrupt()
-        // Safety fallback: if the result event never fires within 3s, send anyway
-        setTimeout(() => {
-          document.removeEventListener('nanocode:claude-thinking', onIdle)
-          doSend()
-        }, 3000)
+        sendNowFlush()
       })
     }
+    // "清空" button: cancel/clear all queued messages without sending.
+    const clearBtn = queueTray.querySelector('.cq-clear')
+    if (clearBtn) {
+      clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        if (_pendingQueue.length === 0) return
+        _pendingQueue.splice(0)
+        _schedulePersist()
+        updateQueueTray()
+        chatInput.focus()
+      })
+    }
+  }
+
+  // Send all pending (and any text currently in the composer) right now,
+  // force-interrupting the running turn. Shared by the tray button and Ctrl+Enter.
+  function sendNowFlush() {
+    // Fold any half-typed composer text into the flush so nothing is lost.
+    const composer = chatInput.value.trim()
+    if (composer) {
+      _pendingQueue.push(chatInput.value)
+      chatInput.value = ''
+      autoResize()
+      hideSuggestions()
+      hideSlashCommands()
+    }
+    if (_pendingQueue.length === 0) return
+    const all = _pendingQueue.splice(0)
+    _schedulePersist()
+    updateQueueTray()
+    const combined = all.join('\n\n')
+    // 1) Echo + push the combined message to the backend (lands in the server
+    //    queue while busy, or runs immediately if already idle). sendNow=true
+    //    suppresses the transient "queued" banner.
+    if (activePane) activePane.sendInputWithEcho(combined, { sendNow: true })
+    pushHistory(combined)
+    resetHistoryNav()
+    // 2) Force-interrupt with andFlush so the running turn stops and the queued
+    //    message fires as the next turn — guaranteed, no client-side race.
+    doInterrupt({ force: true, andFlush: true })
+    chatInput.focus()
   }
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -724,19 +740,37 @@ function setupChatInput() {
   })
 
   // ── Interrupt helper (shared by Stop btn, Esc, Ctrl+C) ─────────────────────
-  // Single Esc interrupts the current turn, same as the Claude CLI. Posts
-  // /interrupt to the backend (SIGINT). Does NOT call updateThinkingState(false)
+  // Single Esc / Stop interrupts the current turn (soft, SIGINT → q.interrupt()).
+  // A second Esc / Stop while still thinking — or any call with {force:true} —
+  // escalates to a force interrupt that is guaranteed to unlock the UI even if
+  // the soft interrupt was unresponsive. Force stops ONLY the main turn; the
+  // backend keeps the claude process and its background sub-agents alive.
+  // Posts /interrupt to the backend. Does NOT call updateThinkingState(false)
   // — that only happens when the WS 'result' event arrives, preserving the
   // _pendingQueue protection (b67a2b6).
-  async function doInterrupt() {
+  let _interruptArmedUntil = 0   // timestamp: until when a 2nd press escalates to force
+  const _INTERRUPT_ESCALATE_MS = 2500
+
+  async function doInterrupt(opts = {}) {
     if (!tabManager) return
     const activeTab = tabManager.tabs?.find((t) => t.id === tabManager.activeId)
     if (!activeTab) return
     const projectId = tabManager.projectId
     const tabId = activeTab.id
 
+    // Decide soft vs force: explicit opt, or a quick second press after a soft one.
+    const now = Date.now()
+    const force = opts.force === true || (_interruptArmedUntil > 0 && now < _interruptArmedUntil)
+    // After a soft interrupt, arm an escalation window so the next press forces.
+    _interruptArmedUntil = force ? 0 : now + _INTERRUPT_ESCALATE_MS
+
+    const body = JSON.stringify({ force, andFlush: opts.andFlush === true })
     try {
-      await fetch(`/api/projects/${projectId}/tabs/${tabId}/interrupt`, { method: 'POST' })
+      await fetch(`/api/projects/${projectId}/tabs/${tabId}/interrupt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      })
     } catch {}
 
     // Do NOT call showInterruptBlock() here — CLI will emit result/error_during_execution
@@ -750,9 +784,19 @@ function setupChatInput() {
     stopBtn.hidden = false
     bgBtn.hidden = true   // bg button not needed once user chose to interrupt
     sendBtn.hidden = true
+    // Hint that a second press will force-stop (until the escalation window ends).
+    if (!force) {
+      stopBtn.classList.add('claude-stop-armed')
+      stopBtn.title = '再次点击 / 再按 Esc = 强制中止（只停主回合，不杀后台 sub-agent）'
+      setTimeout(() => {
+        if (Date.now() >= _interruptArmedUntil) stopBtn.classList.remove('claude-stop-armed')
+      }, _INTERRUPT_ESCALATE_MS + 50)
+    } else {
+      stopBtn.classList.remove('claude-stop-armed')
+    }
   }
 
-  // Stop button click: POST interrupt to backend
+  // Stop button click: POST interrupt to backend (2nd click escalates to force)
   stopBtn.addEventListener('click', () => {
     doInterrupt()
   })
@@ -1426,6 +1470,19 @@ function setupChatInput() {
   chatInput.addEventListener('keydown', (e) => {
     const suggestionsOpen = suggestionsDropdown && !suggestionsDropdown.hidden
 
+    // Ctrl/Cmd+Enter on a claude tab = "send now": force-interrupt the running
+    // turn and submit immediately (composer text + any queued messages).
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && isClaudeTab) {
+      if (e.isComposing || _isComposing || e.keyCode === 229) return
+      e.preventDefault()
+      hideSuggestions()
+      hideSlashCommands()
+      if (isClaudeThinking || _pendingQueue.length > 0 || chatInput.value.trim()) {
+        sendNowFlush()
+      }
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       // Block Enter while IME is composing (handles Chinese/Japanese/Korean input).
       // e.isComposing is standard; keyCode===229 is the legacy fallback used by
@@ -1475,10 +1532,18 @@ function setupChatInput() {
         // Priority 2: close suggestions
         hideSuggestions()
       } else if (isClaudeTab && isClaudeThinking) {
-        // Priority 3 (claude tab): interrupt running turn
+        // Priority 3 (claude tab): interrupt running turn.
+        // First Esc = soft interrupt; a quick 2nd Esc escalates to force-stop
+        // (only the main turn — background sub-agents are never killed).
         doInterrupt()
+      } else if (isClaudeTab && !chatInput.value && _pendingQueue.length > 0) {
+        // Priority 4 (claude tab, idle): clear the pending queue so the user is
+        // never stuck with un-cancelable queued messages.
+        _pendingQueue.splice(0)
+        _schedulePersist()
+        updateQueueTray()
       } else if (chatInput.value) {
-        // Priority 4: clear input
+        // Priority 5: clear input
         chatInput.value = ''
         autoResize()
       } else if (!isClaudeTab && activePane) {

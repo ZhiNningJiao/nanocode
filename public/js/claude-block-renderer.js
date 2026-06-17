@@ -745,7 +745,7 @@ export class ClaudeBlockRenderer {
 
   // ── Public API ───────────────────────────────────────────────────────────────
 
-  sendInputWithEcho(text) {
+  sendInputWithEcho(text, opts = {}) {
     // Generate a nonce so the server echoes back a 'user' event with this same
     // nonce. When our WS receives that broadcast we can recognise it as our own
     // locally-echoed turn and skip rendering it again (dedup). On reconnect the
@@ -757,7 +757,9 @@ export class ClaudeBlockRenderer {
     // User is actively sending — always scroll to bottom regardless of scroll position
     this._userScrolledUp = false
     this._appendUserBlock(text)
-    this._send({ type: 'claude-input', text, _nonce: nonce })
+    // _sendNow: tells the server to skip the "Message queued" banner if this
+    // lands while a turn is winding down — it's an interrupt-and-send.
+    this._send({ type: 'claude-input', text, _nonce: nonce, _sendNow: opts.sendNow === true })
     // Clear any live assistant block so next response starts fresh
     this._liveAssistantBlock = null
     this._liveAssistantId = null
