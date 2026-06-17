@@ -412,6 +412,12 @@ export class CodexBlockRenderer {
     // Track thinking state
     this._thinking = false
 
+    // Live streaming agent-message block (Codex SDK path). Deltas arrive via
+    // codex-stream-text and are appended here; item.completed finalizes it.
+    this._liveAgentBlock = null
+    this._liveAgentItemId = null
+    this._liveAgentText = ''
+
     // Update/tip notice dedup — only show once per session
     this._shownUpdateNotice = false
 
@@ -474,6 +480,7 @@ export class CodexBlockRenderer {
   sendInputWithEcho(text) {
     // Show user input as a prompt block
     this._finalizeCurrentBlock()
+    this._finalizeAgentMessage()
     this._appendUserBlock(text)
     this._send({ type: 'input', data: text + '\r' })
     this._setThinking(true)
@@ -540,6 +547,10 @@ export class CodexBlockRenderer {
       } else if (msg.type === 'output') {
         this._handlePtyData(msg.data, false)
         document.dispatchEvent(new CustomEvent('nanocode:terminal-output', { detail: msg.data }))
+      } else if (msg.type === 'codex-event') {
+        this._handleCodexEvent(msg.event)
+      } else if (msg.type === 'codex-stream-text') {
+        this._handleCodexStreamText(msg.itemId, msg.textDelta)
       } else if (msg.type === 'exit') {
         this._exited = true
         this._setThinking(false)
@@ -1462,6 +1473,61 @@ export class CodexBlockRenderer {
     article.innerHTML = `<p class="cbx-user-prompt">&#10095; ${escHtml(text)}</p>`
     this._scroll.appendChild(article)
     this._scrollBottom()
+  }
+
+  // ── Codex SDK streaming text handlers ─────────────────────────────────────────
+  // The SDK path sends agent_message text as incremental deltas instead of a
+  // single completed blob. We render it into one live block that grows, then
+  // freeze it when item.completed arrives.
+
+  _handleCodexEvent(event) {
+    if (!event) return
+    if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
+      this._finalizeAgentMessage(event.item.id)
+    }
+  }
+
+  _handleCodexStreamText(itemId, textDelta) {
+    if (!itemId || typeof textDelta !== 'string') return
+    this._appendAgentMessageDelta(itemId, textDelta)
+  }
+
+  _appendAgentMessageDelta(itemId, delta) {
+    // If a different agent_message item started, freeze the previous one first.
+    if (this._liveAgentBlock && this._liveAgentItemId !== itemId) {
+      this._finalizeAgentMessage(this._liveAgentItemId)
+    }
+
+    this._liveAgentItemId = itemId
+    this._liveAgentText += delta
+
+    if (!this._liveAgentBlock) {
+      const article = this._makeBlock('cbx-block-text cbx-live')
+      const pre = document.createElement('pre')
+      pre.className = 'cbx-text-pre'
+      article.appendChild(pre)
+      this._scroll.appendChild(article)
+      this._liveAgentBlock = article
+    }
+
+    const pre = this._liveAgentBlock.querySelector('.cbx-text-pre')
+    if (pre) {
+      pre.textContent = this._liveAgentText
+    }
+    this._scrollBottom()
+  }
+
+  _finalizeAgentMessage(itemId = null) {
+    if (itemId && this._liveAgentItemId !== itemId) return
+    if (!this._liveAgentBlock) {
+      this._liveAgentItemId = null
+      this._liveAgentText = ''
+      return
+    }
+    this._liveAgentBlock.classList.remove('cbx-live')
+    this._liveAgentBlock = null
+    this._liveAgentItemId = null
+    this._liveAgentText = ''
   }
 
   _scrollBottom() {

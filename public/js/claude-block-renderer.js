@@ -645,6 +645,7 @@ export class ClaudeBlockRenderer {
 
     // Track the in-progress subagent streaming activity block (separate from main live block)
     this._liveSubagentBlock = null
+    this._liveSubagentTextBuffer = ''
 
     this._replayCache = new ReplayCache()
 
@@ -667,6 +668,11 @@ export class ClaudeBlockRenderer {
     // Streaming render throttle: rAF handle for pending live-block markdown update.
     // Prevents running marked.parse() on every WS chunk (can be 10s/sec).
     this._streamRafPending = false
+
+    // Accumulated raw text for the in-progress assistant turn. Updated by both
+    // partial_message snapshots and stream_event deltas, then rendered into the
+    // live block on the next animation frame.
+    this._liveTextBuffer = ''
 
     this._connect()
   }
@@ -761,6 +767,7 @@ export class ClaudeBlockRenderer {
     // Clear any live assistant block so next response starts fresh
     this._liveAssistantBlock = null
     this._liveAssistantId = null
+    this._liveTextBuffer = ''
     // Enter thinking state
     this._setThinking(true)
   }
@@ -795,7 +802,9 @@ export class ClaudeBlockRenderer {
     this._scroll.innerHTML = ''
     this._liveAssistantBlock = null
     this._liveAssistantId = null
+    this._liveTextBuffer = ''
     this._liveSubagentBlock = null
+    this._liveSubagentTextBuffer = ''
     if (this._liveToolBlocks) this._liveToolBlocks.clear()
 
     // Reset dedup sets so new session events are not silently skipped
@@ -1392,6 +1401,9 @@ export class ClaudeBlockRenderer {
       case 'partial_message':
         this._handlePartialMessage(event)
         break
+      case 'stream_event':
+        this._handleStreamEvent(event)
+        break
       case 'result':
         this._handleResult(event)
         break
@@ -1613,7 +1625,9 @@ export class ClaudeBlockRenderer {
       // Finalize subagent live block (independent from main agent live block)
       if (this._liveSubagentBlock) {
         this._liveSubagentBlock.style.opacity = ''
+        this._liveSubagentBlock.classList.remove('cbr-live')
         this._liveSubagentBlock = null
+        this._liveSubagentTextBuffer = ''
       }
 
       const isVisible = getSubagentActivityVisible()
@@ -1658,18 +1672,18 @@ export class ClaudeBlockRenderer {
 
     // ── Main agent assistant ────────────────────────────────────────────────────
 
-    // N47/N52 fix: remove the live assistant block from DOM (not just null the
-    // reference). Previously, only the JS reference was cleared; the live DOM
-    // element stayed, causing either:
-    //   • Duplicate text1 (live partial + final rendered text)
-    //   • Ghost empty block with cbr-live border when partial was empty
-    //   • text1 appearing BEFORE the tool placeholder if partial streamed ahead
-    // Now we physically remove it so the final _renderContentPart calls produce
-    // a clean, ordered DOM with no stale fragments.
-    if (this._liveAssistantBlock && this._liveAssistantBlock.parentNode) {
-      this._liveAssistantBlock.parentNode.removeChild(this._liveAssistantBlock)
+    // N47/N52 fix: finalize the live assistant block in-place instead of
+    // removing it. Removing the streaming block and re-inserting a final block
+    // caused a visible jump/flicker and sometimes duplicated text. Freezing the
+    // existing live block keeps the DOM stable and lets the user see the text
+    // grow smoothly up to the final version.
+    const msg = event.message
+    const textPart = msg && Array.isArray(msg.content)
+      ? msg.content.find((p) => p.type === 'text')
+      : null
+    if (this._liveAssistantBlock) {
+      this._finalizeLiveAssistantBlock(textPart ? textPart.text : null)
     }
-    this._liveAssistantBlock = null
     this._liveAssistantId = null
 
     // Root D: clear live tool block map — only non-subagent tool blocks
@@ -1684,12 +1698,43 @@ export class ClaudeBlockRenderer {
       }
     }
 
-    const msg = event.message
     if (!msg || !Array.isArray(msg.content)) return
 
     for (const part of msg.content) {
+      // The text part was already rendered into the finalized live block above.
+      if (part === textPart) continue
       this._renderContentPart(part, /* live= */ false)
     }
+  }
+
+  /**
+   * Convert the streaming live assistant block into a finalized text block.
+   * If `finalText` is provided, it is rendered as the authoritative final text;
+   * otherwise the accumulated `_liveTextBuffer` is used.
+   */
+  _finalizeLiveAssistantBlock(finalText = null) {
+    const block = this._liveAssistantBlock
+    this._liveAssistantBlock = null
+    this._liveAssistantId = null
+    this._liveTextBuffer = ''
+
+    if (!block || !block.parentNode) return
+
+    const text = typeof finalText === 'string' ? finalText : ''
+    if (!text.trim()) {
+      // Empty streaming block — remove the ghost element.
+      block.parentNode.removeChild(block)
+      return
+    }
+
+    let html
+    try { html = renderMarkdown(text) } catch { html = `<p>${escHtml(text)}</p>` }
+    block.classList.remove('cbr-live')
+    block.dataset.frozen = '1'
+    block.innerHTML = `<div class="cbr-text">${html}</div>`
+    attachCopyHandlers(block)
+    attachPathAndUrlHandlers(block)
+    this._scrollBottom()
   }
 
   _handlePartialMessage(event) {
@@ -1754,6 +1799,7 @@ export class ClaudeBlockRenderer {
             article.innerHTML = `<div class="cbr-subagent-activity-label">subagent streaming…</div><div class="cbr-subagent-stream-body"></div>`
             this._scroll.appendChild(article)
             this._liveSubagentBlock = article
+            this._liveSubagentTextBuffer = ''
             this._scrollBottom()
           }
           const bodyEl = this._liveSubagentBlock.querySelector('.cbr-subagent-stream-body')
@@ -1779,36 +1825,116 @@ export class ClaudeBlockRenderer {
     const firstTextPart = parts.find((p) => p.type === 'text')
     if (firstTextPart) {
       const text = firstTextPart.text || ''
-      if (!this._liveAssistantBlock) {
-        const article = this._makeBlock('cbr-block-text cbr-live')
+      this._appendLiveText(text, { snapshot: true })
+    }
+  }
+
+  _handleStreamEvent(event) {
+    // Root F fix: subagent streaming uses the independent subagent live block.
+    const isSubagentStream = !!event.parent_tool_use_id
+
+    // The Anthropic SDK emits raw streaming deltas inside event.event.
+    // Recognised shapes:
+    //   content_block_delta  → delta.type === 'text_delta' → delta.text
+    //   content_block_start  → content_block.type === 'text' → content_block.text
+    let delta = ''
+    const sdkEvent = event.event || event
+    const type = sdkEvent.type
+    if (type === 'content_block_delta' && sdkEvent.delta?.type === 'text_delta') {
+      delta = sdkEvent.delta.text || ''
+    } else if (type === 'content_block_start' && sdkEvent.content_block?.type === 'text') {
+      delta = sdkEvent.content_block.text || ''
+    }
+
+    if (!delta) return
+
+    if (isSubagentStream) {
+      // Update the same subagent live activity block used by partial_message.
+      if (!this._liveSubagentBlock) {
+        const isVisible = getSubagentActivityVisible()
+        const article = this._makeBlock('cbr-block-subagent-activity cbr-live')
+        if (!isVisible) article.style.display = 'none'
+        article.style.opacity = '0.7'
+        article.innerHTML = `<div class="cbr-subagent-activity-label">subagent streaming…</div><div class="cbr-subagent-stream-body"></div>`
         this._scroll.appendChild(article)
-        this._liveAssistantBlock = article
+        this._liveSubagentBlock = article
+        this._liveSubagentTextBuffer = ''
         this._scrollBottom()
       }
-      // Perf: throttle markdown re-render to one rAF per frame instead of
-      // running marked.parse() + innerHTML on every incoming WS chunk.
-      // Store the latest text; the pending rAF will pick it up when it fires.
-      this._streamPendingText = text
-      if (!this._streamRafPending) {
-        this._streamRafPending = true
-        requestAnimationFrame(() => {
-          this._streamRafPending = false
-          const latestText = this._streamPendingText
-          if (!latestText || !this._liveAssistantBlock) return
-          // P1-5: skip frozen blocks — they are finalized and don't need re-render
-          if (this._liveAssistantBlock.dataset.frozen === '1') return
-          let html
-          // P3-1: pass streaming:true so unclosed ``` fences are trimmed before parse
-          try { html = renderMarkdown(latestText, { streaming: true }) } catch { html = `<p>${escHtml(latestText)}</p>` }
-          this._liveAssistantBlock.innerHTML = `<div class="cbr-text">${html}</div>`
-          // Smart auto-scroll: only scroll if user has not scrolled up
-          if (!this._userScrolledUp) {
-            const s = this._scroll
-            s.scrollTop = s.scrollHeight
-          }
-          this._updateScrollBtn()
-        })
+      const bodyEl = this._liveSubagentBlock.querySelector('.cbr-subagent-stream-body')
+      if (bodyEl) {
+        // stream_event deltas are appended directly (they are already incremental).
+        this._liveSubagentTextBuffer += delta
+        let html
+        try { html = renderMarkdown(this._liveSubagentTextBuffer, { streaming: true }) } catch { html = `<p>${escHtml(this._liveSubagentTextBuffer)}</p>` }
+        bodyEl.innerHTML = html
       }
+      this._scrollBottom()
+      return
+    }
+
+    this._appendLiveText(delta, { snapshot: false })
+  }
+
+  /**
+   * Append incoming text to the live assistant block. When `snapshot` is true
+   * (partial_message), the payload is a full snapshot: we only append the suffix
+   * that is new relative to the current buffer. When `snapshot` is false
+   * (stream_event), the payload is already a delta and is appended directly.
+   */
+  _appendLiveText(text, { snapshot = false } = {}) {
+    if (!text) return
+    const current = this._liveTextBuffer || ''
+    let next = current
+    if (snapshot) {
+      // partial_message usually carries the full text so far. Avoid rebuilding
+      // the whole DOM on every chunk by only appending the newly added suffix.
+      if (text.startsWith(current) && text.length > current.length) {
+        next = text
+      } else if (text !== current) {
+        // Snapshot diverged (rewind/replacement) — replace the buffer.
+        next = text
+      }
+    } else {
+      // Delta from stream_event — append directly.
+      next = current + text
+    }
+
+    // Nothing changed (e.g. duplicate partial_message snapshot).
+    if (next === current) return
+
+    this._liveTextBuffer = next
+
+    if (!this._liveAssistantBlock) {
+      const article = this._makeBlock('cbr-block-text cbr-live')
+      this._scroll.appendChild(article)
+      this._liveAssistantBlock = article
+      this._scrollBottom()
+    }
+
+    // Perf: throttle markdown re-render to one rAF per frame instead of
+    // running marked.parse() + innerHTML on every incoming WS chunk.
+    // Store the latest text; the pending rAF will pick it up when it fires.
+    this._streamPendingText = next
+    if (!this._streamRafPending) {
+      this._streamRafPending = true
+      requestAnimationFrame(() => {
+        this._streamRafPending = false
+        const latestText = this._streamPendingText
+        if (!latestText || !this._liveAssistantBlock) return
+        // P1-5: skip frozen blocks — they are finalized and don't need re-render
+        if (this._liveAssistantBlock.dataset.frozen === '1') return
+        let html
+        // P3-1: pass streaming:true so unclosed ``` fences are trimmed before parse
+        try { html = renderMarkdown(latestText, { streaming: true }) } catch { html = `<p>${escHtml(latestText)}</p>` }
+        this._liveAssistantBlock.innerHTML = `<div class="cbr-text">${html}</div>`
+        // Smart auto-scroll: only scroll if user has not scrolled up
+        if (!this._userScrolledUp) {
+          const s = this._scroll
+          s.scrollTop = s.scrollHeight
+        }
+        this._updateScrollBtn()
+      })
     }
   }
 
@@ -1829,18 +1955,15 @@ export class ClaudeBlockRenderer {
     }
 
     // End-of-turn: flush live blocks, exit thinking state.
-    // N47/N52 fix: also physically remove the live assistant block from DOM
-    // (see parallel fix in _handleAssistant). When claude --print sends an
-    // error result without a preceding assistant event, the live block might
-    // still be in DOM. Remove it here so no stale cbr-live element lingers.
-    if (this._liveAssistantBlock && this._liveAssistantBlock.parentNode) {
-      this._liveAssistantBlock.parentNode.removeChild(this._liveAssistantBlock)
-    }
-    this._liveAssistantBlock = null
-    this._liveAssistantId = null
+    // N47/N52 fix: finalize the live assistant block in-place so any streamed
+    // text is preserved without a visual jump. If the turn ended without a
+    // preceding assistant event, the buffer is empty and the block is removed.
+    this._finalizeLiveAssistantBlock()
     if (this._liveSubagentBlock) {
       this._liveSubagentBlock.style.opacity = ''
+      this._liveSubagentBlock.classList.remove('cbr-live')
       this._liveSubagentBlock = null
+      this._liveSubagentTextBuffer = ''
     }
     // P1-5: freeze all live assistant blocks that are now complete so rAF
     // callbacks skip re-running marked.parse() on already-finalized content.

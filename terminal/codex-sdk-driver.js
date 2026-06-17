@@ -28,7 +28,10 @@ function formatCodexEventAsOutput(event) {
 
   if (event.type === 'item.completed') {
     if (event.item?.type === 'agent_message') {
-      return ensureTrailingNewline(event.item.text || '')
+      // Agent message text is streamed delta-by-delta via codexBroadcastStreamText
+      // and recorded to scrollback on completion. Don't emit the full text again
+      // as a live output block.
+      return ''
     }
     if (event.item?.type === 'command_execution') {
       let text = ''
@@ -74,6 +77,7 @@ export function createCodexSdkDriver({
   store,
   codexBroadcast,
   codexBroadcastEvent,
+  codexBroadcastStreamText = () => {},
   rerunTurn,
   CodexImpl = DefaultCodex,
 }) {
@@ -121,8 +125,26 @@ export function createCodexSdkDriver({
 
     codexBroadcast(cs, `› ${trimmedPrompt}\n`)
 
+    // Track the streaming text of each agent_message item so we can broadcast
+    // only deltas to the frontend (avoiding the "whole paragraph appearing" effect).
+    if (!cs.agentMessageTextById) cs.agentMessageTextById = new Map()
+
     let sawTerminalEvent = false
     let lastThreadId = cs.codexThreadId || null
+
+    function broadcastAgentMessageDelta(itemId, newText) {
+      const prev = cs.agentMessageTextById.get(itemId) || ''
+      let delta
+      if (newText.startsWith(prev)) {
+        delta = newText.slice(prev.length)
+      } else {
+        // The model rewrote the prefix (rare); send the full replacement as one delta.
+        delta = newText
+      }
+      if (delta) codexBroadcastStreamText(cs, { itemId, textDelta: delta })
+      cs.agentMessageTextById.set(itemId, newText)
+      return delta
+    }
 
     try {
       const { events } = await thread.runStreamed(trimmedPrompt, { signal: abortController.signal })
@@ -137,6 +159,38 @@ export function createCodexSdkDriver({
             const [projectId, , tabId] = sessionKey.split(':')
             store.updateTabMetadata?.(projectId, tabId, { codexThreadId: event.thread_id })
           }
+        }
+
+        if (event.type === 'item.started' && event.item?.type === 'agent_message' && event.item?.id) {
+          cs.agentMessageTextById.set(event.item.id, '')
+        }
+
+        if (event.type === 'agent_message_content_delta' && event.item_id) {
+          const delta = event.delta?.text || event.delta
+          if (typeof delta === 'string' && delta) {
+            const current = cs.agentMessageTextById.get(event.item_id) || ''
+            const next = current + delta
+            broadcastAgentMessageDelta(event.item_id, next)
+          }
+        }
+
+        if (event.type === 'item.updated' && event.item?.type === 'agent_message' && event.item?.id) {
+          const next = event.item.text || ''
+          if (next) broadcastAgentMessageDelta(event.item.id, next)
+        }
+
+        if (event.type === 'item.completed' && event.item?.type === 'agent_message' && event.item?.id) {
+          const itemId = event.item.id
+          const finalText = event.item.text || ''
+          // Ensure any trailing text not yet streamed is flushed to the frontend.
+          const prev = cs.agentMessageTextById.get(itemId) || ''
+          if (finalText.length > prev.length) {
+            broadcastAgentMessageDelta(itemId, finalText)
+          }
+          // Record the full response in scrollback for history/replay, but do NOT
+          // re-broadcast the entire agent_message text as a live output block.
+          if (finalText) codexBroadcast(cs, ensureTrailingNewline(finalText), { historyOnly: true })
+          cs.agentMessageTextById.delete(itemId)
         }
 
         const text = formatCodexEventAsOutput(event)
