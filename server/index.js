@@ -155,7 +155,7 @@ app.post('/api/notify/turn-complete', (req, res) => {
 
 // ─── Settings ─────────────────────────────────────────────────────────────
 
-const VALID_CLI_PROVIDERS = new Set(['claude', 'agent', 'opencode', 'codex'])
+const VALID_CLI_PROVIDERS = new Set(['claude', 'agent', 'opencode', 'codex', 'meshy-aigw'])
 
 app.get('/api/settings', (_req, res) => {
   res.json(store.getAllSettings())
