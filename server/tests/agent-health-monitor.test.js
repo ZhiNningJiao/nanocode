@@ -132,4 +132,64 @@ describe('agent health monitor', () => {
     assert.equal(emitted.at(-1).reason, 'success')
     assert.equal(monitor.listSnapshot().agents.length, 0)
   })
+
+  it('registers main process pid and exposes subagents in snapshot', () => {
+    const monitor = createAgentHealthMonitor({
+      store: makeStore(),
+      now: () => Date.now(),
+      autoStart: false,
+      subAgentScanner: {
+        findSubagents: (pid) => pid === 4242
+          ? [
+              { pid: 1111, name: 'sub-one', cmd: '/usr/bin/node sub-one.js' },
+              { pid: 2222, name: 'sub-two', cmd: '/usr/bin/node sub-two.js' },
+            ]
+          : [],
+        signalProcess: (pid) => ({ ok: true, pid }),
+      },
+    })
+
+    const meta = {
+      sessionKey: 'project-3:claude:tab-3',
+      projectId: 'project-3',
+      tabId: 'tab-3',
+      tabType: 'claude',
+      provider: 'claude',
+      source: 'claude-sdk',
+      sessionId: 'sess-3',
+    }
+    monitor.startTracking(meta)
+    monitor.registerMainProcess(meta.sessionKey, 4242)
+
+    const subs = monitor.listSubagents(meta.sessionKey)
+    assert.equal(subs.length, 2)
+    assert.equal(subs[0].pid, 1111)
+
+    const snapshot = monitor.listSnapshot()
+    assert.equal(snapshot.agents.length, 1)
+    assert.equal(snapshot.agents[0].main_pid, 4242)
+    assert.equal(snapshot.agents[0].subagents.length, 2)
+  })
+
+  it('stopSubagent delegates to scanner and guards main pid', () => {
+    const monitor = createAgentHealthMonitor({
+      store: makeStore(),
+      now: () => Date.now(),
+      autoStart: false,
+      subAgentScanner: {
+        findSubagents: () => [],
+        signalProcess: (pid) => ({ ok: true, pid }),
+      },
+    })
+
+    monitor.registerMainProcess('s:claude:t', 9999)
+
+    const bad = monitor.stopSubagent('s:claude:t', 9999)
+    assert.equal(bad.ok, false)
+    assert.equal(bad.error, 'cannot stop main process via sub-agent stop')
+
+    const good = monitor.stopSubagent('s:claude:t', 1234)
+    assert.equal(good.ok, true)
+    assert.equal(good.pid, 1234)
+  })
 })
