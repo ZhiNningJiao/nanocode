@@ -140,6 +140,14 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     _agentHealthMonitor = monitor || null
   }
 
+  function trackClaudeMainProcess(sessionKey, proc) {
+    if (_agentHealthMonitor && sessionKey && proc?.pid) {
+      try {
+        _agentHealthMonitor.registerMainProcess(sessionKey, proc.pid, proc)
+      } catch {}
+    }
+  }
+
   function claudeBroadcast(cs, event) {
     cs.history.push(event)
     if (cs.history.length > 500) cs.history.shift()
@@ -235,6 +243,13 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     claudeBroadcast,
     rerunTurn: (...args) => dispatchClaudeTurn(...args),
     runCliFallback: (...args) => runClaudeCliTurn(...args),
+    onClaudeSpawn: ({ sessionKey, pid, proxy }) => {
+      if (_agentHealthMonitor && sessionKey && Number.isFinite(pid)) {
+        try {
+          _agentHealthMonitor.registerMainProcess(sessionKey, pid, proxy)
+        } catch {}
+      }
+    },
   })
   let dispatchCodexTurn = null
   const codexSdkDriver = createCodexSdkDriver({
@@ -332,6 +347,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     })
+    trackClaudeMainProcess(sessionKey, proc)
     proc._nanocodeInterrupted = false
     cs.currentProc = proc
     cs.turnCount++  // count this as turn 1
@@ -514,6 +530,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     })
+    trackClaudeMainProcess(sessionKey, proc)
     proc._nanocodeInterrupted = false
     cs.currentProc = proc
 
