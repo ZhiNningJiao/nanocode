@@ -119,6 +119,12 @@ class Session {
     this._proc = null
     this._outBuf = ''
     this._flushTimer = null
+    /** @type {Set<(data: string) => void>} */
+    this._outputHooks = new Set()
+    /** @type {Set<(info: { exitCode: number|null, signal: string|null }) => void>} */
+    this._exitHooks = new Set()
+    /** @type {Set<() => void>} */
+    this._destroyHooks = new Set()
     this._spawn(cols, rows)
   }
 
@@ -167,6 +173,9 @@ class Session {
       if (!this._flushTimer) {
         this._flushTimer = setTimeout(() => this._flush(), OUTPUT_FLUSH_MS)
       }
+      for (const fn of this._outputHooks) {
+        try { fn(data) } catch (err) { console.warn('[pty:output-hook] error:', err?.message) }
+      }
       // N30: auto-skip codex update TUI.
       // Codex shows an update prompt with options like "1. Update now" / "2. Skip".
       // We detect specific patterns and auto-send the skip key after a short delay.
@@ -192,6 +201,10 @@ class Session {
       this._flush()
       this._exited = true
       this._exitCode = exitCode
+      const info = { exitCode: exitCode ?? null, signal: signal ?? null }
+      for (const fn of this._exitHooks) {
+        try { fn(info) } catch (err) { console.warn('[pty:exit-hook] error:', err?.message) }
+      }
       const msg = JSON.stringify({ type: 'exit', exitCode, signal })
       for (const ws of this._clients) {
         if (ws.readyState === 1) ws.send(msg)
@@ -286,6 +299,48 @@ class Session {
   }
 
   /**
+   * @param {(data: string) => void} fn
+   */
+  onOutput(fn) {
+    if (typeof fn === 'function') this._outputHooks.add(fn)
+  }
+
+  /**
+   * @param {(data: string) => void} fn
+   */
+  offOutput(fn) {
+    this._outputHooks.delete(fn)
+  }
+
+  /**
+   * @param {(info: { exitCode: number|null, signal: string|null }) => void} fn
+   */
+  onExit(fn) {
+    if (typeof fn === 'function') this._exitHooks.add(fn)
+  }
+
+  /**
+   * @param {(info: { exitCode: number|null, signal: string|null }) => void} fn
+   */
+  offExit(fn) {
+    this._exitHooks.delete(fn)
+  }
+
+  /**
+   * @param {() => void} fn
+   */
+  onDestroy(fn) {
+    if (typeof fn === 'function') this._destroyHooks.add(fn)
+  }
+
+  /**
+   * @param {() => void} fn
+   */
+  offDestroy(fn) {
+    this._destroyHooks.delete(fn)
+  }
+
+  /**
    * @param {number} cols
    * @param {number} rows
    */
@@ -313,6 +368,9 @@ class Session {
       } catch {
         // ignore
       }
+    }
+    for (const fn of this._destroyHooks) {
+      try { fn() } catch (err) { console.warn('[pty:destroy-hook] error:', err?.message) }
     }
     this._clients.clear()
   }
