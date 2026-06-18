@@ -1126,6 +1126,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         ? `${scrollbackDir}/${projectId}__${tabId}.bin`
         : undefined
 
+      const existingSession = sessions.get(sessionKey)
       const session = sessions.getOrCreate(
         sessionKey,
         command,
@@ -1137,6 +1138,34 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       )
       if (tabType === 'codex') {
         session.enableCodexAutoSkip()
+      }
+      // Host-side stuck detection: feed PTY-based agent tabs (claude/codex/agent/
+      // opencode/meshy-aigw) into the agent-health monitor so idle/stuck states
+      // are detected and broadcast as agent_health events even when running in
+      // PTY/terminal mode instead of the SDK bridge.
+      if (!existingSession && tabType !== 'bash' && _agentHealthMonitor) {
+        const healthMeta = {
+          sessionKey,
+          projectId,
+          tabId,
+          tabType,
+          provider: tabType,
+          source: 'pty',
+        }
+        _agentHealthMonitor.startTracking(healthMeta)
+        session.onOutput((text) => {
+          try { _agentHealthMonitor.recordOutput(healthMeta, text) } catch {}
+        })
+        session.onExit(() => {
+          try {
+            _agentHealthMonitor.finishTracking(sessionKey, { state: 'stopped', reason: 'shell_exited' })
+          } catch {}
+        })
+        session.onDestroy(() => {
+          try {
+            _agentHealthMonitor.finishTracking(sessionKey, { state: 'stopped', reason: 'session_destroyed' })
+          } catch {}
+        })
       }
       session.attach(ws, Math.max(1, cols || 80), Math.max(1, rows || 24))
     }
