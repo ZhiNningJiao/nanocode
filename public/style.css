@@ -4415,6 +4415,11 @@ body.workspace-active .landing-overlay { display: none; }
   padding: var(--s-2) 0;
 }
 
+.cbx-block-text.cbx-live {
+  border-left: 2px solid var(--primary-light);
+  padding-left: var(--s-3);
+}
+
 .cbx-text-pre {
   margin: 0;
   font-family: var(--font-mono);

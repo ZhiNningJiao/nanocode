@@ -203,6 +203,14 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     }
   }
 
+  function codexBroadcastStreamText(cs, { itemId, textDelta }) {
+    if (!textDelta) return
+    const msg = JSON.stringify({ type: 'codex-stream-text', itemId, textDelta })
+    for (const client of cs.clients) {
+      if (client.readyState === 1) try { client.send(msg) } catch {}
+    }
+  }
+
   function getCodexDriver() {
     return store.getSetting('codex_driver') === 'sdk' ? 'sdk' : 'pty'
   }
@@ -219,6 +227,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     store,
     codexBroadcast,
     codexBroadcastEvent,
+    codexBroadcastStreamText,
     rerunTurn: (...args) => dispatchCodexTurn(...args),
   })
 
