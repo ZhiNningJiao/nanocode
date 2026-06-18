@@ -4,7 +4,7 @@ import { existsSync, readdirSync, unlinkSync } from 'node:fs'
 import { platform } from 'node:os'
 import { join } from 'node:path'
 import * as sessions from './sessions.js'
-import { buildReplaySeed, buildUserReplayId } from './claude-history.js'
+import { buildReplaySeed, buildUserReplayId, resolveSessionJsonl, parseJsonlHistoryTail } from './claude-history.js'
 import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
@@ -764,7 +764,54 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         // history endpoint can always find the correct jsonl file.
       }
 
+      // ── Cross-instance session auto-recovery ──────────────────────────────────
+      // Block-mode history replay already reads Claude's jsonl from disk, but the
+      // server-side cs.history used to fall back to pure memory. After a server
+      // restart (or any time the in-memory cs is gone) the first WS attach would
+      // create an empty cs and start a brand new session, even though the directory
+      // still contained the persisted conversation. Hydrate cs.history directly
+      // from the same directory-resolved jsonl source so the backend never relies
+      // solely on in-memory history across instances.
+      let recoveredEvents = []
+      let recoveredFallback = false
+      let recoveredSkipped = false
+      if (!_activeSessionOverride && tab) {
+        try {
+          const resolution = resolveSessionJsonl({ store, home, project, tab })
+          if (resolution.resolvedPath) {
+            claudeSessionId = resolution.resolvedSessionId
+            recoveredEvents = parseJsonlHistoryTail(resolution.resolvedPath)
+            recoveredFallback = resolution.fallback
+            if (resolution.fallback && resolution.resolvedSessionId !== storedSessionId) {
+              if (store.updateTabMetadata) {
+                store.updateTabMetadata(projectId, tabId, { claudeSessionId: resolution.resolvedSessionId })
+              }
+              console.log(
+                `[claude:session] Tab ${tabId} auto-recovered fallback session ${resolution.resolvedSessionId} from ${resolution.resolvedPath}`
+              )
+            }
+          } else if (resolution.skipped) {
+            claudeSessionId = resolution.resolvedSessionId
+            recoveredSkipped = true
+            if (store.updateTabMetadata) {
+              store.updateTabMetadata(projectId, tabId, { claudeSessionId: resolution.resolvedSessionId })
+            }
+            console.log(
+              `[claude:session] Tab ${tabId} active-session guard skipped auto-recovery, assigned fresh ${resolution.resolvedSessionId}`
+            )
+          }
+        } catch (err) {
+          // Best-effort recovery: never let a disk-read failure block attach.
+          console.warn(`[claude:session] Tab ${tabId} auto-recovery failed: ${err?.message}`)
+        }
+      }
+
       const seed = replaySeeds.get(sessionKey)
+      // Prefer the seed built from recovered disk events over the stale
+      // in-memory replaySeeds, so cross-instance recovery sets turnCount=1.
+      const liveSeed = recoveredEvents.length > 0
+        ? buildReplaySeed(recoveredEvents)
+        : seed
       // If history was loaded from jsonl (hasHistory=true), treat the first user
       // turn as a resume rather than a new session start. This makes runClaudeTurn
       // use `--resume <sessionId>` instead of `--session-id <sessionId>` so
@@ -777,28 +824,31 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       //
       // Explicit sessionId path: skip _activeSessionOverride entirely (it won't
       // be set for explicit sessions), so hasHistory wins and turnCount starts at 1.
-      const initialTurnCount = (!_activeSessionOverride && seed?.hasHistory) ? 1 : 0
-      // explicitSessionId=true means the sessionId came from store (this tab had a prior session).
-      // We record it on cs so that the first-turn session arg can use --resume instead of
-      // --session-id even when history replay returned empty (e.g. jsonl was purged, or race
-      // between history fetch and WS attach). This is the basis for the continue-fallback chain.
-      const resolvedExplicit = explicitSessionId && !_activeSessionOverride
+      const initialTurnCount = (!_activeSessionOverride && !recoveredSkipped && liveSeed?.hasHistory) ? 1 : 0
+      // explicitSessionId=true means the first user turn should use --resume instead of
+      // --session-id. This is true when the sessionId came from store metadata (the user
+      // explicitly chose a prior session) and also when we successfully auto-recovered
+      // history from disk — in both cases we want Claude to continue the existing
+      // conversation rather than start a new one. The flag is consumed by the fallback
+      // paths, which clear it when --resume fails so the retry does not loop.
+      const diskRecovered = recoveredEvents.length > 0 && !_activeSessionOverride && !recoveredSkipped
+      const resolvedExplicit = explicitSessionId && claudeSessionId === storedSessionId && !_activeSessionOverride && !recoveredSkipped
       cs = {
         sessionKey,
         claudeSessionId,
         clients: new Set(),
-        history: [],
+        history: recoveredEvents.slice(-500),
         busy: false,
         turnCount: initialTurnCount,
-        // Carries the "this sessionId came from store, try --resume on first turn" flag.
-        // Reset to false after the first successful turn so we don't retry forever.
-        explicitSessionId: resolvedExplicit,
+        // Carries the "try --resume on first turn" flag (store-chosen or disk-recovered).
+        // Reset to false by fallback paths once --resume has been attempted.
+        explicitSessionId: resolvedExplicit || diskRecovered,
         cwd: project.cwd,
         currentProc: null,
         tabLabel: tab?.label || '',
         queue: [],
         pendingUserDialogs: new Map(),
-        _replayUserTextCounts: seed?.userTextCounts || new Map(),
+        _replayUserTextCounts: liveSeed?.userTextCounts || seed?.userTextCounts || new Map(),
       }
       replaySeeds.delete(sessionKey)
       claudeSessions.set(sessionKey, cs)
