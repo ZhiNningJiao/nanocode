@@ -626,6 +626,23 @@ app.get('/api/agents/health', asyncWrap(async (_req, res) => {
   res.json(agentHealthMonitor.listSnapshot())
 }))
 
+// List running sub-agents for an active Claude session.
+// If no sessionKey is provided, returns sub-agents across all sessions.
+app.get('/api/agents/subagents', asyncWrap(async (req, res) => {
+  const { sessionKey } = req.query || {}
+  res.json({
+    generated_at: new Date().toISOString(),
+    subagents: agentHealthMonitor.listSubagents(sessionKey || undefined),
+  })
+}))
+
+// Stop (SIGTERM by default) a single sub-agent process.
+app.post('/api/agents/subagents/stop', (req, res) => {
+  const { sessionKey, pid, signal } = req.body || {}
+  const result = agentHealthMonitor.stopSubagent(sessionKey, pid, signal || 'SIGTERM')
+  res.status(result.ok ? 200 : 400).json(result)
+})
+
 app.put('/api/services-config', (req, res) => {
   const { services } = req.body
   if (!Array.isArray(services)) return res.status(400).json({ error: 'services must be array' })

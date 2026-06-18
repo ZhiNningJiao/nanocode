@@ -1,3 +1,5 @@
+import { findSubagents, signalProcess } from './sub-agent-scanner.js'
+
 const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   probeIntervalSec: 5,
@@ -122,8 +124,11 @@ export function createAgentHealthMonitor({
   setIntervalImpl = setInterval,
   clearIntervalImpl = clearInterval,
   autoStart = true,
+  subAgentScanner = null,
 } = {}) {
   const entries = new Map()
+  // sessionKey -> { pid, proxy } for the main Claude/Codex OS process.
+  const mainProcesses = new Map()
   let notifier = null
   let timer = null
 
@@ -189,8 +194,8 @@ export function createAgentHealthMonitor({
     return entry
   }
 
-  function buildPayload(entry, status) {
-    return {
+  function buildPayload(entry, status, { includeSubagents = false } = {}) {
+    const payload = {
       type: 'agent_health',
       version: 1,
       agent_id: entry.threadId || entry.sessionId || entry.sessionKey,
@@ -210,7 +215,12 @@ export function createAgentHealthMonitor({
       started_at: entry.startedAt || null,
       last_activity_at: entry.lastActivityAt ? toIso(entry.lastActivityAt) : null,
       wait_seconds: status.waitSeconds ?? null,
+      main_pid: entry.mainPid || null,
     }
+    if (includeSubagents) {
+      payload.subagents = entry.subagents || []
+    }
+    return payload
   }
 
   function emit(entry, status, { force = false } = {}) {
@@ -304,6 +314,7 @@ export function createAgentHealthMonitor({
       : 0
     const payload = emit(entry, { state, reason, idleSeconds }, { force: true })
     entries.delete(sessionKey)
+    mainProcesses.delete(sessionKey)
     return payload
   }
 
@@ -367,6 +378,21 @@ export function createAgentHealthMonitor({
     return emitted
   }
 
+  function _refreshEntrySubagents(entry) {
+    const main = mainProcesses.get(entry.sessionKey)
+    if (main?.pid) {
+      try {
+        entry.subagents = subAgentScanner
+          ? subAgentScanner.findSubagents(main.pid)
+          : findSubagents(main.pid)
+      } catch {
+        entry.subagents = []
+      }
+    } else {
+      entry.subagents = []
+    }
+  }
+
   function listSnapshot() {
     const config = getConfig()
     const agents = []
@@ -375,7 +401,8 @@ export function createAgentHealthMonitor({
       const status = classify(entry, config)
       entry.state = status.state
       entry.reason = status.reason
-      agents.push(buildPayload(entry, status))
+      _refreshEntrySubagents(entry)
+      agents.push(buildPayload(entry, status, { includeSubagents: true }))
     }
     agents.sort((a, b) => String(a.session_key).localeCompare(String(b.session_key)))
     return {
@@ -390,8 +417,71 @@ export function createAgentHealthMonitor({
     }
   }
 
+  function listSubagents(sessionKey) {
+    if (sessionKey) {
+      const entry = entries.get(sessionKey)
+      if (!entry) return []
+      _refreshEntrySubagents(entry)
+      return entry.subagents || []
+    }
+    const all = []
+    for (const entry of entries.values()) {
+      if (!entry.running) continue
+      _refreshEntrySubagents(entry)
+      for (const sub of entry.subagents || []) {
+        all.push({ ...sub, session_key: entry.sessionKey })
+      }
+    }
+    return all
+  }
+
+  function registerMainProcess(sessionKey, pid, proxy = null) {
+    if (!sessionKey || !Number.isFinite(Number(pid)) || Number(pid) <= 0) return
+    mainProcesses.set(sessionKey, { pid: Number(pid), proxy })
+    const entry = entries.get(sessionKey)
+    if (entry) entry.mainPid = Number(pid)
+  }
+
+  const ALLOWED_SIGNALS = new Set(['SIGTERM', 'SIGINT', 'SIGKILL'])
+
+  function stopSubagent(sessionKey, pid, signal = 'SIGTERM') {
+    if (!ALLOWED_SIGNALS.has(signal)) {
+      return { ok: false, error: 'signal not allowed' }
+    }
+
+    const targetPid = Number(pid)
+    if (!Number.isFinite(targetPid) || targetPid <= 0) {
+      return { ok: false, error: 'invalid pid' }
+    }
+
+    const entry = entries.get(sessionKey)
+    if (!entry) {
+      return { ok: false, error: 'session not found' }
+    }
+
+    // Safety guard: never allow stopping the main process via this API.
+    const main = mainProcesses.get(sessionKey)
+    if (main && main.pid === targetPid) {
+      return { ok: false, error: 'cannot stop main process via sub-agent stop' }
+    }
+
+    // Only allow signaling sub-agents that are currently known descendants of
+    // this session's main process. This prevents arbitrary pid targeting.
+    _refreshEntrySubagents(entry)
+    const knownPids = new Set((entry.subagents || []).map((s) => s.pid))
+    if (!knownPids.has(targetPid)) {
+      return { ok: false, error: 'pid is not a known subagent of this session' }
+    }
+
+    if (subAgentScanner) {
+      return subAgentScanner.signalProcess(targetPid, signal)
+    }
+    return signalProcess(targetPid, signal)
+  }
+
   function destroySession(sessionKey) {
     entries.delete(sessionKey)
+    mainProcesses.delete(sessionKey)
   }
 
   function setNotifier(fn) {
@@ -428,14 +518,17 @@ export function createAgentHealthMonitor({
     finishTracking,
     getConfig,
     listSnapshot,
+    listSubagents,
     recordClaudeEvent,
     recordCodexEvent,
     recordOutput,
+    registerMainProcess,
     registerSession,
     scanNow,
     setNotifier,
     start,
     startTracking,
     stop,
+    stopSubagent,
   }
 }

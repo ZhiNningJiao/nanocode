@@ -22,6 +22,7 @@ export function initAgentDrawer() {
     toggleBtn?.classList.add('active')
     _loadAgents()
     _loadRecentAgents()
+    _loadSubagents()
   }
   function close() {
     drawer.classList.remove('open')
@@ -54,6 +55,98 @@ async function _loadAgents() {
     _agents = await fetch('/api/agents').then(r => r.json())
     _render()
   } catch {}
+}
+
+// ── Running sub-agents ───────────────────────────────────────────────────────
+
+async function _loadSubagents() {
+  const list = document.getElementById('agent-list')
+  if (!list) return
+
+  list.querySelector('.subagent-section')?.remove()
+
+  let subagents = []
+  try {
+    const data = await fetch('/api/agents/subagents').then(r => r.json())
+    subagents = (data.subagents || []).filter(s => s.pid)
+  } catch {
+    return
+  }
+
+  const section = document.createElement('div')
+  section.className = 'subagent-section'
+
+  const title = document.createElement('div')
+  title.className = 'subagent-section-title'
+  title.textContent = `运行中 Sub-agents (${subagents.length})`
+  section.appendChild(title)
+
+  if (!subagents.length) {
+    const empty = document.createElement('div')
+    empty.className = 'subagent-empty'
+    empty.textContent = '当前没有运行中的 sub-agent'
+    section.appendChild(empty)
+    list.prepend(section)
+    return
+  }
+
+  for (const sub of subagents) {
+    const item = document.createElement('div')
+    item.className = 'subagent-item'
+    item.dataset.pid = sub.pid
+
+    const info = document.createElement('div')
+    info.className = 'subagent-info'
+
+    const cmd = document.createElement('div')
+    cmd.className = 'subagent-cmd'
+    cmd.title = sub.cmd || ''
+    cmd.textContent = (sub.name || sub.cmd || `PID ${sub.pid}`).slice(0, 80)
+    info.appendChild(cmd)
+
+    const meta = document.createElement('div')
+    meta.className = 'subagent-meta'
+    meta.textContent = `pid ${sub.pid}` + (sub.session_key ? ` · ${_esc(sub.session_key)}` : '')
+    info.appendChild(meta)
+
+    item.appendChild(info)
+
+    const stopBtn = document.createElement('button')
+    stopBtn.type = 'button'
+    stopBtn.className = 'subagent-stop-btn'
+    stopBtn.textContent = '停止'
+    stopBtn.title = 'SIGTERM'
+    stopBtn.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      if (!confirm(`停止 sub-agent PID ${sub.pid}?`)) return
+      stopBtn.disabled = true
+      stopBtn.textContent = '...'
+      try {
+        const res = await fetch('/api/agents/subagents/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionKey: sub.session_key, pid: sub.pid }),
+        })
+        const data = await res.json()
+        if (data.ok) {
+          item.remove()
+        } else {
+          alert(data.error || '停止失败')
+          stopBtn.disabled = false
+          stopBtn.textContent = '停止'
+        }
+      } catch (err) {
+        alert('停止失败: ' + err.message)
+        stopBtn.disabled = false
+        stopBtn.textContent = '停止'
+      }
+    })
+    item.appendChild(stopBtn)
+
+    section.appendChild(item)
+  }
+
+  list.prepend(section)
 }
 
 // ── Recent agents from /api/recent-agents ──────────────────────────────────

@@ -200,4 +200,100 @@ describe('agent health monitor', () => {
     assert.equal(emitted.at(-1).reason, 'background_terminal_wait')
     assert.equal(emitted.at(-1).wait_seconds, 125)
   })
+
+  it('registers main process pid and exposes subagents in snapshot', () => {
+    const monitor = createAgentHealthMonitor({
+      store: makeStore(),
+      now: () => Date.now(),
+      autoStart: false,
+      subAgentScanner: {
+        findSubagents: (pid) => pid === 4242
+          ? [
+              { pid: 1111, name: 'sub-one', cmd: '/usr/bin/node sub-one.js' },
+              { pid: 2222, name: 'sub-two', cmd: '/usr/bin/node sub-two.js' },
+            ]
+          : [],
+        signalProcess: (pid) => ({ ok: true, pid }),
+      },
+    })
+
+    const meta = {
+      sessionKey: 'project-3:claude:tab-3',
+      projectId: 'project-3',
+      tabId: 'tab-3',
+      tabType: 'claude',
+      provider: 'claude',
+      source: 'claude-sdk',
+      sessionId: 'sess-3',
+    }
+    monitor.startTracking(meta)
+    monitor.registerMainProcess(meta.sessionKey, 4242)
+
+    const subs = monitor.listSubagents(meta.sessionKey)
+    assert.equal(subs.length, 2)
+    assert.equal(subs[0].pid, 1111)
+
+    const snapshot = monitor.listSnapshot()
+    assert.equal(snapshot.agents.length, 1)
+    assert.equal(snapshot.agents[0].main_pid, 4242)
+    assert.equal(snapshot.agents[0].subagents.length, 2)
+  })
+
+  it('stopSubagent only signals known subagents and guards main pid', () => {
+    const monitor = createAgentHealthMonitor({
+      store: makeStore(),
+      now: () => Date.now(),
+      autoStart: false,
+      subAgentScanner: {
+        findSubagents: (pid) => pid === 9999
+          ? [
+              { pid: 1234, name: 'sub-one', cmd: '/usr/bin/node sub-one.js' },
+              { pid: 5678, name: 'sub-two', cmd: '/usr/bin/node sub-two.js' },
+            ]
+          : [],
+        signalProcess: (pid, signal) => ({ ok: true, pid, signal }),
+      },
+    })
+
+    monitor.startTracking({
+      sessionKey: 's:claude:t',
+      projectId: 'p',
+      tabId: 't',
+      tabType: 'claude',
+      provider: 'claude',
+      source: 'claude-sdk',
+      sessionId: 's',
+    })
+    monitor.registerMainProcess('s:claude:t', 9999)
+
+    // cannot stop main pid
+    const mainGuard = monitor.stopSubagent('s:claude:t', 9999)
+    assert.equal(mainGuard.ok, false)
+    assert.equal(mainGuard.error, 'cannot stop main process via sub-agent stop')
+
+    // cannot stop a pid that is not a known subagent of the session
+    const unknown = monitor.stopSubagent('s:claude:t', 1111)
+    assert.equal(unknown.ok, false)
+    assert.equal(unknown.error, 'pid is not a known subagent of this session')
+
+    // cannot target a pid without a valid registered session
+    const badSession = monitor.stopSubagent('nope', 1234)
+    assert.equal(badSession.ok, false)
+    assert.equal(badSession.error, 'session not found')
+
+    // signal whitelist
+    const badSignal = monitor.stopSubagent('s:claude:t', 1234, 'SIGUSR1')
+    assert.equal(badSignal.ok, false)
+    assert.equal(badSignal.error, 'signal not allowed')
+
+    // valid stop works for known subagents
+    const good = monitor.stopSubagent('s:claude:t', 1234)
+    assert.equal(good.ok, true)
+    assert.equal(good.pid, 1234)
+    assert.equal(good.signal, 'SIGTERM')
+
+    const sigint = monitor.stopSubagent('s:claude:t', 5678, 'SIGINT')
+    assert.equal(sigint.ok, true)
+    assert.equal(sigint.signal, 'SIGINT')
+  })
 })
