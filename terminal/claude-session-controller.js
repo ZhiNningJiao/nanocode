@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import * as sessions from './sessions.js'
 import { buildReplaySeed, buildUserReplayId } from './claude-history.js'
 import { createClaudeSdkDriver } from './claude-sdk-driver.js'
+import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
 
 export function createClaudeSessionController({ store, home, recentAgents }) {
@@ -173,15 +174,22 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
   }
 
   function getClaudeDriver() {
-    // SDK is now the default driver for block mode (feature-aligned with CLI:
-    // model/effort, three-tier permission, resume + continue-fallback, tool/
-    // thinking/text events, interrupt, slash/subagent/MCP/skills via inherited
-    // settingSources). The CLI driver remains as the per-turn fallback when the
-    // SDK query errors (e.g. Anthropic 529 Overloaded) — see claude-sdk-driver.js.
+    const driver = store.getSetting('claude_driver')
+    if (driver === 'cli') return 'cli'
+    if (driver === 'sdk') return 'sdk'
+    if (driver === 'tmux' || process.env.NANOCODE_CLAUDE_TMUX === '1') return 'tmux'
+
+    // Default to the persistent tmux-backed driver in production. This keeps
+    // one Claude OS process per tab across nanocode restarts/reconnects instead
+    // of spawning a new SDK streaming session (and therefore a new OS process)
+    // on every resume or crash recovery. See claude-tmux-driver.js.
     //
-    // Opt-out: an explicit claude_driver='cli' still forces the legacy CLI path.
-    // The UI no longer exposes this toggle, but the internal escape hatch stays.
-    return store.getSetting('claude_driver') === 'cli' ? 'cli' : 'sdk'
+    // In the Node test runner we keep SDK as the default so unit tests that use
+    // a real store but a mocked/fake Claude binary continue to work without
+    // requiring tmux sessions. NODE_TEST_CONTEXT is set by the test runner for
+    // every test file it spawns.
+    if (process.env.NODE_TEST_CONTEXT) return 'sdk'
+    return 'tmux'
   }
 
   function appendCodexScrollback(cs, text) {
@@ -250,6 +258,11 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         } catch {}
       }
     },
+  })
+  const tmuxDriver = createClaudeTmuxDriver({
+    store,
+    claudeBroadcast,
+    rerunTurn: (...args) => dispatchClaudeTurn(...args),
   })
   let dispatchCodexTurn = null
   const codexSdkDriver = createCodexSdkDriver({
@@ -689,7 +702,20 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
   }
 
   dispatchClaudeTurn = (cs, userText, sessionKey, cwd) => {
-    if (getClaudeDriver() === 'sdk') {
+    const driver = getClaudeDriver()
+    if (driver === 'tmux') {
+      if (tmuxDriver.isAvailable()) {
+        cs.claudeDriver = 'tmux'
+        return tmuxDriver.run(cs, userText, sessionKey, cwd).catch((err) => {
+          console.error(`[claude:tmux] ${sessionKey} failed, falling back to SDK:`, err?.message || err)
+          cs.claudeDriver = 'sdk'
+          return sdkDriver.runSdkTurn(cs, userText, sessionKey, cwd)
+        })
+      }
+      console.warn(`[claude:driver] ${sessionKey}: tmux requested but unavailable, falling back to SDK`)
+    }
+    cs.claudeDriver = driver === 'tmux' ? 'sdk' : driver
+    if (cs.claudeDriver === 'sdk') {
       return sdkDriver.runSdkTurn(cs, userText, sessionKey, cwd)
     }
     return runClaudeCliTurn(cs, userText, sessionKey, cwd)
@@ -1017,6 +1043,14 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     }
     const force = req.query.force === '1' || req.body?.force === true
     try {
+      if (cs.claudeDriver === 'tmux') {
+        tmuxDriver.interrupt(cs, force).then(() => {
+          res.json({ ok: true, force: !!force, andFlush })
+        }).catch((err) => {
+          res.status(500).json({ error: err.message })
+        })
+        return
+      }
       cs.currentProc._nanocodeInterrupted = true
       // force → SIGKILL. In SDK streaming mode this is remapped to a guaranteed
       // turn-unlock that keeps the process (and sub-agents) alive; it does NOT
@@ -1037,6 +1071,35 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       try { cs.currentProc.kill('SIGKILL') } catch {}
       cs.currentProc = null
     }
+
+    if (cs.claudeDriver === 'tmux') {
+      const oldSessionId = cs.claudeSessionId
+      const newSessionId = randomUUID()
+      const discarded = (cs.queue || []).length
+      cs.busy = false
+      cs.queue = []
+      cs._conflictRetries = 0
+      cs._forceFlushQueue = false
+      cs._quietQueueOnce = false
+      cs.claudeSessionId = newSessionId
+      cs.turnCount = 0
+      tmuxDriver.reset(cs, newSessionId).catch((err) => {
+        console.error(`[claude:reset:tmux] ${sessionKey} error:`, err?.message || err)
+      })
+      if (store.updateTabMetadata) {
+        store.updateTabMetadata(req.params.id, req.params.tabId, { claudeSessionId: newSessionId })
+      }
+      const doneEvent = { type: 'result', subtype: 'success' }
+      claudeBroadcast(cs, doneEvent)
+      const infoEvent = {
+        type: 'system', subtype: 'info',
+        text: `Session reset. ${discarded} queued message${discarded !== 1 ? 's' : ''} discarded. New session started.`,
+      }
+      claudeBroadcast(cs, infoEvent)
+      console.log(`[claude:reset:tmux] ${sessionKey}: busy cleared, ${discarded} queued msgs discarded, session ${oldSessionId} -> ${newSessionId}`)
+      return res.json({ ok: true, discarded, oldSessionId, newSessionId })
+    }
+
     // Reset means "new session" — fully tear down the persistent streaming
     // session so the next turn rebuilds with the fresh sessionId/context.
     // (A plain interrupt never does this; reset is the deliberate destructive
