@@ -83,6 +83,7 @@ export function createPersistentSpawnHook({
   spawnImpl = defaultSpawn,
   isNanocodeExiting = () => _nanocodeExiting,
   killEscalationMs = 5000,
+  onSpawn = null,
 } = {}) {
   return function spawnClaudeCodeProcess({ command, args = [], cwd, env, signal }) {
     // Spawn with detached: true so the child gets its own process group / session.
@@ -101,6 +102,11 @@ export function createPersistentSpawnHook({
     child.unref?.()
 
     console.log(`${logPrefix} spawned detached claude PID=${child.pid} (${command} ${args.slice(0, 3).join(' ')}...)`)
+
+    // Notify observer with the spawned PID/proxy so nanocode can track sub-agents.
+    try {
+      onSpawn?.({ pid: child.pid, command, args, cwd, env })
+    } catch {}
 
     // ── Kill guard ────────────────────────────────────────────────────────────
     // Legitimate termination can come from the SDK close/abort path (for
@@ -149,6 +155,7 @@ export function createPersistentSpawnHook({
 
     // Build the SpawnedProcess proxy.
     const proxy = {
+      pid: child.pid,
       stdin: child.stdin,
       stdout: child.stdout,
 

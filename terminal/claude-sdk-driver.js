@@ -307,6 +307,9 @@ export function createClaudeSdkDriver({
   rerunTurn,
   runCliFallback,
   queryImpl = defaultQuery,
+  // Called whenever the SDK spawns the main claude OS process.  Lets the
+  // session controller / agent health monitor discover sub-agents later.
+  onClaudeSpawn = null,
   // Test hook: force streaming mode even with an injected queryImpl. In
   // production streaming is auto-selected (queryImpl === defaultQuery).
   forceStreaming = false,
@@ -375,6 +378,17 @@ export function createClaudeSdkDriver({
             const trimmed = typeof text === 'string' ? text.trim() : ''
             if (!trimmed) return
             claudeBroadcast(cs, { type: 'system', subtype: 'stderr', text: trimmed })
+          },
+          // Persistent spawn hook so the main claude process survives nanocode,
+          // and so we can record its PID for sub-agent discovery.
+          spawnClaudeCodeProcess: (opts) => {
+            const proxy = _persistentSpawnHook(opts)
+            if (proxy?.pid) {
+              try {
+                onClaudeSpawn?.({ sessionKey, pid: proxy.pid, proxy })
+              } catch {}
+            }
+            return proxy
           },
           ...sessionOptions,
         },
@@ -551,6 +565,16 @@ export function createClaudeSdkDriver({
     teardownStreamingSession(cs)
 
     const options = buildStreamingOptions(cs, cwd)
+    const baseSpawn = options.spawnClaudeCodeProcess || _persistentSpawnHook
+    options.spawnClaudeCodeProcess = (opts) => {
+      const proxy = baseSpawn(opts)
+      if (proxy?.pid) {
+        try {
+          onClaudeSpawn?.({ sessionKey, pid: proxy.pid, proxy })
+        } catch {}
+      }
+      return proxy
+    }
     const ss = new StreamingSession({
       queryImpl,
       options,
