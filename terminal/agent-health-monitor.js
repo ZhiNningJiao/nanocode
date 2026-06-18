@@ -442,16 +442,37 @@ export function createAgentHealthMonitor({
     if (entry) entry.mainPid = Number(pid)
   }
 
+  const ALLOWED_SIGNALS = new Set(['SIGTERM', 'SIGINT', 'SIGKILL'])
+
   function stopSubagent(sessionKey, pid, signal = 'SIGTERM') {
-    const main = mainProcesses.get(sessionKey)
+    if (!ALLOWED_SIGNALS.has(signal)) {
+      return { ok: false, error: 'signal not allowed' }
+    }
+
     const targetPid = Number(pid)
     if (!Number.isFinite(targetPid) || targetPid <= 0) {
       return { ok: false, error: 'invalid pid' }
     }
+
+    const entry = entries.get(sessionKey)
+    if (!entry) {
+      return { ok: false, error: 'session not found' }
+    }
+
     // Safety guard: never allow stopping the main process via this API.
+    const main = mainProcesses.get(sessionKey)
     if (main && main.pid === targetPid) {
       return { ok: false, error: 'cannot stop main process via sub-agent stop' }
     }
+
+    // Only allow signaling sub-agents that are currently known descendants of
+    // this session's main process. This prevents arbitrary pid targeting.
+    _refreshEntrySubagents(entry)
+    const knownPids = new Set((entry.subagents || []).map((s) => s.pid))
+    if (!knownPids.has(targetPid)) {
+      return { ok: false, error: 'pid is not a known subagent of this session' }
+    }
+
     if (subAgentScanner) {
       return subAgentScanner.signalProcess(targetPid, signal)
     }
