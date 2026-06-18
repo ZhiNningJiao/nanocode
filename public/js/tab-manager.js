@@ -550,6 +550,7 @@ const NEW_TAB_OPTIONS = [
   { type: 'codex', label: 'Codex', hint: 'codex' },
   { type: 'agent', label: 'Cursor Agent', hint: 'agent' },
   { type: 'opencode', label: 'OpenCode', hint: 'opencode' },
+  { type: 'meshy-aigw', label: 'Meshy AIGW', hint: 'Kimi K2.7 Code' },
 ]
 
 const TYPE_ICON_SVG = {
@@ -558,6 +559,8 @@ const TYPE_ICON_SVG = {
   codex: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`,
   agent: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`,
   opencode: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 9l-3 3 3 3M16 9l3 3-3 3"/></svg>`,
+  // Meshy AIGW: lightning bolt icon (fast Kimi model via internal proxy)
+  'meshy-aigw': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
 }
 
 export { TYPE_ICON_SVG }
