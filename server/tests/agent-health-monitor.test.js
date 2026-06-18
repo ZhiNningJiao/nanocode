@@ -132,4 +132,72 @@ describe('agent health monitor', () => {
     assert.equal(emitted.at(-1).reason, 'success')
     assert.equal(monitor.listSnapshot().agents.length, 0)
   })
+
+  it('detects idle and shell-prompt stop for PTY agent tabs', () => {
+    let current = 1_700_000_300_000
+    const emitted = []
+    const monitor = createAgentHealthMonitor({
+      store: makeStore({ agent_health_idle_threshold_sec: '10' }),
+      now: () => current,
+      autoStart: false,
+    })
+    monitor.setNotifier((msg) => emitted.push(msg))
+
+    const meta = {
+      sessionKey: 'project-3:meshy-aigw:tab-3',
+      projectId: 'project-3',
+      tabId: 'tab-3',
+      tabType: 'meshy-aigw',
+      provider: 'meshy-aigw',
+      source: 'pty',
+    }
+
+    monitor.startTracking(meta)
+    monitor.recordOutput(meta, 'Running opencode...\r\n')
+    // Plain active output does not emit an event until state changes.
+    assert.equal(emitted.length, 0)
+
+    current += 11_000
+    const idleEvents = monitor.scanNow()
+    assert.equal(idleEvents.length, 1)
+    assert.equal(idleEvents[0].state, 'idle')
+    assert.equal(idleEvents[0].reason, 'idle_timeout')
+    assert.equal(idleEvents[0].tab_type, 'meshy-aigw')
+    assert.equal(idleEvents[0].source, 'pty')
+
+    monitor.recordOutput(meta, '\r\nuser@host:~/project$ ')
+    assert.equal(emitted.at(-1).state, 'stopped')
+    assert.equal(emitted.at(-1).reason, 'shell_prompt')
+    assert.equal(monitor.listSnapshot().agents.length, 0)
+  })
+
+  it('detects stuck PTY agent from multi-chunk background wait output', () => {
+    let current = 1_700_000_400_000
+    const emitted = []
+    const monitor = createAgentHealthMonitor({
+      store: makeStore({
+        agent_health_idle_threshold_sec: '20',
+        agent_health_background_wait_threshold_sec: '120',
+      }),
+      now: () => current,
+      autoStart: false,
+    })
+    monitor.setNotifier((msg) => emitted.push(msg))
+
+    const meta = {
+      sessionKey: 'project-4:claude:tab-4',
+      projectId: 'project-4',
+      tabId: 'tab-4',
+      tabType: 'claude',
+      provider: 'claude',
+      source: 'pty',
+    }
+
+    monitor.startTracking(meta)
+    monitor.recordOutput(meta, 'Thinking...\r\n')
+    monitor.recordOutput(meta, 'Waiting for background terminal (2m 5s)\r\n')
+    assert.equal(emitted.at(-1).state, 'stuck')
+    assert.equal(emitted.at(-1).reason, 'background_terminal_wait')
+    assert.equal(emitted.at(-1).wait_seconds, 125)
+  })
 })
