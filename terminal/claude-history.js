@@ -403,6 +403,78 @@ export function findNewestJsonl(projectDir) {
   return best
 }
 
+/**
+ * Resolve the jsonl file and sessionId for a claude tab by directory.
+ *
+ * Reads from the same source as block-mode history replay
+ * (`~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`). When the tab has
+ * no explicit sessionId or its jsonl is missing, it falls back to the most
+ * recently modified jsonl in the project directory. The active-session
+ * guard (main session / recent write / held file) prevents resuming a
+ * session that is currently active in another Claude process.
+ *
+ * Returns:
+ *   resolvedPath      - absolute path to the jsonl file, or null if none found
+ *   resolvedSessionId - the sessionId to use for this tab
+ *   fallback          - true if we fell back to a newer jsonl than tab metadata
+ *   skipped           - true if active-session guard forced a fresh UUID
+ *   freshSessionId    - the fresh UUID assigned when skipped, otherwise null
+ */
+export function resolveSessionJsonl({ store, home, project, tab }) {
+  const projectDir = cwdToClaudeProjectDir(home, project.cwd)
+  const sessionId = tab?.claudeSessionId || null
+  const jsonlPath = sessionId ? join(projectDir, `${sessionId}.jsonl`) : null
+
+  let resolvedPath = null
+  let resolvedSessionId = sessionId
+  let fallback = false
+  let skipped = false
+  let freshSessionId = null
+
+  if (jsonlPath && existsSync(jsonlPath)) {
+    resolvedPath = jsonlPath
+  } else {
+    // CASE B: No explicit sessionId or jsonl file missing — fall back to
+    // newest jsonl in the project dir (auto-resume behaviour).
+    // The active-session guard applies HERE to the fallback path only, because
+    // this path would otherwise silently --resume the main session on the first
+    // user turn, causing a lock conflict.
+    const autoResumeSetting = store.getSetting('claude_autoresume')
+    const autoResumeEnabled = autoResumeSetting !== '0'
+    if (autoResumeEnabled) {
+      const newest = findNewestJsonl(projectDir)
+      if (newest) {
+        const mainSessionId = process.env.CLAUDE_CODE_SESSION_ID
+        const isMainSession = mainSessionId && newest.sessionId === mainSessionId
+        const ACTIVE_THRESHOLD_MS = 30_000
+        let isRecentlyWritten = false
+        try {
+          const st = statSync(newest.path)
+          isRecentlyWritten = (Date.now() - st.mtimeMs) < ACTIVE_THRESHOLD_MS
+        } catch {}
+        let isFileHeld = false
+        if (!isMainSession && !isRecentlyWritten) {
+          try {
+            const r = spawnSync('lsof', ['-t', newest.path], { encoding: 'utf8', timeout: 1000 })
+            isFileHeld = r.status === 0 && r.stdout.trim().length > 0
+          } catch {}
+        }
+        if (isMainSession || isRecentlyWritten || isFileHeld) {
+          skipped = true
+          freshSessionId = randomUUID()
+          resolvedSessionId = freshSessionId
+        } else {
+          resolvedPath = newest.path
+          resolvedSessionId = newest.sessionId
+          fallback = true
+        }
+      }
+    }
+  }
+
+  return { resolvedPath, resolvedSessionId, fallback, skipped, freshSessionId }
+}
+
 export function createClaudeHistoryService({ store, home, recentAgents, sessionController }) {
   function syncResolvedSession(projectId, tabId, sessionId) {
     if (store.updateTabMetadata) {
@@ -445,14 +517,6 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
       return res.status(404).json({ error: 'claude tab not found' })
     }
 
-    const projectDir = cwdToClaudeProjectDir(home, project.cwd)
-    const sessionId = tab.claudeSessionId
-    const jsonlPath = sessionId ? join(projectDir, `${sessionId}.jsonl`) : null
-
-    let resolvedPath = null
-    let resolvedSessionId = sessionId
-    let fallback = false
-
     // CASE A: Tab has an explicit claudeSessionId and the jsonl file exists.
     // Always read it for display — reading a file never causes lock conflicts.
     // The guard preventing --resume on the active session lives in attachClaudeSession
@@ -463,61 +527,25 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     // aggressive: users clicking "Recent Agents" to view their active session
     // saw "[Restored 1 event(s)]" instead of the full history because the guard
     // fired and the fallback assigned a fresh UUID instead of reading the jsonl.
-    if (jsonlPath && existsSync(jsonlPath)) {
-      resolvedPath = jsonlPath
-    } else {
-      // CASE B: No explicit sessionId or jsonl file missing — fall back to
-      // newest jsonl in the project dir (auto-resume behaviour).
-      // The active-session guard applies HERE to the fallback path only, because
-      // this path would otherwise silently --resume the main session on the first
-      // user turn, causing a lock conflict.
-      const autoResumeSetting = store.getSetting('claude_autoresume')
-      const autoResumeEnabled = autoResumeSetting !== '0'
-      if (autoResumeEnabled) {
-        const newest = findNewestJsonl(projectDir)
-        if (newest) {
-          const mainSessionId = process.env.CLAUDE_CODE_SESSION_ID
-          const isMainSession = mainSessionId && newest.sessionId === mainSessionId
-          const ACTIVE_THRESHOLD_MS = 30_000
-          let isRecentlyWritten = false
-          try {
-            const st = statSync(newest.path)
-            isRecentlyWritten = (Date.now() - st.mtimeMs) < ACTIVE_THRESHOLD_MS
-          } catch {}
-          let isFileHeld = false
-          if (!isMainSession && !isRecentlyWritten) {
-            try {
-              const r = spawnSync('lsof', ['-t', newest.path], { encoding: 'utf8', timeout: 1000 })
-              isFileHeld = r.status === 0 && r.stdout.trim().length > 0
-            } catch {}
-          }
-          if (isMainSession || isRecentlyWritten || isFileHeld) {
-            console.log(
-              `[history:fallback-skipped] tab=${req.params.tabId} newest jsonl ${newest.sessionId} ` +
-              `is active (mainSession=${isMainSession}, recentWrite=${isRecentlyWritten}, lsof=${isFileHeld}) - starting fresh`
-            )
-            const freshId = randomUUID()
-            resolvedSessionId = freshId
-            if (store.updateTabMetadata) {
-              store.updateTabMetadata(req.params.id, req.params.tabId, { claudeSessionId: freshId })
-            }
-            sessionController.setClaudeSessionId(req.params.id, req.params.tabId, freshId, { resetTurnCount: true })
-            console.log(
-              `[history:fallback-skipped] tab=${req.params.tabId} assigned fresh sessionId=${freshId}`
-            )
-          } else {
-            resolvedPath = newest.path
-            resolvedSessionId = newest.sessionId
-            fallback = true
-            if (resolvedSessionId !== sessionId) {
-              syncResolvedSession(req.params.id, req.params.tabId, resolvedSessionId)
-            }
-            console.log(`[history:fallback] tab=${req.params.tabId} using newest jsonl: ${resolvedSessionId}`)
-          }
-        }
-      } else {
-        console.log(`[history:fallback-skipped] tab=${req.params.tabId} auto-resume disabled, returning empty history`)
+    const resolution = resolveSessionJsonl({ store, home, project, tab })
+    let { resolvedPath, resolvedSessionId, fallback } = resolution
+
+    if (resolution.skipped) {
+      console.log(
+        `[history:fallback-skipped] tab=${req.params.tabId} newest jsonl is active - starting fresh`
+      )
+      if (store.updateTabMetadata) {
+        store.updateTabMetadata(req.params.id, req.params.tabId, { claudeSessionId: resolution.freshSessionId })
       }
+      sessionController.setClaudeSessionId(req.params.id, req.params.tabId, resolution.freshSessionId, { resetTurnCount: true })
+      console.log(
+        `[history:fallback-skipped] tab=${req.params.tabId} assigned fresh sessionId=${resolution.freshSessionId}`
+      )
+    } else if (resolvedPath && resolvedSessionId !== tab.claudeSessionId) {
+      syncResolvedSession(req.params.id, req.params.tabId, resolvedSessionId)
+      console.log(`[history:fallback] tab=${req.params.tabId} using newest jsonl: ${resolvedSessionId}`)
+    } else if (!resolvedPath) {
+      console.log(`[history:fallback-skipped] tab=${req.params.tabId} auto-resume disabled or no jsonl, returning empty history`)
     }
 
     if (!resolvedPath) {
