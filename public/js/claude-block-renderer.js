@@ -248,9 +248,10 @@ function getSubagentPromptVisible() {
 function setSubagentPromptVisible(val) {
   localStorage.setItem(SUBAGENT_PROMPT_KEY, val ? 'true' : 'false')
   // Apply immediately to all existing subagent-prompt blocks.
-  // Visibility only — fold state follows the global tool-fold setting.
+  // Prompt blocks keep data-fold='full' so the body is always readable when visible.
   document.querySelectorAll('.cbr-block-subagent-prompt').forEach((el) => {
     el.style.display = val ? '' : 'none'
+    el.setAttribute('data-fold', 'full')
   })
   document.dispatchEvent(new CustomEvent('cbr:subagent-prompt-changed', { detail: { visible: val } }))
 }
