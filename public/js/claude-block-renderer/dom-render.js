@@ -389,8 +389,14 @@ export function createToolUseBlock({
 
   bindToolFoldCycle(article, { cycleToolFold, getToolFoldLevel })
 
-  // All tool blocks (including subagent-prompt) follow the global fold setting.
-  applyToolFold(article)
+  // Subagent-prompt blocks must always show the full prompt body by default
+  // (the content the user sent TO the subagent). They must NOT be collapsed by
+  // the global tool-fold setting, otherwise the prompt toggle appears broken.
+  if (isSubagentPrompt) {
+    article.setAttribute('data-fold', 'full')
+  } else {
+    applyToolFold(article)
+  }
   attachCopyHandlers(article)
   return article
 }
