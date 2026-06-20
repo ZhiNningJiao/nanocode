@@ -1684,6 +1684,12 @@ export class ClaudeBlockRenderer {
     const textPart = msg && Array.isArray(msg.content)
       ? msg.content.find((p) => p.type === 'text')
       : null
+    // Track whether we had a live block BEFORE finalizing it.
+    // During history replay no streaming has happened, so _liveAssistantBlock is null.
+    // In that case the text part must be rendered in the loop below — it was never
+    // placed into a live block. During live streaming (hadLiveBlock=true) the text
+    // is already inside the finalized live block, so we skip it in the loop.
+    const hadLiveBlock = !!this._liveAssistantBlock
     if (this._liveAssistantBlock) {
       this._finalizeLiveAssistantBlock(textPart ? textPart.text : null)
     }
@@ -1704,8 +1710,10 @@ export class ClaudeBlockRenderer {
     if (!msg || !Array.isArray(msg.content)) return
 
     for (const part of msg.content) {
-      // The text part was already rendered into the finalized live block above.
-      if (part === textPart) continue
+      // Skip the text part only when it was already rendered into the finalized live
+      // streaming block (hadLiveBlock=true). During history replay there is no live
+      // block, so the text part falls through to _renderContentPart like any other part.
+      if (part === textPart && hadLiveBlock) continue
       this._renderContentPart(part, /* live= */ false)
     }
   }
