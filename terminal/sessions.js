@@ -15,6 +15,13 @@ const OUTPUT_FLUSH_MS = 12
 const SCROLLBACK_SIZE = 100 * 1024 // 100KB
 const SCROLLBACK_FLUSH_MS = 5000
 
+let _pluginHost = null
+
+/** Allow Core to inject the plugin host so raw output can flow to plugins. */
+export function setPluginHost(pluginHost) {
+  _pluginHost = pluginHost
+}
+
 /**
  * Circular buffer for raw terminal output; replay on reconnect.
  * Optionally persisted to disk so the visual state survives a worker
@@ -221,6 +228,9 @@ class Session {
     for (const ws of this._clients) {
       if (ws.readyState === 1) ws.send(msg)
     }
+    // Feed raw output into the plugin event bus so plugins such as TTS can
+    // react to the terminal output stream without touching Core internals.
+    if (_pluginHost) try { _pluginHost.emit('agent:output', data) } catch {}
   }
 
   /**

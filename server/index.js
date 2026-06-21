@@ -15,23 +15,24 @@ import { createTerminalRoutes } from '../terminal/routes.js'
 import { createFileRoutes } from '../terminal/files.js'
 import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete } from './qa-watcher.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
+import { createPluginHost, loadPlugins } from './plugin-host.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
-// TTS failures (fetch timeout, connection refused, bad response, stream errors)
-// must NEVER crash the server or cause an unhandledRejection that kills the
-// process. These handlers are the final safety net.
+// Plugin/network failures (fetch timeout, connection refused, bad response,
+// stream errors) must NEVER crash the server or cause an unhandledRejection
+// that kills the process. These handlers are the final safety net.
 //
 // Strategy: log + keep alive for ALL unhandled errors.
 // Rationale: Node.js exits on unhandledRejection by default (since v15).
 // In a single-user dev server like nanocode, any unhandled rejection
-// (even from a TTS side-channel) would kill the process and lose all session
+// (even from a plugin side-channel) would kill the process and lose all session
 // state. The only errors that *should* crash are EADDRINUSE / EACCES at startup
 // — those happen synchronously before these handlers can fire, so they still
-// surface as normal startup failures. Runtime errors (TTS, fetch, stream) are
-// all recoverable: we log them and continue serving.
+// surface as normal startup failures. Runtime errors (plugins, fetch, stream)
+// are all recoverable: we log them and continue serving.
 process.on('uncaughtException', (err, origin) => {
-  // Never exit — log and continue.  A TTS or network error must not kill the
-  // server and cause session-record loss.
+  // Never exit — log and continue.  A plugin or network error must not kill
+  // the server and cause session-record loss.
   console.error(`[CRITICAL] uncaughtException (${origin}):`, err?.message || err)
   console.error(err?.stack || '')
 })
@@ -115,6 +116,9 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(root, 'public')))
 
+// Serve plugin browser modules from `plugins/<name>/client.js`.
+app.use('/plugins', express.static(path.join(root, 'plugins')))
+
 const vendorOpts = { maxAge: '365d', immutable: true }
 const vendorMap = {
   '/vendor/xterm': path.join(root, 'node_modules/@xterm/xterm'),
@@ -133,12 +137,14 @@ store.migrateProjectsJson(path.join(root, 'terminal', 'projects.json'))
 store.ensureStarterProject()
 setNtfyStore(store)
 
+const pluginHost = createPluginHost({ app, store, broadcastNotify: (msg) => broadcastNotify(msg) })
+
 const {
   router: terminalRouter,
   handleTerminalWs,
   handleTabsWs,
   setAgentHealthMonitor,
-} = createTerminalRoutes(store)
+} = createTerminalRoutes(store, { pluginHost })
 
 // ─── Token auth middleware ─────────────────────────────────────────────────
 // Setting: nanocode_auth_token (string). Default '' = auth disabled.
@@ -170,6 +176,10 @@ app.use('/api', (req, res, next) => {
 
 app.use(terminalRouter)
 app.use(createFileRoutes(store))
+
+// Load enabled plugins after Core routes are mounted so plugins can register
+// additional /api routes and subscribe to the agent output event bus.
+await loadPlugins(pluginHost)
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' })
@@ -245,245 +255,6 @@ app.get('/api/auth/status', asyncWrap(async (_req, res) => {
     res.json(result)
   } catch (err) {
     res.status(500).json({ loggedIn: false, error: err.message })
-  }
-}))
-
-// ─── TTS proxy — forwards text to a local GPT-SoVITS v3 service ──────────
-
-const TTS_BASE = process.env.TTS_URL || 'http://127.0.0.1:9880'
-
-// ── P3: TTS circuit breaker ───────────────────────────────────────────────────
-// GPT-SoVITS宕机时每次都要等15s超时再503，严重拖慢队列。
-// Circuit breaker: 连续3次失败 → 30s内快速拒绝(open状态)，节省等待时间。
-// 状态机: closed(正常) → open(快速拒绝30s) → half-open(试探1次) → closed/open
-const TTS_CB = {
-  failures: 0,
-  threshold: 3,          // 连续失败N次后打开
-  cooldownMs: 30_000,    // open状态持续时间
-  openAt: 0,             // 上次打开时间戳 (0=closed)
-  isOpen() {
-    if (this.openAt === 0) return false
-    if (Date.now() - this.openAt > this.cooldownMs) {
-      // cooldown过了 → 进入half-open，允许一次试探
-      this.openAt = 0
-      return false
-    }
-    return true
-  },
-  recordSuccess() { this.failures = 0; this.openAt = 0 },
-  recordFailure() {
-    this.failures++
-    if (this.failures >= this.threshold) {
-      this.openAt = Date.now()
-      console.warn(`[TTS circuit] OPEN — ${this.failures} consecutive failures; fast-rejecting for ${this.cooldownMs / 1000}s`)
-    }
-  },
-}
-
-function getTtsConfig() {
-  const s = store.getAllSettings()
-  return {
-    ref_audio_path: s.tts_ref_audio || '/storage/home/zhiningjiao/code/GPT-SoVITS/ref_audio.wav',
-    prompt_text: s.tts_prompt_text || '这是猫娘秘书的声音喵，主人你好呀',
-    prompt_lang: s.tts_prompt_lang || 'zh',
-    text_lang: s.tts_text_lang || 'en',
-    media_type: s.tts_media_type || 'ogg',
-  }
-}
-
-// Serial queue for GPT-SoVITS (single-threaded inference, no concurrency)
-// Defense layer: every task is wrapped in its own try/catch so a single
-// failing task cannot corrupt the queue tail or produce an unhandled rejection
-// that escapes to the process level.
-let ttsQueueTail = Promise.resolve()
-function ttsSerialize(fn) {
-  // Wrap fn so that any thrown error is always caught and never escapes the
-  // queue chain.  The queue tail is always reset to a resolved promise so
-  // subsequent tasks are not blocked by a previous failure.
-  const safeFn = async () => {
-    try {
-      return await fn()
-    } catch (err) {
-      // Log but swallow — the individual handler already sent a 5xx response.
-      console.warn('[TTS queue] task error (swallowed to protect queue):', err?.message)
-    }
-  }
-  const p = ttsQueueTail.then(safeFn, safeFn)
-  ttsQueueTail = p.catch(() => {})
-  return p
-}
-
-// Non-streaming TTS — POST /tts, returns full audio (with retry)
-app.post('/api/tts', (req, res) => {
-  const { text } = req.body || {}
-  if (!text) return res.status(400).json({ error: 'text required' })
-  ttsSerialize(() => handleTts(req, res))
-})
-
-async function handleTts(req, res) {
-  // Outer try/catch: guarantee that NO exception can escape this function and
-  // become an unhandledRejection.  All error paths return a 5xx JSON response.
-  try {
-    // Circuit breaker: fast-reject when GPT-SoVITS is known-down
-    if (TTS_CB.isOpen()) {
-      const retryIn = Math.ceil((TTS_CB.cooldownMs - (Date.now() - TTS_CB.openAt)) / 1000)
-      if (!res.headersSent) res.status(503).json({ error: 'TTS circuit open — service down', retryAfter: retryIn })
-      return
-    }
-    const { text } = req.body || {}
-    const cfg = getTtsConfig()
-    const payload = {
-      text,
-      text_lang: cfg.text_lang,
-      ref_audio_path: cfg.ref_audio_path,
-      prompt_text: cfg.prompt_text,
-      prompt_lang: cfg.prompt_lang,
-      media_type: cfg.media_type,
-      streaming_mode: false,
-    }
-    const maxRetries = 2
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        // Timeout reduced to 15 s per attempt (was 60 s).  GPT-SoVITS should
-        // respond well within this window; a hung connection will be aborted
-        // before it blocks the queue indefinitely.
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(new Error('TTS fetch timeout (15s)')), 15000)
-        let ttsRes
-        try {
-          ttsRes = await fetch(`${TTS_BASE}/tts`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-          })
-        } finally {
-          clearTimeout(timeoutId)
-        }
-        if (!ttsRes.ok) {
-          const detail = await ttsRes.text().catch(() => '')
-          console.warn(`[TTS] attempt ${attempt}: service returned ${ttsRes.status}`, detail.slice(0, 200))
-          if (attempt < maxRetries) continue
-          TTS_CB.recordFailure()
-          if (!res.headersSent) {
-            return res.status(502).json({ error: `TTS service returned ${ttsRes.status}`, detail: detail.slice(0, 200) })
-          }
-          return
-        }
-        TTS_CB.recordSuccess()
-        res.set('Content-Type', ttsRes.headers.get('content-type') || `audio/${cfg.media_type}`)
-        const arrayBuf = await ttsRes.arrayBuffer()
-        if (!res.headersSent) res.send(Buffer.from(arrayBuf))
-        return
-      } catch (err) {
-        console.warn(`[TTS] attempt ${attempt}: ${err.message}`)
-        if (attempt < maxRetries) continue
-        TTS_CB.recordFailure()
-        if (!res.headersSent) {
-          res.status(503).json({ error: 'TTS service unavailable', detail: err.message })
-        }
-      }
-    }
-  } catch (outerErr) {
-    // Absolute last resort: something threw outside the retry loop.
-    console.error('[TTS] handleTts unexpected error:', outerErr?.message, outerErr?.stack)
-    try {
-      if (!res.headersSent) res.status(500).json({ error: 'TTS internal error', detail: outerErr?.message })
-    } catch { /* res already gone — ignore */ }
-  }
-}
-
-// Streaming TTS — proxies chunked audio from GPT-SoVITS GET /tts endpoint
-app.get('/api/tts/stream', asyncWrap(async (req, res) => {
-  // Outer try/catch: guarantee NO exception escapes to process level.
-  try {
-    const { text } = req.query
-    if (!text) return res.status(400).json({ error: 'text required' })
-    // Circuit breaker fast-reject
-    if (TTS_CB.isOpen()) {
-      const retryIn = Math.ceil((TTS_CB.cooldownMs - (Date.now() - TTS_CB.openAt)) / 1000)
-      return res.status(503).json({ error: 'TTS circuit open — service down', retryAfter: retryIn })
-    }
-    const cfg = getTtsConfig()
-    const params = new URLSearchParams({
-      text,
-      text_lang: cfg.text_lang,
-      ref_audio_path: cfg.ref_audio_path,
-      prompt_text: cfg.prompt_text,
-      prompt_lang: cfg.prompt_lang,
-      media_type: cfg.media_type,
-      streaming_mode: 'true',
-    })
-    // AbortController shared between the fetch timeout and the req.close handler
-    const controller = new AbortController()
-    // 15 s timeout for the initial connection to GPT-SoVITS
-    const timeoutId = setTimeout(() => controller.abort(new Error('TTS stream connect timeout (15s)')), 15000)
-    let ttsRes
-    try {
-      ttsRes = await fetch(`${TTS_BASE}/tts?${params}`, { signal: controller.signal })
-    } finally {
-      clearTimeout(timeoutId)
-    }
-    if (!ttsRes.ok) {
-      if (!res.headersSent) return res.status(502).json({ error: `TTS service returned ${ttsRes.status}` })
-      return
-    }
-    res.set('Content-Type', ttsRes.headers.get('content-type') || `audio/${cfg.media_type}`)
-    res.set('Transfer-Encoding', 'chunked')
-    const reader = ttsRes.body.getReader()
-    // Cancel the upstream reader if the client disconnects
-    req.on('close', () => { try { reader.cancel() } catch {} })
-    const pump = async () => {
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) { if (!res.writableEnded) res.end(); return }
-          if (res.writableEnded) { try { reader.cancel() } catch {}; return }
-          if (!res.write(value)) {
-            await new Promise(resolve => res.once('drain', resolve))
-          }
-        }
-      } catch (pumpErr) {
-        // Stream read error (client disconnect, upstream closed unexpectedly, etc.)
-        // Log and close cleanly — never let this escape as an unhandled rejection.
-        console.warn('[TTS stream] pump error (safe):', pumpErr?.message)
-        try { if (!res.writableEnded) res.end() } catch {}
-      }
-    }
-    pump()  // intentionally not awaited; errors are caught inside pump()
-  } catch (err) {
-    // Catch-all for fetch errors, timeout aborts, and any other synchronous throws
-    console.warn('[TTS stream] error:', err?.message)
-    try {
-      if (!res.headersSent) res.status(503).json({ error: 'TTS service unavailable', detail: err?.message })
-      else if (!res.writableEnded) res.end()
-    } catch { /* res already gone */ }
-  }
-}))
-
-// Voice reference configuration
-app.post('/api/tts/voice', asyncWrap(async (req, res) => {
-  const { ref_audio_path, prompt_text, prompt_lang } = req.body || {}
-  if (!ref_audio_path) return res.status(400).json({ error: 'ref_audio_path required' })
-  try {
-    const params = new URLSearchParams({ refer_audio_path: ref_audio_path })
-    const r = await fetch(`${TTS_BASE}/set_refer_audio?${params}`)
-    if (!r.ok) return res.status(502).json({ error: `set_refer_audio returned ${r.status}` })
-    store.setSetting('tts_ref_audio', ref_audio_path)
-    if (prompt_text) store.setSetting('tts_prompt_text', prompt_text)
-    if (prompt_lang) store.setSetting('tts_prompt_lang', prompt_lang)
-    res.json({ ok: true })
-  } catch (err) {
-    res.status(503).json({ error: 'TTS service unavailable', detail: err.message })
-  }
-}))
-
-app.get('/api/tts/status', asyncWrap(async (_req, res) => {
-  try {
-    const r = await fetch(`${TTS_BASE}/tts`, { signal: AbortSignal.timeout(2000) })
-    res.json({ available: true, config: getTtsConfig() })
-  } catch {
-    res.json({ available: false, config: getTtsConfig() })
   }
 }))
 

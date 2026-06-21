@@ -9,7 +9,7 @@ import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
 
-export function createClaudeSessionController({ store, home, recentAgents }) {
+export function createClaudeSessionController({ store, home, recentAgents, pluginHost }) {
   const IS_WIN = platform() === 'win32'
   const SHELL = IS_WIN
     ? (process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe')
@@ -207,6 +207,9 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     for (const client of cs.clients) {
       if (client.readyState === 1) try { client.send(msg) } catch {}
     }
+    // Feed raw output into the plugin event bus so plugins such as TTS can
+    // react to the agent output stream without touching Core internals.
+    if (pluginHost) try { pluginHost.emit('agent:output', text) } catch {}
   }
 
   function codexBroadcastEvent(cs, event) {
