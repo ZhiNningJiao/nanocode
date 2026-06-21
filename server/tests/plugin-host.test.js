@@ -18,6 +18,9 @@ describe('plugin-host', () => {
     app = express()
     app.use(express.json())
     store = createStore(':memory:')
+    // Keep the monitor plugin from auto-loading in these generic host tests;
+    // its fs.watch/interval collectors would prevent the runner from exiting.
+    store.setSetting('plugin_monitor_enabled', false)
     notifyMessages.length = 0
     host = createPluginHost({ app, store, broadcastNotify: (msg) => notifyMessages.push(msg) })
   })

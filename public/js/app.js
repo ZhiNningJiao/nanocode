@@ -1315,6 +1315,12 @@ async function init() {
     await loadClientPlugins(pluginUiHost)
     const pluginPanel = document.getElementById('plugin-settings-panel')
     if (pluginPanel) pluginUiHost.renderSettings(pluginPanel)
+    // Mount any full panels registered by client plugins.
+    pluginUiHost.renderPanels(
+      document.getElementById('panel-tab-strip'),
+      document.getElementById('plugin-panels'),
+      document.querySelector('.terminal-layout'),
+    )
   } catch (err) { console.warn('[app] plugin load failed:', err) }
 
   const backBtn = document.getElementById('back-to-menu')

@@ -8,6 +8,7 @@
  * Extension points:
  *   - Local events: ui.on(event, cb) / ui.emit(event, payload)
  *   - Settings UI:  ui.registerSetting({ id, render(container) })
+ *   - Full panel:   ui.registerPanel(id, { title, render(container) })
  *   - Server messages: ui.onMessage(cb) — receives notify-WS payloads whose
  *     type starts with "plugin:".
  *   - REST settings: ui.fetchSettings() / ui.updateSetting(key, value)
@@ -26,6 +27,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
   const localEmitter = new EventTarget()
   const messageCallbacks = new Set()
   const settingSlots = new Set()
+  const panels = new Map()
   let _notifyWs = notifyWs
 
   function on(event, cb) {
@@ -78,6 +80,72 @@ export function createPluginUiHost({ notifyWs } = {}) {
   }
 
   /**
+   * Register a full panel that Core renders as a top-level tab.  The render
+   * function receives a container element and populates it; Core owns the tab
+   * strip and switching logic so plugins never touch the layout skeleton.
+   */
+  function registerPanel(id, def) {
+    if (!id || !def || typeof def.render !== 'function') {
+      throw new Error('registerPanel: id and render() required')
+    }
+    panels.set(id, { title: def.title || id, render: def.render })
+  }
+
+  /**
+   * Render all registered panels into the given tab strip + panel container.
+   * A "Terminal" tab is always present; plugin panels are appended after it.
+   * `terminalLayout` is hidden when a plugin panel is active.
+   */
+  function renderPanels(tabStrip, panelContainer, terminalLayout) {
+    if (!tabStrip || !panelContainer) return
+    tabStrip.innerHTML = ''
+    panelContainer.innerHTML = ''
+
+    if (panels.size === 0) {
+      tabStrip.hidden = true
+      panelContainer.hidden = true
+      if (terminalLayout) terminalLayout.hidden = false
+      return
+    }
+
+    const panelEls = new Map()
+
+    function showPanel(id) {
+      if (terminalLayout) terminalLayout.hidden = (id !== '_terminal')
+      for (const [pid, el] of panelEls) el.classList.toggle('active', pid === id)
+      for (const btn of tabStrip.children) {
+        btn.classList.toggle('active', btn.dataset.panel === id)
+      }
+    }
+
+    function makeTab(label, id) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'panel-tab'
+      btn.textContent = label
+      btn.dataset.panel = id
+      btn.addEventListener('click', () => showPanel(id))
+      return btn
+    }
+
+    tabStrip.appendChild(makeTab('Terminal', '_terminal'))
+
+    for (const [id, panelDef] of panels) {
+      tabStrip.appendChild(makeTab(panelDef.title, id))
+      const el = document.createElement('div')
+      el.className = 'plugin-panel'
+      el.dataset.panel = id
+      panelContainer.appendChild(el)
+      try { panelDef.render(el) } catch (err) { console.warn('[plugin-ui] panel render error:', err) }
+      panelEls.set(id, el)
+    }
+
+    tabStrip.hidden = false
+    panelContainer.hidden = false
+    showPanel('_terminal')
+  }
+
+  /**
    * Attach to the notify WebSocket so plugin server messages can flow to
    * ui.onMessage callbacks.  Safe to call multiple times; idempotent.
    */
@@ -105,6 +173,8 @@ export function createPluginUiHost({ notifyWs } = {}) {
     onMessage,
     registerSetting,
     renderSettings,
+    registerPanel,
+    renderPanels,
     attachNotifyWs,
     fetchSettings,
     updateSetting,
