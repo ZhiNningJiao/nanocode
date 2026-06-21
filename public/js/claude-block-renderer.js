@@ -1684,8 +1684,16 @@ export class ClaudeBlockRenderer {
     const textPart = msg && Array.isArray(msg.content)
       ? msg.content.find((p) => p.type === 'text')
       : null
-    if (this._liveAssistantBlock) {
-      this._finalizeLiveAssistantBlock(textPart ? textPart.text : null)
+    if (textPart) {
+      if (this._liveAssistantBlock) {
+        this._finalizeLiveAssistantBlock(textPart.text)
+      } else {
+        // History replay (or any non-streaming assistant event) has no live
+        // block to finalize, so render the text part as a normal block.
+        this._renderTextPart(textPart.text, false)
+      }
+    } else if (this._liveAssistantBlock) {
+      this._finalizeLiveAssistantBlock(null)
     }
     this._liveAssistantId = null
 
