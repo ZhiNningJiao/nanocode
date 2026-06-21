@@ -2034,6 +2034,14 @@ body.workspace-active .landing-overlay { display: none; }
   body.mobile-pane-left .pane-left { display: flex; }
   body.mobile-pane-right .pane-right { display: flex; }
 
+  /* Fleet (monitor plugin panel) replaces the terminal split on mobile. */
+  body.mobile-pane-fleet .split-container { display: none; }
+  body.mobile-pane-fleet .chat-input-bar { display: none; }
+  body.mobile-pane-fleet .plugin-panels { display: flex; flex: 1; }
+  body.mobile-pane-fleet .terminal-layout { flex: 0 0 auto; }
+  body.mobile-pane-fleet .pane-left,
+  body.mobile-pane-fleet .pane-right { display: none; }
+
   .touch-toolbar { display: flex; }
 
   .preview-md { font-size: 14px; }

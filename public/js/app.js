@@ -1252,7 +1252,7 @@ async function enterWorkspace(projectId) {
   renderSidebar()
   if (!workspaceReady) {
     workspaceReady = true
-    await initTerminalView(projectId)
+    await initTerminalView(projectId, pluginUiHost)
   } else {
     switchTerminalProject(projectId)
     if (isInitialized()) fitTerminals()
@@ -1315,11 +1315,30 @@ async function init() {
     await loadClientPlugins(pluginUiHost)
     const pluginPanel = document.getElementById('plugin-settings-panel')
     if (pluginPanel) pluginUiHost.renderSettings(pluginPanel)
-    // Mount any full panels registered by client plugins.
+    // Mount any full panels registered by client plugins. Keep the mobile
+    // bottom switcher in sync: Terminal maps to the left (terminal) pane and
+    // any plugin panel maps to the Fleet pane.
     pluginUiHost.renderPanels(
       document.getElementById('panel-tab-strip'),
       document.getElementById('plugin-panels'),
       document.querySelector('.terminal-layout'),
+      {
+        onShowPanel: (id) => {
+          const switchEl = document.getElementById('mobile-pane-switch')
+          if (!switchEl) return
+          if (id === '_terminal') {
+            document.body.classList.remove('mobile-pane-fleet')
+            document.body.classList.add('mobile-pane-left')
+          } else {
+            document.body.classList.remove('mobile-pane-left', 'mobile-pane-right')
+            document.body.classList.add('mobile-pane-fleet')
+          }
+          const expected = id === '_terminal' ? 'left' : 'fleet'
+          switchEl.querySelectorAll('.mobile-pane-btn').forEach((b) => {
+            b.classList.toggle('active', b.dataset.pane === expected)
+          })
+        },
+      }
     )
   } catch (err) { console.warn('[app] plugin load failed:', err) }
 
