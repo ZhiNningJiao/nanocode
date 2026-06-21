@@ -17,7 +17,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 const TMUX_BIN = process.env.NANOCODE_TMUX_BIN || '/usr/bin/tmux'
 const SOCKET_DIR = process.env.NANOCODE_TMUX_SOCKET_DIR || `${process.env.HOME}/.nanocode/tmux-sessions`
-const BRIDGE_SCRIPT = new URL('./claude-tmux-bridge.mjs', import.meta.url).pathname
+const BRIDGE_SCRIPT = process.env.NANOCODE_TMUX_BRIDGE_SCRIPT || new URL('./claude-tmux-bridge.mjs', import.meta.url).pathname
 
 function getClaudeCodeExecutableOverride() {
   const value = process.env.NANOCODE_CLAUDE_CODE_EXECUTABLE
@@ -104,7 +104,7 @@ function launchBridge(sessionKey, opts) {
     '-d',
     '-s', name,
     '-n', 'nanocode-claude',
-    'exec', 'node', BRIDGE_SCRIPT,
+    'node', BRIDGE_SCRIPT,
     ...formatArg('--socket', socketPath),
     ...formatArg('--session-key', sessionKey),
     ...formatArg('--session-id', opts.sessionId || randomUUID()),
