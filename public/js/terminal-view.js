@@ -42,7 +42,7 @@ function setStatus(connected) {
  * Initialize the terminal view for a given project.
  * @param {string} projectId
  */
-export async function initTerminalView(projectId) {
+export async function initTerminalView(projectId, pluginUiHost = null) {
   if (!projectId) return
   currentProjectId = projectId
 
@@ -53,7 +53,7 @@ export async function initTerminalView(projectId) {
     setupExplorer(projectId)
     setupChatInput()
     setupKeyboardShortcuts()
-    setupMobile()
+    setupMobile(pluginUiHost)
   } else {
     if (tabManager) tabManager.switchProject(projectId)
     if (explorer) explorer.switchProject(projectId)
@@ -1737,17 +1737,34 @@ function setupKeyboardShortcuts() {
   })
 }
 
-function setupMobile() {
-  // Mobile pane switcher — buttons toggle between left (terminal) and right (explorer).
+function setupMobile(pluginUiHost = null) {
+  // Mobile pane switcher — buttons toggle between left (terminal), right
+  // (explorer), and, when the monitor plugin is enabled, fleet (Fleet panel).
   const switchEl = document.getElementById('mobile-pane-switch')
   if (switchEl) {
+    // Inject the Fleet button only when the plugin has registered the panel.
+    if (pluginUiHost?.hasPanel?.('monitor') && !switchEl.querySelector('[data-pane="fleet"]')) {
+      const fleetBtn = document.createElement('button')
+      fleetBtn.type = 'button'
+      fleetBtn.className = 'mobile-pane-btn'
+      fleetBtn.dataset.pane = 'fleet'
+      fleetBtn.textContent = 'Fleet'
+      switchEl.appendChild(fleetBtn)
+    }
+
     function setMobilePane(pane) {
       document.body.classList.toggle('mobile-pane-left', pane === 'left')
       document.body.classList.toggle('mobile-pane-right', pane === 'right')
+      document.body.classList.toggle('mobile-pane-fleet', pane === 'fleet')
       switchEl.querySelectorAll('.mobile-pane-btn').forEach((b) => {
         b.classList.toggle('active', b.dataset.pane === pane)
       })
-      if (pane === 'left') fitTerminals()
+      if (pane === 'fleet') {
+        if (pluginUiHost?.showPanel) pluginUiHost.showPanel('monitor')
+      } else {
+        if (pluginUiHost?.showPanel) pluginUiHost.showPanel('_terminal')
+        if (pane === 'left') fitTerminals()
+      }
     }
     switchEl.addEventListener('click', (e) => {
       const btn = e.target.closest('.mobile-pane-btn')
@@ -1759,7 +1776,7 @@ function setupMobile() {
     mobileQuery.addEventListener('change', () => {
       if (isMobile()) setMobilePane('left')
       else {
-        document.body.classList.remove('mobile-pane-left', 'mobile-pane-right')
+        document.body.classList.remove('mobile-pane-left', 'mobile-pane-right', 'mobile-pane-fleet')
       }
     })
   }

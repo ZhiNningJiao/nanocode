@@ -94,9 +94,19 @@ export function createPluginUiHost({ notifyWs } = {}) {
   /**
    * Render all registered panels into the given tab strip + panel container.
    * A "Terminal" tab is always present; plugin panels are appended after it.
-   * `terminalLayout` is hidden when a plugin panel is active.
+   * `terminalLayout` is hidden when a plugin panel is active, and the panel
+   * container is hidden when Terminal is active so the two views are never
+   * stacked/split.
+   *
+   * @param {HTMLElement} tabStrip
+   * @param {HTMLElement} panelContainer
+   * @param {HTMLElement} [terminalLayout]
+   * @param {object} [opts]
+   * @param {function(string)} [opts.onShowPanel]  called whenever the active panel changes
    */
-  function renderPanels(tabStrip, panelContainer, terminalLayout) {
+  let _showPanel = null
+
+  function renderPanels(tabStrip, panelContainer, terminalLayout, opts = {}) {
     if (!tabStrip || !panelContainer) return
     tabStrip.innerHTML = ''
     panelContainer.innerHTML = ''
@@ -105,6 +115,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
       tabStrip.hidden = true
       panelContainer.hidden = true
       if (terminalLayout) terminalLayout.hidden = false
+      _showPanel = null
       return
     }
 
@@ -112,11 +123,19 @@ export function createPluginUiHost({ notifyWs } = {}) {
 
     function showPanel(id) {
       if (terminalLayout) terminalLayout.hidden = (id !== '_terminal')
+      // Keep the plugin-panels container out of the layout when Terminal is
+      // active so the main area never splits between Terminal and an empty
+      // plugin panel slot.
+      panelContainer.hidden = (id === '_terminal')
       for (const [pid, el] of panelEls) el.classList.toggle('active', pid === id)
       for (const btn of tabStrip.children) {
         btn.classList.toggle('active', btn.dataset.panel === id)
       }
+      if (typeof opts.onShowPanel === 'function') {
+        try { opts.onShowPanel(id) } catch (err) { console.warn('[plugin-ui] onShowPanel error:', err) }
+      }
     }
+    _showPanel = showPanel
 
     function makeTab(label, id) {
       const btn = document.createElement('button')
@@ -167,6 +186,14 @@ export function createPluginUiHost({ notifyWs } = {}) {
     }
   }
 
+  function showPanel(id) {
+    if (_showPanel) _showPanel(id)
+  }
+
+  function hasPanel(id) {
+    return panels.has(id)
+  }
+
   return {
     on,
     emit,
@@ -175,6 +202,8 @@ export function createPluginUiHost({ notifyWs } = {}) {
     renderSettings,
     registerPanel,
     renderPanels,
+    showPanel,
+    hasPanel,
     attachNotifyWs,
     fetchSettings,
     updateSetting,
