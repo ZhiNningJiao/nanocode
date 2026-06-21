@@ -511,6 +511,7 @@ function loadSettings(serverSettings) {
   loadClaudeModelSettings(serverSettings)
   loadCodexModelSettings(serverSettings)
   loadClaudeEffortSettings(serverSettings)
+  loadClaudeCacheTtlSettings(serverSettings)
   loadGlobalPermissionModeSettings(serverSettings)
   loadLangSelect()
 }
@@ -918,6 +919,14 @@ function loadClaudeEffortSettings(serverSettings) {
   if (sel) sel.value = serverSettings?.claude_effort || ''
 }
 
+function loadClaudeCacheTtlSettings(serverSettings) {
+  const mode = serverSettings?.claude_cache_ttl || '5m'
+  const radios = document.querySelectorAll('input[name="claude-cache-ttl"]')
+  for (const radio of radios) {
+    radio.checked = radio.value === mode
+  }
+}
+
 const claudeModelSaveBtn = document.getElementById('claude-model-save-btn')
 if (claudeModelSaveBtn) {
   claudeModelSaveBtn.addEventListener('click', async () => {
@@ -947,6 +956,28 @@ if (claudeEffortSaveBtn) {
     const statusEl = document.getElementById('claude-effort-status')
     try {
       await updateSetting('claude_effort', sel?.value || '')
+      if (statusEl) {
+        statusEl.textContent = 'Saved'
+        statusEl.className = 'settings-status success'
+        setTimeout(() => { statusEl.textContent = '' }, 2500)
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = err.message
+        statusEl.className = 'settings-status error'
+        setTimeout(() => { statusEl.textContent = '' }, 3000)
+      }
+    }
+  })
+}
+
+const claudeCacheTtlSaveBtn = document.getElementById('claude-cache-ttl-save-btn')
+if (claudeCacheTtlSaveBtn) {
+  claudeCacheTtlSaveBtn.addEventListener('click', async () => {
+    const selected = document.querySelector('input[name="claude-cache-ttl"]:checked')
+    const statusEl = document.getElementById('claude-cache-ttl-status')
+    try {
+      await updateSetting('claude_cache_ttl', selected?.value || '5m')
       if (statusEl) {
         statusEl.textContent = 'Saved'
         statusEl.className = 'settings-status success'

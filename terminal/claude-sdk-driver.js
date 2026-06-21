@@ -35,6 +35,20 @@ function resolvePermissionMode(store) {
   return 'bypassPermissions'
 }
 
+// Resolve the SDK betas array for extended cache TTL.
+// The Claude Agent SDK does not expose a top-level cache_ttl option; it does
+// accept a `betas` array and forwards it to the Claude Code CLI as
+// `--betas <comma-list>`. The `extended-cache-ttl-2025-04-11` flag opts the
+// session into the 1-hour ephemeral cache TTL. When the user selects the 5
+// minute TTL we omit the flag (SDK/CLI default).
+function resolveCacheTtlBetas(store) {
+  const cacheTtl = store.getSetting('claude_cache_ttl')
+  if (cacheTtl === '1h') {
+    return ['extended-cache-ttl-2025-04-11']
+  }
+  return undefined
+}
+
 // When a force interrupt is requested we ask the SDK to stop the current turn
 // via q.interrupt().  If the SDK does not settle the turn within this window
 // (unresponsive interrupt — the exact failure that locks the user out), we
@@ -350,6 +364,7 @@ export function createClaudeSdkDriver({
     const claudeEffort = store.getSetting('claude_effort') || ''
     const sessionFallback = store.getSetting('claude_session_fallback') || 'continue'
     const sdkPermissionMode = resolvePermissionMode(store)
+    const sdkBetas = resolveCacheTtlBetas(store)
     const useResumeOnFirstTurn = !isFirstTurn || cs.explicitSessionId
     const sessionOptions = useResumeOnFirstTurn
       ? { resume: cs.claudeSessionId }
@@ -374,6 +389,7 @@ export function createClaudeSdkDriver({
           ...(executableOverride ? { pathToClaudeCodeExecutable: executableOverride } : {}),
           permissionMode: sdkPermissionMode,
           allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
+          ...(sdkBetas ? { betas: sdkBetas } : {}),
           stderr: (text) => {
             const trimmed = typeof text === 'string' ? text.trim() : ''
             if (!trimmed) return
@@ -515,6 +531,7 @@ export function createClaudeSdkDriver({
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
     const sdkPermissionMode = resolvePermissionMode(store)
+    const sdkBetas = resolveCacheTtlBetas(store)
     const isFirstTurn = cs.turnCount === 0
     const useResumeOnFirstTurn = !isFirstTurn || cs.explicitSessionId
     const sessionOptions = useResumeOnFirstTurn
@@ -530,6 +547,7 @@ export function createClaudeSdkDriver({
       ...(executableOverride ? { pathToClaudeCodeExecutable: executableOverride } : {}),
       permissionMode: sdkPermissionMode,
       allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
+      ...(sdkBetas ? { betas: sdkBetas } : {}),
       stderr: (text) => {
         const trimmed = typeof text === 'string' ? text.trim() : ''
         if (!trimmed) return
