@@ -16,7 +16,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 const TMUX_BIN = process.env.NANOCODE_TMUX_BIN || '/usr/bin/tmux'
-const SOCKET_DIR = `${process.env.HOME}/.nanocode/tmux-sessions`
+const SOCKET_DIR = process.env.NANOCODE_TMUX_SOCKET_DIR || `${process.env.HOME}/.nanocode/tmux-sessions`
 const BRIDGE_SCRIPT = new URL('./claude-tmux-bridge.mjs', import.meta.url).pathname
 
 function getClaudeCodeExecutableOverride() {
