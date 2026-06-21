@@ -273,6 +273,11 @@ function getBridgeClient(sessionKey, opts) {
   if (!client) {
     client = new TmuxBridgeClient(sessionKey, opts)
     bridgeClients.set(sessionKey, client)
+  } else {
+    // The client outlives individual run() calls and even nanocode restarts.
+    // Always wire it to the current cs/state so session-id callbacks and
+    // launch parameters remain fresh on reconnect.
+    client.opts = { ...client.opts, ...opts }
   }
   return client
 }
