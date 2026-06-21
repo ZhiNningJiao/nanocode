@@ -323,6 +323,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
 
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
+    const cacheTtl = store.getSetting('claude_cache_ttl') || ''
     const globalPerm = store.getSetting('global_permission') || 'full-auto'
     const tabLabel = cs.tabLabel || ''
 
@@ -345,6 +346,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
 
     if (claudeModel) launchArgs.push('--model', claudeModel)
     if (claudeEffort) launchArgs.push('--effort', claudeEffort)
+    if (cacheTtl === '1h') launchArgs.push('--betas', 'extended-cache-ttl-2025-04-11')
     if (tabLabel) launchArgs.push('--name', tabLabel)
 
     launchArgs.push('--')
@@ -507,6 +509,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
 
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
+    const cacheTtl = store.getSetting('claude_cache_ttl') || ''
     const globalPerm = store.getSetting('global_permission') || 'full-auto'
     const tabLabel = cs.tabLabel || ''
 
@@ -528,6 +531,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
 
     if (claudeModel) launchArgs.push('--model', claudeModel)
     if (claudeEffort) launchArgs.push('--effort', claudeEffort)
+    if (cacheTtl === '1h') launchArgs.push('--betas', 'extended-cache-ttl-2025-04-11')
     if (tabLabel) launchArgs.push('--name', tabLabel)
 
     launchArgs.push(sessionArg)

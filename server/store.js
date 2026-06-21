@@ -14,7 +14,14 @@ import { randomUUID } from 'crypto'
 const TAB_TYPES = new Set(['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw'])
 
 function emptyData() {
-  return { projects: [], settings: {}, tabs: {} }
+  return {
+    projects: [],
+    settings: {
+      // Default Claude cache TTL to 5 minutes. Users can switch to 1h in settings.
+      claude_cache_ttl: '5m',
+    },
+    tabs: {},
+  }
 }
 
 export function createStore(filePath = ':memory:') {

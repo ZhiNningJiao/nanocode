@@ -46,6 +46,7 @@ describe('store', () => {
 
     assert.equal(store.getSetting('theme'), 'dark')
     assert.deepEqual(store.getAllSettings(), {
+      claude_cache_ttl: '5m',
       theme: 'dark',
       font_size: 14,
     })

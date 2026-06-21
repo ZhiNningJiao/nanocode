@@ -295,6 +295,19 @@ describe('claude sdk driver', () => {
     assert.equal(opts.allowDangerouslySkipPermissions, false)
   })
 
+  // ── Claude cache TTL beta mapping ───────────────────────────────────────────
+  it('omits extended-cache-ttl beta when claude_cache_ttl is 5m or unset', async () => {
+    const opts5m = await runWithPermission({ claude_cache_ttl: '5m' })
+    assert.deepEqual(opts5m.betas, undefined)
+    const optsUnset = await runWithPermission({})
+    assert.deepEqual(optsUnset.betas, undefined)
+  })
+
+  it('adds extended-cache-ttl beta when claude_cache_ttl is 1h', async () => {
+    const opts = await runWithPermission({ claude_cache_ttl: '1h' })
+    assert.deepEqual(opts.betas, ['extended-cache-ttl-2025-04-11'])
+  })
+
   // ── SDK-wrapped result error suppression (model_not_found / rate_limit etc.) ──
   // When the SDK throws "Claude Code returned an error result: <reason>" (non-resume-miss),
   // the driver must NOT fall back to CLI. The result event was already broadcast, so the

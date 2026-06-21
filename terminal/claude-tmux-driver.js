@@ -115,6 +115,7 @@ function launchBridge(sessionKey, opts) {
   if (opts.explicitSessionId) args.push('--explicit-session-id')
   if (opts.model) args.push(...formatArg('--model', opts.model))
   if (opts.effort) args.push(...formatArg('--effort', opts.effort))
+  if (opts.cacheTtl) args.push(...formatArg('--cache-ttl', opts.cacheTtl))
   if (opts.permissionMode) args.push(...formatArg('--permission-mode', opts.permissionMode))
   if (opts.sessionFallback) args.push(...formatArg('--session-fallback', opts.sessionFallback))
   if (opts.executableOverride) args.push(...formatArg('--executable', opts.executableOverride))
@@ -285,6 +286,7 @@ function buildOptions(cs, cwd, store) {
     cwd,
     model: store.getSetting('claude_model') || undefined,
     effort: store.getSetting('claude_effort') || undefined,
+    cacheTtl: store.getSetting('claude_cache_ttl') || undefined,
     permissionMode: resolvePermissionMode(store),
     sessionFallback: store.getSetting('claude_session_fallback') || undefined,
     executableOverride: getClaudeCodeExecutableOverride() || undefined,

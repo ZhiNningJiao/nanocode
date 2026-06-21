@@ -229,6 +229,19 @@
               </div>
             </div>
 
+            <!-- Cache TTL selector -->
+            <div class="settings-subsection">
+              <div class="settings-label-row"><span data-i18n="settings.cachettl.label">Cache TTL</span> <span class="settings-hint-inline" data-i18n="settings.cachettl.hint">Takes effect on next session</span></div>
+              <div class="settings-radio-group" id="claude-cache-ttl-group">
+                <label class="settings-radio-label"><input type="radio" name="claude-cache-ttl" value="5m" checked /> <span data-i18n="settings.cachettl.5m">5 minutes — write 1.25× / read 0.1×</span></label>
+                <label class="settings-radio-label"><input type="radio" name="claude-cache-ttl" value="1h" /> <span data-i18n="settings.cachettl.1h">1 hour — write 2× / read 0.1×</span></label>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="btn btn-primary" id="claude-cache-ttl-save-btn" data-i18n="btn.save">Save</button>
+                <span class="settings-status" id="claude-cache-ttl-status"></span>
+              </div>
+            </div>
+
             <!-- Global Permission mode (drives both Claude and Codex) -->
             <div class="settings-subsection">
               <div class="settings-label-row"><span data-i18n="settings.permission.label">Permission Mode</span> <span class="settings-hint-inline" data-i18n="settings.permission.hint">Applies to both Claude and Codex. Takes effect on next session.</span></div>
