@@ -141,6 +141,25 @@ registers its control):
 When disabled, the plugin is not imported on the server and its client-side UI is
 not injected, so its feature completely disappears.
 
+## Plugin-local configuration (example: monitor)
+
+Plugins may read an optional, gitignored `config.json` for secrets that should
+not be committed or stored in the global settings database.  The monitor plugin
+uses this precedence:
+
+1. `plugins/monitor/config.json` → `linearApiKey`
+2. host setting `linear_api_key` (set through the settings UI)
+3. neither → Linear collection degrades gracefully; local health still shows
+
+`plugins/monitor/config.example.json` is the safe template to copy:
+
+```bash
+cp plugins/monitor/config.example.json plugins/monitor/config.json
+# edit plugins/monitor/config.json with your key
+```
+
+`config.json` is already in `.gitignore` and must never be committed.
+
 ## Design rules for future plugins
 
 1. **Core stays small.**  Do not add feature-specific routes or UI to Core.

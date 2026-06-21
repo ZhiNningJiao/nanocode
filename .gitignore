@@ -19,3 +19,4 @@ nanocode-*.log
 server-*.log
 run-*.log
 round*.png
+plugins/monitor/config.json
