@@ -240,7 +240,7 @@ process.on('SIGINT', shutdown)
 // Adapter: the existing terminal/files routes expect a `store` object with
 // the methods of server/store.js — projects, tabs, settings, etc. Map the
 // DataStore (one JSON file per user) to that interface.
-const TAB_TYPES = new Set(['bash', 'claude', 'codex', 'agent', 'opencode'])
+const TAB_TYPES = new Set(['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw'])
 
 function createStoreAdapter(dataStore) {
   function load() { return dataStore.load() }
