@@ -5,6 +5,9 @@
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
+import { writeFileSync, unlinkSync, mkdtempSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { createPluginHost, loadPlugins } from '../plugin-host.js'
 import { createStore } from '../store.js'
 
@@ -51,6 +54,30 @@ describe('monitor-plugin helpers', () => {
       'yellow',
     )
   })
+
+  it('loads local config from a JSON file', async () => {
+    const { loadLocalConfig } = await import('../../plugins/monitor/server.js')
+    const dir = mkdtempSync(join(tmpdir(), 'monitor-config-'))
+    const path = join(dir, 'config.json')
+    writeFileSync(path, JSON.stringify({ linearApiKey: 'lin_api_test' }), 'utf8')
+    try {
+      const cfg = loadLocalConfig(path)
+      assert.equal(cfg.linearApiKey, 'lin_api_test')
+      assert.deepEqual(loadLocalConfig(join(dir, 'missing.json')), {})
+    } finally {
+      try { unlinkSync(path) } catch {}
+    }
+  })
+
+  it('resolves Linear API key with config file precedence over host setting', async () => {
+    const { resolveLinearApiKey } = await import('../../plugins/monitor/server.js')
+    const host = { getSetting: (k) => (k === 'linear_api_key' ? 'from_host' : null) }
+
+    assert.equal(resolveLinearApiKey({ linearApiKey: 'from_file' }, host), 'from_file')
+    assert.equal(resolveLinearApiKey({}, host), 'from_host')
+    assert.equal(resolveLinearApiKey(null, host), 'from_host')
+    assert.equal(resolveLinearApiKey({}, { getSetting: () => null }), null)
+  })
 })
 
 describe('monitor-plugin host integration', () => {
@@ -60,6 +87,9 @@ describe('monitor-plugin host integration', () => {
   const notifyMessages = []
 
   beforeEach(() => {
+    // Prevent host-integration tests from reading the real local config and
+    // making live Linear network calls.
+    process.env.MONITOR_CONFIG_PATH = join(tmpdir(), 'monitor-config-missing-' + Date.now() + '.json')
     app = express()
     app.use(express.json())
     store = createStore(':memory:')

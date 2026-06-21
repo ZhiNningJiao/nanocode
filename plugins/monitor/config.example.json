@@ -1,0 +1,4 @@
+{
+  "linearApiKey": "",
+  "_comment": "复制本文件为 config.json 并填入 Linear API key。config.json 已 gitignore,不会被 push。"
+}

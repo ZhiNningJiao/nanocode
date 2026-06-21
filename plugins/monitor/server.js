@@ -24,6 +24,31 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const LANES_PATH = join(__dirname, 'lanes.json')
+const CONFIG_PATH = join(__dirname, 'config.json')
+
+/**
+ * Load the optional local config file (plugins/monitor/config.json).  It is
+ * gitignored and must never be committed.  Values here take precedence over
+ * settings stored via the host settings API so that secrets can live outside
+ * the repository and outside the persisted settings store.
+ *
+ * The path can be overridden via `process.env.MONITOR_CONFIG_PATH` so tests
+ * can run without reading the real local config or issuing network calls.
+ */
+export function loadLocalConfig(path = process.env.MONITOR_CONFIG_PATH || CONFIG_PATH) {
+  try {
+    if (!existsSync(path)) return {}
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch (err) {
+    console.warn('[monitor] failed to load local config:', err.message)
+    return {}
+  }
+}
+
+/** Resolve the Linear API key with the documented precedence. Exported for tests. */
+export function resolveLinearApiKey(localConfig, host) {
+  return localConfig?.linearApiKey || host?.getSetting?.('linear_api_key') || null
+}
 
 /** Active collectors so tests can tear down the plugin without killing the process. */
 const activeTimers = []
@@ -102,9 +127,13 @@ export function computeHealth(local, thresholds = {}) {
 }
 
 export function register(host) {
-  // The API key is stored as a setting of type 'secret' (client UI renders it
-  // as a password field).  It is never hardcoded, never persisted elsewhere,
-  // and never sent to Linear as part of any query body.
+  // The Linear API key can be supplied in two ways, in order of precedence:
+  //   1. plugins/monitor/config.json (gitignored local file, never committed)
+  //   2. The 'linear_api_key' setting registered below (set through the UI)
+  // If neither is present, Linear-side collection gracefully degrades to null
+  // and the panel still shows local worktree health.  The key is never
+  // hardcoded in source, never sent to Linear as part of any query body beyond
+  // the Authorization header, and never written into Linear comments.
   host.registerSetting({
     key: 'linear_api_key',
     type: 'secret',
@@ -246,22 +275,44 @@ export function register(host) {
   }
 
   const LINEAR_QUERY = `
-    query ($identifier: String!) {
-      issue(identifier: $identifier) {
-        id
-        identifier
-        title
-        state { name color }
-        description
-        subIssues { nodes { identifier state { name color } } }
-        comments(last: 1) { nodes { body createdAt user { displayName } } }
+    query ($team: String!, $number: Float!) {
+      issues(filter: { team: { key: { eq: $team } }, number: { eq: $number } }) {
+        nodes {
+          id
+          identifier
+          title
+          state { name color }
+          description
+          children { nodes { identifier state { name color } } }
+          comments(last: 1) { nodes { body createdAt user { displayName } } }
+        }
       }
     }
   `
 
+  /**
+   * Parse a Linear identifier like "MES-13256" into { team, number }.
+   * Returns null if the identifier does not match the expected TEAM-NUMBER shape.
+   */
+  function parseLinearIdentifier(identifier) {
+    const m = String(identifier || '').match(/^([A-Za-z]+)-(\d+)$/)
+    if (!m) return null
+    return { team: m[1], number: parseInt(m[2], 10) }
+  }
+
+  const localConfig = loadLocalConfig()
+
   async function fetchLinear(lane) {
-    const apiKey = host.getSetting('linear_api_key')
+    // API key resolution order: 1) local gitignored config file, 2) host
+    // setting (set through the settings UI), 3) no key → gracefully degrade.
+    const apiKey = resolveLinearApiKey(localConfig, host)
     if (!apiKey) return null
+
+    const parsed = parseLinearIdentifier(lane.issue)
+    if (!parsed) {
+      console.warn(`[monitor] invalid Linear identifier: ${lane.issue}`)
+      return null
+    }
 
     try {
       const res = await fetch('https://api.linear.app/graphql', {
@@ -270,16 +321,16 @@ export function register(host) {
           'Content-Type': 'application/json',
           Authorization: apiKey,
         },
-        body: JSON.stringify({ query: LINEAR_QUERY, variables: { identifier: lane.issue } }),
+        body: JSON.stringify({ query: LINEAR_QUERY, variables: parsed }),
         signal: AbortSignal.timeout(10000),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
-      const issue = json?.data?.issue
+      const issue = json?.data?.issues?.nodes?.[0]
       if (!issue) return null
 
       const milestone = computeMilestonePercent(issue.description)
-      const sub = issue.subIssues?.nodes || []
+      const sub = issue.children?.nodes || []
       const completed = sub.filter((s) => {
         const name = s.state?.name?.toLowerCase() || ''
         return name === 'done' || name === 'canceled'
