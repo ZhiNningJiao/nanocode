@@ -49,6 +49,17 @@ function resolveCacheTtlBetas(store) {
   return undefined
 }
 
+// Resolve the Anthropic API cache_control object from the nanocode setting.
+// Mirrors the two supported TTL tiers (5m / 1h) shown in the settings UI and
+// is attached to every SDK query so the API receives the requested TTL.
+function resolveCacheControl(store) {
+  const cacheTtl = store.getSetting('claude_cache_ttl')
+  if (cacheTtl === '5m' || cacheTtl === '1h') {
+    return { type: 'ephemeral', ttl: cacheTtl }
+  }
+  return undefined
+}
+
 // When a force interrupt is requested we ask the SDK to stop the current turn
 // via q.interrupt().  If the SDK does not settle the turn within this window
 // (unresponsive interrupt — the exact failure that locks the user out), we
@@ -365,6 +376,7 @@ export function createClaudeSdkDriver({
     const sessionFallback = store.getSetting('claude_session_fallback') || 'continue'
     const sdkPermissionMode = resolvePermissionMode(store)
     const sdkBetas = resolveCacheTtlBetas(store)
+    const sdkCacheControl = resolveCacheControl(store)
     const useResumeOnFirstTurn = !isFirstTurn || cs.explicitSessionId
     const sessionOptions = useResumeOnFirstTurn
       ? { resume: cs.claudeSessionId }
@@ -390,6 +402,7 @@ export function createClaudeSdkDriver({
           permissionMode: sdkPermissionMode,
           allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
           ...(sdkBetas ? { betas: sdkBetas } : {}),
+          ...(sdkCacheControl ? { cache_control: sdkCacheControl } : {}),
           stderr: (text) => {
             const trimmed = typeof text === 'string' ? text.trim() : ''
             if (!trimmed) return
@@ -532,6 +545,7 @@ export function createClaudeSdkDriver({
     const claudeEffort = store.getSetting('claude_effort') || ''
     const sdkPermissionMode = resolvePermissionMode(store)
     const sdkBetas = resolveCacheTtlBetas(store)
+    const sdkCacheControl = resolveCacheControl(store)
     const isFirstTurn = cs.turnCount === 0
     const useResumeOnFirstTurn = !isFirstTurn || cs.explicitSessionId
     const sessionOptions = useResumeOnFirstTurn
@@ -548,6 +562,7 @@ export function createClaudeSdkDriver({
       permissionMode: sdkPermissionMode,
       allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
       ...(sdkBetas ? { betas: sdkBetas } : {}),
+      ...(sdkCacheControl ? { cache_control: sdkCacheControl } : {}),
       stderr: (text) => {
         const trimmed = typeof text === 'string' ? text.trim() : ''
         if (!trimmed) return
