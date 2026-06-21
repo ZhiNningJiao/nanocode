@@ -24,7 +24,9 @@ enabled.
 
 ## Extension points (host API)
 
-Core exposes three extension points.  The TTS plugin exercises all of them.
+Core exposes three server-side extension points plus two client-side UI
+extension points.  The TTS plugin exercises the server points plus the
+settings/message UI points; the monitor plugin also uses `ui.registerPanel`.
 
 ### 1. Server event bus — `host.on(event, cb) / host.emit(event, payload)`
 
@@ -69,7 +71,29 @@ Plugins can mount Express routes under `/api`.  This is how TTS exposes its
 host.registerRoute('post', '/tts', async (req, res) => { ... })
 ```
 
-### 4. Client settings UI slot — `ui.registerSetting(def)`
+### 4. Client full panel — `ui.registerPanel(id, { title, render })`
+
+Plugins that need more than a settings subsection can register a complete top-
+level tab.  Core owns the tab strip and the panel container; the plugin only
+populates the panel body.
+
+```js
+// plugins/monitor/client.js
+export function register(ui) {
+  ui.registerPanel('monitor', {
+    title: 'Fleet',
+    render(container) {
+      // build the full dashboard inside `container`
+    },
+  })
+}
+```
+
+Core renders a "Terminal" tab plus one tab per registered panel.  Selecting a
+plugin tab hides the terminal layout and shows the plugin panel.  Disabling the
+plugin prevents its client module from loading, so the tab disappears.
+
+### 5. Client settings UI slot — `ui.registerSetting(def)`
 
 Browser plugins inject settings controls into the settings panel.  Core reserves
 a DOM container and each plugin appends its own subsection.
@@ -86,7 +110,7 @@ export function register(ui) {
 }
 ```
 
-### 5. Client message bus — `ui.onMessage(cb)`
+### 6. Client message bus — `ui.onMessage(cb)`
 
 Server plugins can push messages to the browser through the existing notify
 WebSocket.  The client host forwards messages whose `type` starts with

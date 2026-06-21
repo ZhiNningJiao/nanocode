@@ -10,6 +10,9 @@
  *   - Settings:  host.registerSetting(def) / host.getSetting(key) / host.setSetting(key, value)
  *   - Routes:    host.registerRoute(method, path, handler)
  *   - Notify:    host.broadcastNotify(payload)
+ *
+ * Plugins declare their client-side needs in plugin.json; Core's browser host
+ * exposes matching ui.* extension points (see public/js/plugin-host.js).
  */
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
@@ -133,7 +136,13 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
     }
 
     const enabledKey = `plugin_${name}_enabled`
-    const enabled = host.getSetting(enabledKey)
+    let enabled = host.getSetting(enabledKey)
+    // First time a plugin with enabledByDefault:true is seen, opt it in and
+    // persist the choice so it behaves consistently on subsequent restarts.
+    if (enabled == null && manifest.enabledByDefault) {
+      host.setSetting(enabledKey, true)
+      enabled = true
+    }
     if (!enabled) {
       console.log(`[plugin-host] plugin ${name} (${manifest.version || '?'}) disabled`)
       continue

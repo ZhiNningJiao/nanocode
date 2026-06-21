@@ -5157,3 +5157,203 @@ body.workspace-active .landing-overlay { display: none; }
 }
 .tab-health-dot.ah-warn { background: #d4a017; }
 .tab-health-dot.ah-err  { background: #e04040; box-shadow: 0 0 3px rgba(224,64,64,0.6); }
+
+/* -- Plugin panel tabs (ui.registerPanel) ------------------------- */
+
+.panel-tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 10px;
+  min-height: 34px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.panel-tab-strip::-webkit-scrollbar { display: none; }
+
+.panel-tab {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.panel-tab:hover { background: var(--bg-hover); color: var(--text); }
+.panel-tab.active { background: var(--bg-elevated); border-color: var(--border-active); color: var(--text); }
+
+.plugin-panels {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+.plugin-panel {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.plugin-panel.active { display: flex; }
+
+/* -- Monitor plugin --------------------------------------------- */
+
+.monitor-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.monitor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.monitor-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.monitor-count { font-size: 11px; color: var(--text-secondary); }
+
+.monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.monitor-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s;
+}
+.monitor-card:hover { border-color: var(--border-active); }
+
+.monitor-card.health-green { border-left: 3px solid #4caf50; }
+.monitor-card.health-yellow { border-left: 3px solid #fbc02d; }
+.monitor-card.health-red { border-left: 3px solid #e53935; }
+
+.monitor-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.monitor-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.monitor-health { font-size: 14px; }
+.monitor-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.monitor-actions button {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+.monitor-actions button:hover { background: var(--bg-hover); color: var(--text); }
+
+.monitor-issue-title {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.monitor-state {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.monitor-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.monitor-milestone { margin-top: 2px; }
+.monitor-milestone-track {
+  height: 6px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.monitor-milestone-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #8cc63f, #4caf50);
+  border-radius: 3px;
+  min-width: 2px;
+  transition: width 0.3s;
+}
+.monitor-milestone-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  text-align: right;
+}
+
+.monitor-local-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.monitor-log {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm, 6px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.monitor-comment {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  font-style: italic;
+}
+
+.monitor-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 20px;
+  text-align: center;
+}

@@ -447,6 +447,11 @@
       </aside>
 
       <div class="main-content">
+        <!-- Plugin panel tab strip.  Plugins register panels via ui.registerPanel();
+             Core owns the strip and switches between Terminal and plugin panels. -->
+        <nav class="panel-tab-strip" id="panel-tab-strip" hidden></nav>
+        <div class="plugin-panels" id="plugin-panels" hidden></div>
+
         <div class="terminal-layout">
           <div class="split-container" id="split-container">
             <div class="pane pane-left">

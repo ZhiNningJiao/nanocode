@@ -1,0 +1,29 @@
+{
+  "date": "2026-06-08",
+  "task": "nanocode_host_stuck_detect",
+  "bounded_commands": [
+    {
+      "cmd": "node --test server/tests/agent-health-monitor.test.js",
+      "status": "passed"
+    },
+    {
+      "cmd": "node --test server/tests/claude-sdk-driver.test.js",
+      "status": "passed"
+    },
+    {
+      "cmd": "node --test server/tests/codex-sdk-driver.test.js",
+      "status": "passed"
+    }
+  ],
+  "covered_states": [
+    "idle",
+    "active recovery",
+    "approval_needed",
+    "stuck",
+    "completed"
+  ],
+  "notes": [
+    "Host-level monitor is exercised with deterministic fake time, so no unbounded wait is needed.",
+    "A full npm test run was not used as final evidence because the repository's test runner can hang without emitting more TAP lines in this sandbox; bounded targeted tests were kept instead."
+  ]
+}

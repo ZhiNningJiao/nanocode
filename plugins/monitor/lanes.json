@@ -1,0 +1,37 @@
+[
+  {
+    "key": "k26",
+    "issue": "MES-13026",
+    "worktree": "wt-foot-ik",
+    "tmux": "loop-k26",
+    "markerPrefix": "k26"
+  },
+  {
+    "key": "k27",
+    "issue": "MES-13027",
+    "worktree": "wt-quad-blender",
+    "tmux": "loop-k27",
+    "markerPrefix": "k27"
+  },
+  {
+    "key": "k49",
+    "issue": "MES-13049",
+    "worktree": "wt-faceit",
+    "tmux": "loop-k49",
+    "markerPrefix": "k49"
+  },
+  {
+    "key": "k44",
+    "issue": "MES-13144",
+    "worktree": "wt-ccalign",
+    "tmux": "loop-k44",
+    "markerPrefix": "k44"
+  },
+  {
+    "key": "ncplugin",
+    "issue": "MES-13256",
+    "worktree": "nanocode2",
+    "tmux": "loop-ncplugin",
+    "markerPrefix": "ncplugin"
+  }
+]
