@@ -13,11 +13,12 @@ import { createRecentAgentsService } from './recent-agents.js'
 /**
  * Create terminal routes backed by the given store.
  */
-export function createTerminalRoutes(store) {
+export function createTerminalRoutes(store, { pluginHost } = {}) {
   const router = Router()
   const home = homedir()
   const recentAgents = createRecentAgentsService({ home })
-  const sessionController = createClaudeSessionController({ store, home, recentAgents })
+  const sessionController = createClaudeSessionController({ store, home, recentAgents, pluginHost })
+  if (pluginHost) sessions.setPluginHost(pluginHost)
   const historyService = createClaudeHistoryService({
     store,
     home,

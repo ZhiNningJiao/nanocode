@@ -1,0 +1,13 @@
+{
+  "name": "tts",
+  "version": "1.0.0",
+  "description": "Text-to-speech plugin using GPT-SoVITS. Extracts [TTS_START]...[TTS_END] from agent output and plays synthesized audio.",
+  "extensionPoints": [
+    "host.on",
+    "host.registerSetting",
+    "host.registerRoute",
+    "host.broadcastNotify",
+    "ui.registerSetting",
+    "ui.onMessage"
+  ]
+}

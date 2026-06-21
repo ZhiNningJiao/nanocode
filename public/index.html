@@ -417,34 +417,17 @@
               </div>
             </div>
 
-            <!-- TTS -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.tts.label">TTS (GPT-SoVITS)</span> <span class="settings-hint-inline"><span class="tts-status-dot" id="tts-status-dot"></span><span class="tts-status-text" id="tts-status-text"></span></span></div>
-              <div class="settings-toggle-row">
-                <label class="toggle-label"><input type="checkbox" id="tts-enabled" /> <span data-i18n="settings.tts.enabled">Enable TTS</span></label>
-              </div>
-              <div class="settings-toggle-row">
-                <label class="toggle-label"><input type="checkbox" id="tts-streaming" /> <span data-i18n="settings.tts.streaming">Streaming mode (low latency)</span></label>
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.tts.refaudio">Reference audio path</label>
-                <input type="text" id="tts-ref-audio" class="settings-input" placeholder="/path/to/voice.wav" />
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.tts.prompttext">Reference text</label>
-                <input type="text" id="tts-prompt-text" class="settings-input" placeholder="Reference audio transcript" />
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="tts-save-btn" data-i18n="btn.save">Save</button>
-                <button type="button" class="btn btn-secondary" id="tts-test-btn" data-i18n="btn.test">Test</button>
-                <span class="settings-status" id="tts-status"></span>
-              </div>
-              <details class="tts-log-details">
-                <summary class="tts-log-summary" data-i18n="settings.tts.debuglog">TTS Debug Log</summary>
-                <div class="tts-log-panel" id="tts-log-panel"></div>
-              </details>
-            </div>
             </div><!-- /settings-section-body[monitor] -->
+          </section>
+
+          <!-- ══ Plugins ══ -->
+          <section class="settings-section" data-section="plugins">
+            <h3 class="settings-section-title settings-group-title settings-section-toggle" data-target="plugins">
+              <span class="settings-section-label" data-i18n="settings.section.plugins">Plugins</span>
+              <span class="settings-section-chevron">&#9660;</span>
+            </h3>
+            <div class="settings-section-body" data-body="plugins" id="plugin-settings-panel">
+            </div>
           </section>
 
         </div>
@@ -652,7 +635,7 @@
 
     <script type="module" src="/js/i18n.js"></script>
     <script type="module" src="/js/app.js"></script>
-    <script type="module" src="/js/tts.js"></script>
+    <script type="module" src="/js/plugin-host.js"></script>
     <script type="module" src="/js/agent-health.js"></script>
   </body>
 </html>

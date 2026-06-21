@@ -18,6 +18,7 @@ import {
   getSubagentActivityVisible, setSubagentActivityVisible,
 } from './claude-block-renderer.js'
 import { initI18n, setLang, t } from './i18n.js'
+import { createPluginUiHost, loadClientPlugins } from './plugin-host.js'
 
 let workspaceReady = false
 
@@ -176,9 +177,12 @@ function showNotifyToast(msg, duration = 6000) {
   el._timer = setTimeout(() => { el.style.opacity = '0' }, duration)
 }
 
+const pluginUiHost = createPluginUiHost()
+
 function initNotifyWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const ws = new WebSocket(`${proto}//${location.host}/ws/notify`)
+  pluginUiHost.attachNotifyWs(ws)
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data)
@@ -1305,6 +1309,13 @@ async function init() {
     // codexRenderMode defaults to 'terminal' — only override if explicitly set
     if (settings.codexRenderMode) state.codexRenderMode = settings.codexRenderMode
   } catch {}
+
+  // Load enabled client plugins and render their settings UI into the plugins panel.
+  try {
+    await loadClientPlugins(pluginUiHost)
+    const pluginPanel = document.getElementById('plugin-settings-panel')
+    if (pluginPanel) pluginUiHost.renderSettings(pluginPanel)
+  } catch (err) { console.warn('[app] plugin load failed:', err) }
 
   const backBtn = document.getElementById('back-to-menu')
   if (backBtn) {
