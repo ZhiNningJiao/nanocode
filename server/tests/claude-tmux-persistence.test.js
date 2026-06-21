@@ -18,7 +18,51 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const TEST_DIR = join(tmpdir(), `ncp-${Date.now().toString(36)}-${process.pid}`)
+mkdirSync(TEST_DIR, { recursive: true })
+
+const FAKE_BRIDGE_SCRIPT = join(TEST_DIR, 'fake-bridge.mjs')
+const FAKE_BRIDGE_SOURCE = `import { createServer } from 'node:net'
+import { unlinkSync, writeFileSync } from 'node:fs'
+
+const args = {}
+for (let i = 2; i < process.argv.length; i++) {
+  const arg = process.argv[i]
+  if (arg === '--socket') args.socket = process.argv[++i]
+  else if (arg === '--session-id') args.sessionId = process.argv[++i]
+}
+const socketPath = args.socket || process.argv[2]
+const sessionId = args.sessionId || process.argv[3] || 'default-session'
+
+try { unlinkSync(socketPath) } catch {}
+try { unlinkSync(\`\${socketPath}.sessionId\`) } catch {}
+writeFileSync(\`\${socketPath}.sessionId\`, sessionId, { mode: 0o600 })
+
+const server = createServer((socket) => {
+  let buffer = ''
+  socket.on('data', (chunk) => {
+    buffer += chunk.toString('utf8')
+    const lines = buffer.split('\\n')
+    buffer = lines.pop()
+    for (const line of lines) {
+      if (!line.trim()) continue
+      let msg
+      try { msg = JSON.parse(line) } catch { continue }
+      if (msg.type === 'user') {
+        socket.write(JSON.stringify({ type: 'event', event: { type: 'system', subtype: 'init', session_id: sessionId, tools: [] } }) + '\\n')
+        socket.write(JSON.stringify({ type: 'event', event: { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ack ' + msg.text }] } } }) + '\\n')
+        socket.write(JSON.stringify({ type: 'turn-done', event: { type: 'result', subtype: 'success' } }) + '\\n')
+      } else if (msg.type === 'ping') {
+        socket.write(JSON.stringify({ type: 'pong', id: msg.id }) + '\\n')
+      }
+    }
+  })
+})
+server.listen(socketPath)
+`
+writeFileSync(FAKE_BRIDGE_SCRIPT, FAKE_BRIDGE_SOURCE, { mode: 0o755 })
+
 process.env.NANOCODE_TMUX_SOCKET_DIR = join(TEST_DIR, '.nanocode', 'tmux-sessions')
+process.env.NANOCODE_TMUX_BRIDGE_SCRIPT = FAKE_BRIDGE_SCRIPT
 
 const { createClaudeTmuxDriver } = await import('../../terminal/claude-tmux-driver.js')
 const TMUX_BIN = process.env.NANOCODE_TMUX_BIN || '/usr/bin/tmux'
@@ -55,40 +99,15 @@ function startFakeBridgeTmux(sessionKey, { sessionId = 'persistent-session-xyz' 
   try { unlinkSync(socketPath) } catch {}
   try { unlinkSync(`${socketPath}.sessionId`) } catch {}
 
-  const bridgeScript = join(TEST_DIR, 'fake-bridge.mjs')
-  writeFileSync(bridgeScript, `import { createServer } from 'node:net'
-import { unlinkSync } from 'node:fs'
-const socketPath = process.argv[2]
-const sessionId = process.argv[3] || 'persistent-session-xyz'
-try { unlinkSync(socketPath) } catch {}
-const server = createServer((socket) => {
-  let buffer = ''
-  socket.on('data', (chunk) => {
-    buffer += chunk.toString('utf8')
-    const lines = buffer.split('\\n')
-    buffer = lines.pop()
-    for (const line of lines) {
-      if (!line.trim()) continue
-      let msg
-      try { msg = JSON.parse(line) } catch { continue }
-      if (msg.type === 'user') {
-        socket.write(JSON.stringify({ type: 'event', event: { type: 'system', subtype: 'init', session_id: sessionId, tools: [] } }) + '\\n')
-        socket.write(JSON.stringify({ type: 'event', event: { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ack ' + msg.text }] } } }) + '\\n')
-        socket.write(JSON.stringify({ type: 'turn-done', event: { type: 'result', subtype: 'success' } }) + '\\n')
-      } else if (msg.type === 'ping') {
-        socket.write(JSON.stringify({ type: 'pong', id: msg.id }) + '\\n')
-      }
-    }
-  })
-})
-server.listen(socketPath)
-`, { mode: 0o755 })
+  // Restore the flag-parsing fake bridge script so it matches the arguments
+  // the driver passes when launching a fresh bridge.
+  writeFileSync(FAKE_BRIDGE_SCRIPT, FAKE_BRIDGE_SOURCE, { mode: 0o755 })
 
   if (tmuxSessionExists(name)) tmuxKillSession(name)
 
   const res = spawnSync(TMUX_BIN, [
     'new-session', '-d', '-s', name, '-n', 'nanocode-claude',
-    'node', bridgeScript, socketPath, sessionId,
+    'node', FAKE_BRIDGE_SCRIPT, '--socket', socketPath, '--session-id', sessionId,
   ], { stdio: 'pipe', encoding: 'utf8' })
   if (res.status !== 0) {
     throw new Error(`failed to start fake bridge tmux session: ${res.stderr || res.stdout || res.status}`)
@@ -234,6 +253,74 @@ describe('claude tmux session persistence', () => {
 
     await driver2.run(cs2, 'turn after restart', sessionKey, cwd)
     assert.equal(cs2.claudeSessionId, sessionId, 'new driver instance should recover the persisted session id')
+
+    tmuxKillSession(name)
+    try { unlinkSync(socketPath) } catch {}
+    try { unlinkSync(`${socketPath}.sessionId`) } catch {}
+  })
+
+  it('fresh launch creates one tmux session and reconnect reuses it', async () => {
+    const sessionKey = 'proj-launch:claude:tab-launch'
+    const name = `nanocode-${sessionKey.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80)}`
+    const socketPath = join(process.env.NANOCODE_TMUX_SOCKET_DIR, `${sessionKey.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80)}.sock`)
+    if (tmuxSessionExists(name)) tmuxKillSession(name)
+    try { unlinkSync(socketPath) } catch {}
+    try { unlinkSync(`${socketPath}.sessionId`) } catch {}
+
+    const sessionId = 'launched-session'
+    const driver = createClaudeTmuxDriver({
+      store: { getSetting: () => null, updateTabMetadata: () => {} },
+      claudeBroadcast: (cs, event) => {
+        if (event?.type === 'system' && event?.subtype === 'init' && event?.session_id) {
+          cs.claudeSessionId = event.session_id
+        }
+      },
+      rerunTurn: () => {},
+    })
+
+    const cwd = TEST_DIR
+    const cs1 = {
+      sessionKey,
+      claudeSessionId: sessionId,
+      busy: false,
+      turnCount: 0,
+      queue: [],
+      explicitSessionId: false,
+    }
+
+    try {
+      await driver.run(cs1, 'first turn', sessionKey, cwd)
+    } catch (err) {
+      console.error('DEBUG first run failed:', err?.message)
+      console.error('tmux session exists:', tmuxSessionExists(name))
+      const ls = spawnSync(TMUX_BIN, ['list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' })
+      console.error('tmux sessions:', ls.stdout, ls.stderr)
+      const capture = spawnSync(TMUX_BIN, ['capture-pane', '-t', name, '-p'], { encoding: 'utf8' })
+      console.error('tmux pane capture:', capture.stdout, capture.stderr)
+      const env = spawnSync(TMUX_BIN, ['show-environment', '-t', name], { encoding: 'utf8' })
+      console.error('tmux env:', env.stdout, env.stderr)
+      throw err
+    }
+    assert.equal(cs1.claudeSessionId, sessionId, 'fresh launch should adopt the bridge session id')
+    assert.equal(tmuxSessionExists(name), true, 'fresh launch should create the tmux session')
+
+    const sessionCountAfterFirst = countTmuxNewSessionCalls(name)
+
+    // Simulate a nanocode restart / reconnect: close the socket, keep tmux alive.
+    const internalClient = driver._getBridgeClient(sessionKey, {})
+    internalClient.close()
+
+    const cs2 = {
+      sessionKey,
+      claudeSessionId: 'stale-after-reconnect',
+      busy: false,
+      turnCount: 0,
+      queue: [],
+      explicitSessionId: true,
+    }
+    await driver.run(cs2, 'second turn', sessionKey, cwd)
+    assert.equal(cs2.claudeSessionId, sessionId, 'reconnect should resume the same session id')
+    assert.equal(countTmuxNewSessionCalls(name), sessionCountAfterFirst, 'reconnect should not create a second tmux session')
 
     tmuxKillSession(name)
     try { unlinkSync(socketPath) } catch {}
