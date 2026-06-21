@@ -5204,6 +5204,10 @@ body.workspace-active .landing-overlay { display: none; }
   background: var(--bg);
   overflow: hidden;
 }
+/* Fix: explicit display:flex above overrides the [hidden] default (display:none),
+   so the tab switch left Terminal + Fleet stacked (up/down split). Restore hide. */
+.plugin-panels[hidden] { display: none !important; }
+.terminal-layout[hidden] { display: none !important; }
 .plugin-panel {
   flex: 1;
   display: none;
