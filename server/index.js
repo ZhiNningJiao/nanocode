@@ -15,7 +15,7 @@ import { createTerminalRoutes } from '../terminal/routes.js'
 import { createFileRoutes } from '../terminal/files.js'
 import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete } from './qa-watcher.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
-import { createPluginHost, loadPlugins } from './plugin-host.js'
+import { createPluginHost, loadPlugins, discoverPlugins } from './plugin-host.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // Plugin/network failures (fetch timeout, connection refused, bad response,
@@ -222,6 +222,28 @@ app.put('/api/settings', (req, res) => {
   }
   store.setSetting(key, value)
   res.json({ ok: true })
+})
+
+// ─── Plugins ─────────────────────────────────────────────────────────────────
+// Plugin discovery + toggle.  Enabling/disabling a plugin writes the persisted
+// `plugin_<name>_enabled` setting; the change takes effect on the next page
+// load (client plugins) or server restart (server plugins).  Core avoids
+// runtime unload because plugins may have timers, file watchers, and open
+// sockets that are hard to tear down safely.
+
+app.get('/api/plugins', asyncWrap(async (_req, res) => {
+  const plugins = await discoverPlugins(pluginHost, { pluginsDir: path.join(root, 'plugins') })
+  res.json({ plugins })
+}))
+
+app.post('/api/plugins/toggle', (req, res) => {
+  const { name, enabled } = req.body || {}
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'name required' })
+  }
+  const key = `plugin_${name}_enabled`
+  store.setSetting(key, !!enabled)
+  res.json({ ok: true, name, enabled: !!enabled, needsReload: true })
 })
 
 // ─── Auth status (P1-4) ────────────────────────────────────────────────────
@@ -448,6 +470,7 @@ const terminalWss = new WebSocketServer({
 })
 const tabsWss = new WebSocketServer({ noServer: true })
 const notifyWss = new WebSocketServer({ noServer: true })
+const pluginWss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
   const parsed = new URL(req.url, `http://${req.headers.host}`)
@@ -462,6 +485,15 @@ server.on('upgrade', (req, socket, head) => {
       socket.destroy()
       return
     }
+  }
+
+  // Let plugins handle their own WebSocket paths first.
+  const pluginWs = pluginHost.getWebSocketHandler(pathname)
+  if (pluginWs) {
+    pluginWss.handleUpgrade(req, socket, head, (ws) => {
+      pluginWs.handler(ws, req)
+    })
+    return
   }
 
   if (pathname === '/ws/terminal') {
