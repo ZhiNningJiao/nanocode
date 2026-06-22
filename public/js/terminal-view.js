@@ -796,8 +796,25 @@ function setupChatInput() {
     }
   }
 
-  // Stop button click: POST interrupt to backend (2nd click escalates to force)
+  // Stop button: POST interrupt to backend (2nd click escalates to force).
+  // Bind both click and touch so mobile browsers (iOS Safari, Chrome) fire
+  // immediately instead of waiting for the delayed click. The _stopTouchHandled
+  // guard prevents doInterrupt() from running twice on the same tap.
+  let _stopTouchHandled = false
   stopBtn.addEventListener('click', () => {
+    if (_stopTouchHandled) {
+      _stopTouchHandled = false
+      return
+    }
+    doInterrupt()
+  })
+  stopBtn.addEventListener('touchstart', () => { _stopTouchHandled = false }, { passive: true })
+  stopBtn.addEventListener('touchmove', () => { _stopTouchHandled = true }, { passive: true })
+  stopBtn.addEventListener('touchend', (e) => {
+    if (_stopTouchHandled) return
+    _stopTouchHandled = true
+    // Suppress the delayed synthetic click that would re-trigger doInterrupt().
+    e.preventDefault()
     doInterrupt()
   })
 
