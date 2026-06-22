@@ -23,6 +23,17 @@ function truncate(s, n = 90) {
   return str.length > n ? str.slice(0, n) + '…' : str
 }
 
+function minutesAgo(iso) {
+  if (!iso) return '—'
+  const ts = new Date(iso).getTime()
+  if (Number.isNaN(ts)) return '—'
+  const m = Math.max(0, Math.round((Date.now() - ts) / 60000))
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  const r = m % 60
+  return r ? `${h}h ${r}m` : `${h}h`
+}
+
 export function register(ui) {
   // ── Settings slot for the Linear API key ───────────────────────────────────
   ui.registerSetting({
@@ -80,9 +91,14 @@ export function register(ui) {
           <span class="monitor-count" id="monitor-count"></span>
         </div>
         <div class="monitor-grid" id="monitor-grid"></div>
+
+        <div class="monitor-section-divider"></div>
+        <div class="monitor-section-label monitor-teams-label">Teams</div>
+        <div class="monitor-teams" id="monitor-teams"></div>
       `
 
       const grid = container.querySelector('#monitor-grid')
+      const teamsEl = container.querySelector('#monitor-teams')
       const countEl = container.querySelector('#monitor-count')
 
       function renderCard(lane) {
@@ -139,7 +155,7 @@ export function register(ui) {
         `
       }
 
-      function render(lanes) {
+      function renderLanes(lanes) {
         const list = Array.isArray(lanes) ? lanes : []
         if (countEl) countEl.textContent = `${list.length} lane${list.length === 1 ? '' : 's'}`
         if (!grid) return
@@ -173,16 +189,55 @@ export function register(ui) {
         })
       }
 
+      function renderTeam(team) {
+        const configured = team.configured
+        const rate = team.rateLimit || { emoji: '⚪', level: 'unknown', reason: '' }
+        const stateClass = configured ? `health-${rate.level}` : 'health-unknown'
+        const resetText = rate.resetAt
+          ? `<div class="monitor-team-reset">reset ${esc(new Date(rate.resetAt).toLocaleTimeString())}</div>`
+          : ''
+
+        return `
+          <div class="monitor-team-card ${stateClass}">
+            <div class="monitor-team-header">
+              <span class="monitor-team-name">${esc(team.name)}</span>
+              <span class="monitor-team-health" title="${esc(rate.reason || '')}">${rate.emoji}</span>
+            </div>
+            <div class="monitor-team-meta">
+              <span>instances: ${configured ? team.activeCount : '—'}</span>
+              <span>last activity: ${configured ? minutesAgo(team.lastActivity) : '—'}</span>
+            </div>
+            <div class="monitor-team-what">${configured ? esc(team.what || 'idle') : 'Team2 未配置'}</div>
+            ${resetText}
+          </div>
+        `
+      }
+
+      function renderTeams(teams) {
+        const list = Array.isArray(teams) ? teams : []
+        if (!teamsEl) return
+        if (!list.length) {
+          teamsEl.innerHTML = '<div class="monitor-empty">No teams configured.</div>'
+          return
+        }
+        teamsEl.innerHTML = list.map(renderTeam).join('')
+      }
+
+      function renderData(data) {
+        renderLanes(data?.lanes)
+        renderTeams(data?.teams)
+      }
+
       ui.onMessage((msg) => {
-        if (msg?.type === 'plugin:monitor:update') render(msg.lanes)
+        if (msg?.type === 'plugin:monitor:update') renderData(msg)
       })
 
       // Seed the UI immediately so the panel is populated before the first WS
       // message arrives.
       fetch('/api/monitor/snapshot')
         .then((r) => (r.ok ? r.json() : null))
-        .then((data) => { if (data?.lanes) render(data.lanes) })
-        .catch(() => render([]))
+        .then((data) => renderData(data))
+        .catch(() => renderData({ lanes: [], teams: [] }))
     },
   })
 }

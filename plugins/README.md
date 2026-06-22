@@ -160,6 +160,20 @@ cp plugins/monitor/config.example.json plugins/monitor/config.json
 
 `config.json` is already in `.gitignore` and must never be committed.
 
+### Teams view (MES-13271)
+
+The Fleet panel also shows a read-only "Teams" area that tracks two Claude
+config directories:
+
+- `~/.claude` → Team1 (coordination / patrol)
+- `~/.claude-team2` → Team2 (Opus assault)
+
+The plugin counts active `claude` processes, shows a short activity summary,
+parses recent non-credential logs for `rate-limit` / `usage-limit` / `429`
+signals, and degrades to "Team2 未配置" when the Team2 credentials file is
+missing.  Credentials are never read, forwarded to the browser, or written to
+Linear.
+
 ## Design rules for future plugins
 
 1. **Core stays small.**  Do not add feature-specific routes or UI to Core.
