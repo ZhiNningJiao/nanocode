@@ -43,6 +43,9 @@ export function createPluginHost({ app, store, broadcastNotify }) {
   /** @type {Set<string>} Names of successfully loaded plugins. */
   const loaded = new Set()
 
+  /** @type {Map<string, function>} WebSocket handlers registered by plugins. */
+  const wsHandlers = new Map()
+
   function getSetting(key) {
     return store.getSetting(key)
   }
@@ -85,16 +88,42 @@ export function createPluginHost({ app, store, broadcastNotify }) {
     emitter.emit(event, payload)
   }
 
+  /**
+   * Register a WebSocket upgrade handler for a plugin-owned path.
+   * Core checks these paths in the HTTP upgrade handler before its own WS endpoints.
+   *
+   * @param {string} path  exact path or prefix (e.g. '/ws/fleet-term')
+   * @param {function} handler  (ws, req) => void
+   */
+  function registerWebSocket(path, handler) {
+    if (!path || typeof handler !== 'function') {
+      throw new Error('registerWebSocket: path and handler required')
+    }
+    wsHandlers.set(path, handler)
+  }
+
+  function getWebSocketHandler(pathname) {
+    for (const [prefix, handler] of wsHandlers) {
+      if (pathname === prefix || pathname.startsWith(prefix + '/')) {
+        return { prefix, handler }
+      }
+    }
+    return null
+  }
+
   const host = {
     on,
     emit,
     registerSetting,
     registerRoute,
+    registerWebSocket,
     getSetting,
     setSetting,
     broadcastNotify,
     getAllSettingDefs: () => Array.from(settingDefs.values()),
+    getWebSocketHandler,
     _loaded: loaded,
+    _wsHandlers: wsHandlers,
   }
 
   return host
@@ -163,4 +192,53 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
   }
 
   return Array.from(host._loaded)
+}
+
+/**
+ * Discover all plugins under `plugins/<name>/plugin.json` without loading them.
+ *
+ * Returns metadata plus the current enabled state from settings (or the
+ * manifest's enabledByDefault when the setting has never been persisted).
+ *
+ * @param {object} host
+ * @param {object} opts
+ * @param {string} [opts.pluginsDir]
+ * @returns {Promise<Array<{name:string, version:string, description:string, enabledByDefault:boolean, enabled:boolean}>>}
+ */
+export async function discoverPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
+  const result = []
+  if (!existsSync(pluginsDir)) return result
+
+  const names = readdirSync(pluginsDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+
+  for (const name of names) {
+    const manifestPath = join(pluginsDir, name, 'plugin.json')
+    if (!existsSync(manifestPath)) continue
+
+    let manifest
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    } catch (err) {
+      console.warn(`[plugin-host] invalid manifest for ${name}:`, err?.message)
+      continue
+    }
+
+    const enabledKey = `plugin_${name}_enabled`
+    let enabled = host.getSetting(enabledKey)
+    if (enabled == null && manifest.enabledByDefault) {
+      enabled = true
+    }
+
+    result.push({
+      name,
+      version: manifest.version || '?',
+      description: manifest.description || '',
+      enabledByDefault: !!manifest.enabledByDefault,
+      enabled: !!enabled,
+    })
+  }
+
+  return result.sort((a, b) => a.name.localeCompare(b.name))
 }

@@ -194,6 +194,95 @@ export function createPluginUiHost({ notifyWs } = {}) {
     return panels.has(id)
   }
 
+  /**
+   * Render a plugin management UI into `container`.
+   * Expects container to be a DOM element.
+   */
+  async function renderPluginManager(container) {
+    container.innerHTML = '<div class="plugin-manager-loading">Loading plugins…</div>'
+
+    let plugins = []
+    try {
+      const res = await fetch('/api/plugins')
+      if (!res.ok) throw new Error((await res.text()) || 'fetch failed')
+      const data = await res.json()
+      plugins = data.plugins || []
+    } catch (err) {
+      container.innerHTML = `<div class="plugin-manager-error">Failed to load plugins: ${escapeHtml(String(err?.message || err))}</div>`
+      return
+    }
+
+    if (plugins.length === 0) {
+      container.innerHTML = '<div class="plugin-manager-empty">No plugins found.</div>'
+      return
+    }
+
+    const list = document.createElement('div')
+    list.className = 'plugin-manager-list'
+
+    plugins.forEach((plugin) => {
+      const row = document.createElement('div')
+      row.className = 'plugin-manager-row'
+      row.innerHTML = `
+        <div class="plugin-info">
+          <div class="plugin-name">${escapeHtml(plugin.name)} <span class="plugin-version">${escapeHtml(plugin.version)}</span></div>
+          <div class="plugin-description">${escapeHtml(plugin.description || 'No description')}</div>
+        </div>
+        <label class="plugin-toggle">
+          <input type="checkbox" data-plugin="${escapeHtml(plugin.name)}" ${plugin.enabled ? 'checked' : ''}>
+          <span>${plugin.enabled ? 'On' : 'Off'}</span>
+        </label>
+      `
+      list.appendChild(row)
+    })
+
+    container.innerHTML = '<h3>Plugins</h3><p class="plugin-manager-hint">Toggle plugins on or off. Changes take effect after reload.</p>'
+    container.appendChild(list)
+
+    list.addEventListener('change', async (e) => {
+      if (!e.target.matches('input[type="checkbox"]')) return
+      const name = e.target.dataset.plugin
+      const enabled = e.target.checked
+      const span = e.target.parentElement.querySelector('span')
+      span.textContent = enabled ? 'On' : 'Off'
+
+      try {
+        const res = await fetch('/api/plugins/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, enabled }),
+        })
+        if (!res.ok) throw new Error((await res.text()) || 'toggle failed')
+        showToast(`Plugin "${name}" ${enabled ? 'enabled' : 'disabled'}. Reload to apply.`)
+      } catch (err) {
+        showToast(`Failed to toggle ${name}: ${err?.message || err}`)
+        e.target.checked = !enabled
+        span.textContent = !enabled ? 'On' : 'Off'
+      }
+    })
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+  }
+
+  function showToast(message) {
+    // Prefer the host app's toast if available.
+    if (typeof window.showToast === 'function') {
+      window.showToast(message)
+      return
+    }
+    const toast = document.createElement('div')
+    toast.className = 'plugin-manager-toast'
+    toast.textContent = message
+    document.body.appendChild(toast)
+    setTimeout(() => toast.remove(), 3000)
+  }
+
   return {
     on,
     emit,
@@ -204,6 +293,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
     renderPanels,
     showPanel,
     hasPanel,
+    renderPluginManager,
     attachNotifyWs,
     fetchSettings,
     updateSetting,

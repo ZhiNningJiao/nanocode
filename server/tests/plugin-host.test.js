@@ -2,7 +2,7 @@
  * Tests for the server plugin host.
  */
 
-import { describe, it, beforeEach } from 'node:test'
+import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { createPluginHost, loadPlugins } from '../plugin-host.js'
@@ -23,6 +23,12 @@ describe('plugin-host', () => {
     store.setSetting('plugin_monitor_enabled', false)
     notifyMessages.length = 0
     host = createPluginHost({ app, store, broadcastNotify: (msg) => notifyMessages.push(msg) })
+  })
+
+  afterEach(() => {
+    // Give any enabled plugin (e.g. fleet-term) a chance to tear down timers and
+    // ptys so the test runner can exit cleanly.
+    try { host.emit('shutdown') } catch {}
   })
 
   it('emits events to registered listeners', () => {
