@@ -30,6 +30,20 @@ export function createPluginUiHost({ notifyWs } = {}) {
   const panels = new Map()
   let _notifyWs = notifyWs
 
+  /** @type {Map<string, { panels: Set<string>, settings: Set<string>, messages: Set<Function> }>} */
+  const pluginRegistry = new Map()
+
+  /** @type {Map<string, HTMLElement>} id -> panel element */
+  const panelEls = new Map()
+  /** @type {Map<string, HTMLElement>} id -> tab button */
+  const tabEls = new Map()
+  let _tabStrip = null
+  let _panelContainer = null
+  let _terminalLayout = null
+  let _renderPanelsOpts = {}
+  let _activePanelId = '_terminal'
+  let _showPanel = null
+
   function on(event, cb) {
     const handler = (e) => cb(e.detail)
     localEmitter.addEventListener(event, handler)
@@ -52,8 +66,8 @@ export function createPluginUiHost({ notifyWs } = {}) {
   }
 
   /**
-   * Register a settings UI slot.  The plugin returns a render function that
-   * receives a container element and populates it.
+   * Register a setting definition.  Core persists values; plugins read/write
+   * through getSetting/setSetting.
    */
   function registerSetting(def) {
     if (!def || !def.id || typeof def.render !== 'function') {
@@ -65,10 +79,15 @@ export function createPluginUiHost({ notifyWs } = {}) {
   /**
    * Render all registered settings slots into the given panel element.
    * Core calls this once the settings panel DOM is ready.
+   *
+   * Incremental: new slots are created, removed slots are cleaned up, existing
+   * slots are left in place so plugins don't lose state on re-render.
    */
   function renderSettings(panel) {
     if (!panel) return
+    const wantedIds = new Set()
     for (const def of settingSlots) {
+      wantedIds.add(def.id)
       let container = panel.querySelector(`[data-plugin-setting="${def.id}"]`)
       if (!container) {
         container = document.createElement('div')
@@ -77,6 +96,10 @@ export function createPluginUiHost({ notifyWs } = {}) {
       }
       try { def.render(container) } catch (err) { console.warn('[plugin-ui] render error:', err) }
     }
+    // Remove containers for slots that no longer exist (unloaded plugin).
+    panel.querySelectorAll('[data-plugin-setting]').forEach((el) => {
+      if (!wantedIds.has(el.dataset.pluginSetting)) el.remove()
+    })
   }
 
   /**
@@ -91,27 +114,28 @@ export function createPluginUiHost({ notifyWs } = {}) {
     panels.set(id, { title: def.title || id, render: def.render })
   }
 
+  function _setActivePanel(id) {
+    _activePanelId = id
+    if (_showPanel) _showPanel(id)
+  }
+
   /**
-   * Render all registered panels into the given tab strip + panel container.
+   * Render plugin panels into the tab strip + panel container.
    * A "Terminal" tab is always present; plugin panels are appended after it.
    * `terminalLayout` is hidden when a plugin panel is active, and the panel
-   * container is hidden when Terminal is active so the two views are never
-   * stacked/split.
+   * container is hidden when Terminal is active.
    *
-   * @param {HTMLElement} tabStrip
-   * @param {HTMLElement} panelContainer
-   * @param {HTMLElement} [terminalLayout]
-   * @param {object} [opts]
-   * @param {function(string)} [opts.onShowPanel]  called whenever the active panel changes
+   * This is incremental: calling it again only adds/removes panels that changed,
+   * preserving the DOM for panels that are already mounted.
    */
-  let _showPanel = null
-
   function renderPanels(tabStrip, panelContainer, terminalLayout, opts = {}) {
     if (!tabStrip || !panelContainer) return
-    tabStrip.innerHTML = ''
-    panelContainer.innerHTML = ''
+    _tabStrip = tabStrip
+    _panelContainer = panelContainer
+    _terminalLayout = terminalLayout
+    _renderPanelsOpts = opts
 
-    if (panels.size === 0) {
+    if (panels.size === 0 && tabEls.size === 0) {
       tabStrip.hidden = true
       panelContainer.hidden = true
       if (terminalLayout) terminalLayout.hidden = false
@@ -119,49 +143,165 @@ export function createPluginUiHost({ notifyWs } = {}) {
       return
     }
 
-    const panelEls = new Map()
+    tabStrip.hidden = false
+    panelContainer.hidden = false
 
     function showPanel(id) {
       if (terminalLayout) terminalLayout.hidden = (id !== '_terminal')
-      // Keep the plugin-panels container out of the layout when Terminal is
-      // active so the main area never splits between Terminal and an empty
-      // plugin panel slot.
       panelContainer.hidden = (id === '_terminal')
       for (const [pid, el] of panelEls) el.classList.toggle('active', pid === id)
-      for (const btn of tabStrip.children) {
-        btn.classList.toggle('active', btn.dataset.panel === id)
-      }
+      for (const btn of tabStrip.children) btn.classList.toggle('active', btn.dataset.panel === id)
       if (typeof opts.onShowPanel === 'function') {
         try { opts.onShowPanel(id) } catch (err) { console.warn('[plugin-ui] onShowPanel error:', err) }
       }
+      _activePanelId = id
     }
     _showPanel = showPanel
 
-    function makeTab(label, id) {
-      const btn = document.createElement('button')
-      btn.type = 'button'
-      btn.className = 'panel-tab'
-      btn.textContent = label
-      btn.dataset.panel = id
-      btn.addEventListener('click', () => showPanel(id))
-      return btn
+    // Ensure Terminal tab exists.
+    if (!tabEls.has('_terminal')) {
+      const btn = _makeTab('Terminal', '_terminal')
+      tabStrip.appendChild(btn)
+      tabEls.set('_terminal', btn)
     }
 
-    tabStrip.appendChild(makeTab('Terminal', '_terminal'))
-
+    // Add or keep plugin tabs/panels.
     for (const [id, panelDef] of panels) {
-      tabStrip.appendChild(makeTab(panelDef.title, id))
-      const el = document.createElement('div')
-      el.className = 'plugin-panel'
-      el.dataset.panel = id
-      panelContainer.appendChild(el)
-      try { panelDef.render(el) } catch (err) { console.warn('[plugin-ui] panel render error:', err) }
-      panelEls.set(id, el)
+      if (!tabEls.has(id)) {
+        const btn = _makeTab(panelDef.title, id)
+        tabStrip.appendChild(btn)
+        tabEls.set(id, btn)
+      }
+      if (!panelEls.has(id)) {
+        const el = document.createElement('div')
+        el.className = 'plugin-panel'
+        el.dataset.panel = id
+        panelContainer.appendChild(el)
+        try { panelDef.render(el) } catch (err) { console.warn('[plugin-ui] panel render error:', err) }
+        panelEls.set(id, el)
+      }
     }
 
-    tabStrip.hidden = false
-    panelContainer.hidden = false
-    showPanel('_terminal')
+    // Remove tabs/panels for plugins that are no longer registered.
+    for (const id of tabEls.keys()) {
+      if (id === '_terminal') continue
+      if (!panels.has(id)) {
+        tabEls.get(id)?.remove()
+        tabEls.delete(id)
+        panelEls.get(id)?.remove()
+        panelEls.delete(id)
+      }
+    }
+
+    // If the active panel was removed, fall back to Terminal.
+    if (_activePanelId !== '_terminal' && !panels.has(_activePanelId)) {
+      showPanel('_terminal')
+    } else {
+      showPanel(_activePanelId)
+    }
+  }
+
+  function _makeTab(label, id) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'panel-tab'
+    btn.textContent = label
+    btn.dataset.panel = id
+    btn.addEventListener('click', () => _setActivePanel(id))
+    return btn
+  }
+
+  function showPanel(id) {
+    _setActivePanel(id)
+  }
+
+  function hasPanel(id) {
+    return panels.has(id)
+  }
+
+  /**
+   * Build a per-plugin UI proxy so we know which panels/settings/message
+   * handlers belong to which plugin.  This lets us unload a plugin without
+   * reloading the page.
+   */
+  function _uiForPlugin(name) {
+    const registry = { panels: new Set(), settings: new Set(), messages: new Set() }
+    pluginRegistry.set(name, registry)
+
+    const wrapOnMessage = (cb) => {
+      registry.messages.add(cb)
+      return onMessage(cb)
+    }
+    const wrapRegisterPanel = (id, def) => {
+      registry.panels.add(id)
+      return registerPanel(id, def)
+    }
+    const wrapRegisterSetting = (def) => {
+      registry.settings.add(def.id)
+      return registerSetting(def)
+    }
+
+    return {
+      on,
+      emit,
+      onMessage: wrapOnMessage,
+      registerSetting: wrapRegisterSetting,
+      registerPanel: wrapRegisterPanel,
+      attachNotifyWs,
+      fetchSettings,
+      updateSetting,
+    }
+  }
+
+  /**
+   * Load a single client plugin by name.
+   */
+  async function loadClientPlugin(name) {
+    const mod = await import(`/plugins/${name}/client.js`)
+    if (typeof mod.register !== 'function') {
+      throw new Error(`${name}/client.js has no register() export`)
+    }
+    mod.register(_uiForPlugin(name))
+    console.log(`[plugin-ui] loaded client plugin ${name}`)
+  }
+
+  /**
+   * Unload a client plugin by name: remove its panels, settings slots, and
+   * message handlers.  The tab strip and settings panel are re-rendered
+   * incrementally.
+   */
+  function unloadClientPlugin(name) {
+    const registry = pluginRegistry.get(name)
+    if (!registry) return false
+
+    for (const id of registry.panels) {
+      panels.delete(id)
+      const el = panelEls.get(id)
+      if (el) {
+        el.remove()
+        panelEls.delete(id)
+      }
+      const tab = tabEls.get(id)
+      if (tab) {
+        tab.remove()
+        tabEls.delete(id)
+      }
+    }
+    for (const id of registry.settings) {
+      for (const def of settingSlots) {
+        if (def.id === id) {
+          settingSlots.delete(def)
+          break
+        }
+      }
+    }
+    for (const cb of registry.messages) messageCallbacks.delete(cb)
+    pluginRegistry.delete(name)
+
+    // Re-render so any remaining plugin settings stay in place and the tab
+    // strip reflects the removed panel.
+    if (_panelContainer) renderPanels(_tabStrip, _panelContainer, _terminalLayout, _renderPanelsOpts)
+    return true
   }
 
   /**
@@ -184,14 +324,6 @@ export function createPluginUiHost({ notifyWs } = {}) {
     if (originalOnMessage && ws.onmessage !== originalOnMessage) {
       ws.onmessage = originalOnMessage
     }
-  }
-
-  function showPanel(id) {
-    if (_showPanel) _showPanel(id)
-  }
-
-  function hasPanel(id) {
-    return panels.has(id)
   }
 
   /**
@@ -236,7 +368,13 @@ export function createPluginUiHost({ notifyWs } = {}) {
       list.appendChild(row)
     })
 
-    container.innerHTML = '<h3>Plugins</h3><p class="plugin-manager-hint">Toggle plugins on or off. Changes take effect after reload.</p>'
+    container.innerHTML = `
+      <h3>Plugins</h3>
+      <p class="plugin-manager-hint">
+        Toggle plugins on or off. UI panels and settings update immediately.
+        Server-side routes take effect after the server restarts.
+      </p>
+    `
     container.appendChild(list)
 
     list.addEventListener('change', async (e) => {
@@ -253,7 +391,21 @@ export function createPluginUiHost({ notifyWs } = {}) {
           body: JSON.stringify({ name, enabled }),
         })
         if (!res.ok) throw new Error((await res.text()) || 'toggle failed')
-        showToast(`Plugin "${name}" ${enabled ? 'enabled' : 'disabled'}. Reload to apply.`)
+
+        if (enabled) {
+          await loadClientPlugin(name)
+        } else {
+          unloadClientPlugin(name)
+        }
+
+        // Re-render settings/panels so the new state is reflected immediately.
+        const settingsContainer = document.getElementById('plugin-settings-slots')
+        if (settingsContainer) renderSettings(settingsContainer)
+        if (_tabStrip && _panelContainer) {
+          renderPanels(_tabStrip, _panelContainer, _terminalLayout, _renderPanelsOpts)
+        }
+
+        showToast(`Plugin "${name}" ${enabled ? 'enabled' : 'disabled'}.`)
       } catch (err) {
         showToast(`Failed to toggle ${name}: ${err?.message || err}`)
         e.target.checked = !enabled
@@ -293,6 +445,8 @@ export function createPluginUiHost({ notifyWs } = {}) {
     renderPanels,
     showPanel,
     hasPanel,
+    loadClientPlugin,
+    unloadClientPlugin,
     renderPluginManager,
     attachNotifyWs,
     fetchSettings,
@@ -320,12 +474,8 @@ export async function loadClientPlugins(ui) {
 
   for (const name of enabled) {
     try {
-      const mod = await import(`/plugins/${name}/client.js`)
-      if (typeof mod.register === 'function') {
-        mod.register(ui)
-        loaded.push(name)
-        console.log(`[plugin-ui] loaded client plugin ${name}`)
-      }
+      await ui.loadClientPlugin(name)
+      loaded.push(name)
     } catch (err) {
       console.warn(`[plugin-ui] failed to load ${name}:`, err?.message)
     }
