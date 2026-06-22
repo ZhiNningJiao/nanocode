@@ -3,5 +3,6 @@
   "version": "1.0.0",
   "description": "Attach to live tmux sessions from the fleet panel.",
   "enabledByDefault": true,
-  "entry": "server.js"
+  "entry": "server.js",
+  "extensionPoints": ["host.registerRoute", "host.registerWebSocket", "ui.registerPanel"]
 }

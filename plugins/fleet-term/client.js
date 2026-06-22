@@ -114,6 +114,12 @@ class FleetTermPanel {
 
   _attach(sessionName) {
     if (this.activeSession === sessionName && this.ws?.readyState === WebSocket.OPEN) return
+
+    if (!window.Terminal || !window.FitAddon) {
+      this._showTerminalError('xterm.js is not loaded; reload the page and try again.')
+      return
+    }
+
     this.activeSession = sessionName
     this._updateActiveState()
     this._closeTerminal()
@@ -127,17 +133,23 @@ class FleetTermPanel {
     xtermContainer.className = 'fleet-term-xterm'
     this.terminalEl.appendChild(xtermContainer)
 
-    this.term = new Terminal({
-      theme: currentTheme(),
-      fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, monospace",
-      fontSize: 14,
-      scrollback: 5000,
-      cursorBlink: true,
-      allowProposedApi: true,
-    })
-    this.fitAddon = new FitAddon()
-    this.term.loadAddon(this.fitAddon)
-    this.term.open(xtermContainer)
+    try {
+      this.term = new Terminal({
+        theme: currentTheme(),
+        fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, monospace",
+        fontSize: 14,
+        scrollback: 5000,
+        cursorBlink: true,
+        allowProposedApi: true,
+      })
+      this.fitAddon = new FitAddon()
+      this.term.loadAddon(this.fitAddon)
+      this.term.open(xtermContainer)
+    } catch (err) {
+      console.error('[fleet-term] xterm init failed:', err)
+      this._showTerminalError(`Terminal init failed: ${err?.message || err}`)
+      return
+    }
 
     requestAnimationFrame(() => {
       this._fit()
@@ -156,13 +168,18 @@ class FleetTermPanel {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${protocol}//${location.host}/ws/fleet-term/${encodeURIComponent(sessionName)}`
     this.ws = new WebSocket(url)
+    this.ws.binaryType = 'arraybuffer'
 
     this.ws.addEventListener('open', () => {
       this._fit()
+      try { this.term.focus() } catch {}
     })
 
     this.ws.addEventListener('message', (ev) => {
-      try { this.term.write(ev.data) } catch {}
+      try {
+        const data = ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : ev.data
+        this.term.write(data)
+      } catch {}
     })
 
     this.ws.addEventListener('close', () => {
@@ -199,9 +216,19 @@ class FleetTermPanel {
     if (!this.fitAddon || !this.term) return
     try {
       this.fitAddon.fit()
-      // Fleet-term server pty resizes automatically when tmux handles SIGWINCH,
-      // but we send nothing here since the plugin pty is just `tmux attach`.
+      const dims = this.fitAddon.proposeDimensions()
+      if (dims && this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
+      }
     } catch {}
+  }
+
+  _showTerminalError(message) {
+    this._closeTerminal()
+    const err = document.createElement('div')
+    err.className = 'fleet-term-error'
+    err.textContent = message
+    this.terminalEl.appendChild(err)
   }
 
   _updateActiveState() {
