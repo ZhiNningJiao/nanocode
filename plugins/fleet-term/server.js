@@ -72,6 +72,15 @@ function sessionExists(name) {
   })
 }
 
+function resizePty(proc, cols, rows) {
+  if (!proc || typeof proc.resize !== 'function') return
+  try {
+    proc.resize(Math.max(1, Math.floor(cols || 80)), Math.max(1, Math.floor(rows || 24)))
+  } catch (err) {
+    console.warn('[fleet-term] resize failed:', err?.message)
+  }
+}
+
 /**
  * Spawn a read-only-ish tmux attach pty for the given session.
  * We use `tmux attach -t <name>` (no -d) so existing clients stay connected.
@@ -197,6 +206,18 @@ function wireSocket(ws, proc, sessionName) {
     if (Buffer.isBuffer(raw)) data = raw.toString('utf8')
     else if (typeof raw === 'string') data = raw
     else data = String(raw)
+
+    // Resize messages are JSON-encoded; everything else is raw terminal input.
+    if (data.startsWith('{')) {
+      try {
+        const msg = JSON.parse(data)
+        if (msg?.type === 'resize') {
+          resizePty(proc, msg.cols, msg.rows)
+          return
+        }
+      } catch { /* fall through to raw input */ }
+    }
+
     try { proc.write(data) } catch (err) {
       // If pty is not ready yet, buffer one message.
       if (!pendingInput.has(sessionName)) pendingInput.set(sessionName, [])

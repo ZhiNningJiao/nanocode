@@ -180,7 +180,7 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
     try {
       const mod = await import(serverPath)
       if (typeof mod.register === 'function') {
-        mod.register(host)
+        await mod.register(host)
         host._loaded.add(name)
         console.log(`[plugin-host] loaded plugin ${name} v${manifest.version || '?'} (points: ${(manifest.extensionPoints || []).join(', ') || 'none'})`)
       } else {
