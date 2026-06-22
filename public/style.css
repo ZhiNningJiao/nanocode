@@ -2457,23 +2457,21 @@ body.workspace-active .landing-overlay { display: none; }
 .compact-ctx-btn.disabled { opacity: 0.3; cursor: default; }
 .compact-ctx-btn:hover { background: var(--surface-3, rgba(255,255,255,0.1)); color: var(--fg, #fff); }
 
-/* ── Mobile: 统一 input-row 三键尺寸/圆角，touch-toolbar 等宽网格 ── */
-@media (max-width: 480px) {
-  /* 问题1修复: 三键高度与输入框 (38px) 协调——44px 超过输入框导致按钮顶上沿突出。
-     改为 38px 与 textarea 一致，垂直居中靠 input-row align-items:center 保证。
-     宽度保持 44px 维持触控目标。 */
+/* ── Mobile (<768px): 统一 input-row 按钮尺寸/圆角，touch-toolbar 等宽网格 ──
+   打断键（Stop/Background）在手机上必须 >= 44×44 触控目标，且不能被屏幕
+   右边缘手势区吞掉。input-row 用 align-items:center 保证多高度按钮中线对齐。 */
+@media (max-width: 768px) {
   .tts-btn,
   .compact-ctx-btn,
-  .send-btn {
+  .send-btn,
+  .claude-stop-btn,
+  .claude-bg-btn {
     width: 44px;
-    height: 38px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
     border-radius: var(--radius-md);   /* 8px — 与输入框圆角一致 */
     flex-shrink: 0;
-  }
-  .claude-stop-btn {
-    min-width: 44px;
-    height: 38px;
-    border-radius: var(--radius-md);
   }
 
   /* touch-toolbar：6 个键等宽填满整行，高度提升到 36px */
