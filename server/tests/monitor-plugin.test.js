@@ -78,6 +78,61 @@ describe('monitor-plugin helpers', () => {
     assert.equal(resolveLinearApiKey(null, host), 'from_host')
     assert.equal(resolveLinearApiKey({}, { getSetting: () => null }), null)
   })
+
+  it('detects team configuration from credentials file presence only', async () => {
+    const { isTeamConfigured } = await import('../../plugins/monitor/server.js')
+    const dir = mkdtempSync(join(tmpdir(), 'monitor-team-'))
+    assert.equal(isTeamConfigured(dir), false)
+    writeFileSync(join(dir, '.credentials.json'), '{}', 'utf8')
+    assert.equal(isTeamConfigured(dir), true)
+  })
+
+  it('classifies claude processes into teams', async () => {
+    const { classifyClaudeProcess } = await import('../../plugins/monitor/server.js')
+    assert.equal(classifyClaudeProcess('bash -lc claude --skip'), 'team1')
+    assert.equal(classifyClaudeProcess('/usr/bin/claude --resume abc'), 'team1')
+    assert.equal(classifyClaudeProcess('/usr/bin/codex --resume abc'), null)
+    assert.equal(classifyClaudeProcess('/usr/bin/claude --resume abc', '/home/u/.claude-team2'), 'team2')
+    assert.equal(classifyClaudeProcess('CLAUDE_CONFIG_DIR=/home/u/.claude-team2 /usr/bin/claude'), 'team2')
+  })
+
+  it('parses ps output into structured records', async () => {
+    const { parsePsLines } = await import('../../plugins/monitor/server.js')
+    const sample = `  PID COMMAND         ELAPSED ARGS
+ 1234 claude             1234 /usr/bin/claude --resume abc
+ 5678 bash                999 bash -lc claude --skip
+ 9012 codex               100 /usr/bin/codex do thing
+`
+    const recs = parsePsLines(sample)
+    assert.equal(recs.length, 3)
+    assert.deepEqual(recs[0], { pid: 1234, comm: 'claude', etimes: 1234, args: '/usr/bin/claude --resume abc' })
+  })
+
+  it('detects rate-limit/usage-limit/429 signals in recent log text', async () => {
+    const { parseRateLimitSignals } = await import('../../plugins/monitor/server.js')
+    assert.deepEqual(parseRateLimitSignals('all good here'), { limited: false, resetAt: null, reason: null })
+
+    const rate = parseRateLimitSignals('error: rate-limit exceeded, reset at 14:32:10')
+    assert.equal(rate.limited, true)
+    assert.equal(rate.reason, 'rate limit')
+    assert.ok(rate.resetAt)
+
+    const usage = parseRateLimitSignals('usage-limit hit, resets in 15m')
+    assert.equal(usage.limited, true)
+    assert.equal(usage.reason, 'usage limit')
+    assert.ok(usage.resetAt)
+
+    const four29 = parseRateLimitSignals('received 429 Too Many Requests')
+    assert.equal(four29.limited, true)
+    assert.equal(four29.reason, '429')
+  })
+
+  it('computes team health from rate-limit signals', async () => {
+    const { computeTeamHealth } = await import('../../plugins/monitor/server.js')
+    assert.deepEqual(computeTeamHealth({ limited: false }, 1), { emoji: '🟢', level: 'green', reason: 'active' })
+    assert.deepEqual(computeTeamHealth({ limited: true, reason: '429' }, 1), { emoji: '🟡', level: 'yellow', reason: '429' })
+    assert.deepEqual(computeTeamHealth({ limited: false }, 0), { emoji: '🟢', level: 'green', reason: 'idle' })
+  })
 })
 
 describe('monitor-plugin host integration', () => {
@@ -128,5 +183,33 @@ describe('monitor-plugin host integration', () => {
     store.setSetting('plugin_monitor_enabled', false)
     const loaded = await loadPlugins(host, { pluginsDir: new URL('../../plugins', import.meta.url).pathname })
     assert.ok(!loaded.includes('monitor'))
+  })
+
+  it('snapshot includes teams array', async () => {
+    const mod = await import('../../plugins/monitor/server.js')
+    mod.register(host)
+
+    // Wait for the first local refresh (which also collects teams).
+    await new Promise((r) => setTimeout(r, 1200))
+
+    const res = await new Promise((resolve, reject) => {
+      const req = { method: 'GET', url: '/api/monitor/snapshot' }
+      const res = { json: (body) => resolve({ statusCode: 200, body }) }
+      const route = app._router.stack.find((layer) => layer.route && layer.route.path === '/api/monitor/snapshot')
+      if (!route) return reject(new Error('snapshot route not found'))
+      route.route.stack[0].handle(req, res)
+    })
+
+    assert.equal(res.statusCode, 200)
+    assert.ok(Array.isArray(res.body.teams))
+    assert.equal(res.body.teams.length, 2)
+    assert.ok(res.body.teams.some((t) => t.key === 'team1'))
+    assert.ok(res.body.teams.some((t) => t.key === 'team2'))
+    for (const team of res.body.teams) {
+      assert.equal(typeof team.configured, 'boolean')
+      assert.equal(typeof team.activeCount, 'number')
+      assert.ok(team.rateLimit)
+      assert.equal(typeof team.rateLimit.emoji, 'string')
+    }
   })
 })
