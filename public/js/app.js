@@ -585,7 +585,7 @@ function loadTabTypesSettings() {
           if (current.length <= 1) {
             cb.checked = true
             if (tabTypesStatusEl) {
-              tabTypesStatusEl.textContent = '至少保留一个类型'
+              tabTypesStatusEl.textContent = t('settings.tabtypes.keep_one')
               tabTypesStatusEl.className = 'settings-status error'
               setTimeout(() => { tabTypesStatusEl.textContent = '' }, 3000)
             }
@@ -596,7 +596,7 @@ function loadTabTypesSettings() {
         }
         setEnabledTabTypes(current)
         if (tabTypesStatusEl) {
-          tabTypesStatusEl.textContent = '已保存'
+          tabTypesStatusEl.textContent = t('settings.tabtypes.saved')
           tabTypesStatusEl.className = 'settings-status success'
           setTimeout(() => { tabTypesStatusEl.textContent = '' }, 2000)
         }
@@ -611,7 +611,7 @@ const tabTypesStatusEl = document.getElementById('tab-types-status')
 if (tabTypesSaveBtn) {
   tabTypesSaveBtn.addEventListener('click', () => {
     if (tabTypesStatusEl) {
-      tabTypesStatusEl.textContent = '已保存'
+      tabTypesStatusEl.textContent = t('settings.tabtypes.saved')
       tabTypesStatusEl.className = 'settings-status success'
       setTimeout(() => { tabTypesStatusEl.textContent = '' }, 2000)
     }
