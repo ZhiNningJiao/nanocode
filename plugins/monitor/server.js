@@ -452,6 +452,12 @@ export function register(host) {
     default: DEFAULT_FLAG_STALE_MIN,
     label: 'FLAG stale red threshold (min)',
   })
+  host.registerSetting({
+    key: 'linear_poll_minutes',
+    type: 'number',
+    default: 5,
+    label: 'Linear → ntfy poll interval (min)',
+  })
 
   let lanes
   try {
