@@ -204,6 +204,43 @@ document.addEventListener('nanocode:resume-session', async (e) => {
   }
 })
 
+// ── Connect to a tmux session ──────────────────────────────────────────────
+// Dispatched by the agent drawer's tmux browser. Creates a new 'tmux' tab
+// that attaches to the named tmux session via `tmux attach-session`.
+
+document.addEventListener('nanocode:connect-tmux', async (e) => {
+  const { tmuxTarget, label } = e.detail || {}
+  if (!tmuxTarget || !tabManager) return
+
+  // Check if a tmux tab for this target already exists
+  const existing = tabManager.tabs.find(t =>
+    t.type === 'tmux' && t.label === (label || tmuxTarget)
+  )
+  if (existing) {
+    tabManager.setActive(existing.id)
+    return
+  }
+
+  // Create a new tmux tab
+  try {
+    const newTab = await fetch(`/api/projects/${tabManager.projectId}/tabs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'tmux', label: label || tmuxTarget, tmuxTarget }),
+    }).then(r => r.json())
+
+    if (newTab?.id) {
+      tabManager._pendingActiveId = newTab.id
+      if (tabManager.tabs.some(t => t.id === newTab.id)) {
+        tabManager._pendingActiveId = null
+        tabManager.setActive(newTab.id)
+      }
+    }
+  } catch (err) {
+    console.warn('[connect-tmux] error', err)
+  }
+})
+
 const SLOT_WIDTH_PX = 110
 const SLOT_GAP_PX = 4
 

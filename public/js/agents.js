@@ -20,6 +20,7 @@ export function initAgentDrawer() {
     drawer.classList.add('open')
     backdrop?.classList.add('open')
     toggleBtn?.classList.add('active')
+    _loadTmuxSessions()
     _loadAgents()
     _loadRecentAgents()
     _loadSubagents()
@@ -55,6 +56,159 @@ async function _loadAgents() {
     _agents = await fetch('/api/agents').then(r => r.json())
     _render()
   } catch {}
+}
+
+// ── Tmux session browser ────────────────────────────────────────────────────
+
+async function _loadTmuxSessions(filterText) {
+  const list = document.getElementById('agent-list')
+  if (!list) return
+
+  list.querySelector('.tmux-session-section')?.remove()
+
+  let sessions = []
+  try {
+    sessions = await fetch('/api/tmux/list').then(r => r.json())
+  } catch {
+    return
+  }
+  if (!sessions || !sessions.length) return
+
+  // Apply filter if provided
+  if (filterText) {
+    const ft = filterText.toLowerCase()
+    sessions = sessions.filter(s =>
+      s.name.toLowerCase().includes(ft) ||
+      (s.paneCommand || '').toLowerCase().includes(ft)
+    )
+  }
+
+  const section = document.createElement('div')
+  section.className = 'tmux-session-section'
+
+  const header = document.createElement('div')
+  header.className = 'tmux-session-header'
+
+  const title = document.createElement('span')
+  title.className = 'tmux-session-title'
+  title.textContent = `tmux 会话 (${sessions.length})`
+  header.appendChild(title)
+
+  const refreshBtn = document.createElement('button')
+  refreshBtn.type = 'button'
+  refreshBtn.className = 'tmux-session-refresh'
+  refreshBtn.title = '刷新'
+  refreshBtn.textContent = '⟳'
+  refreshBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const searchInput = section.querySelector('.tmux-search-input')
+    _loadTmuxSessions(searchInput?.value || '')
+  })
+  header.appendChild(refreshBtn)
+
+  section.appendChild(header)
+
+  // Search filter (only if there are many sessions)
+  if (sessions.length > 5 || filterText) {
+    const searchWrap = document.createElement('div')
+    searchWrap.className = 'tmux-search-wrap'
+    const searchInput = document.createElement('input')
+    searchInput.type = 'text'
+    searchInput.className = 'tmux-search-input settings-input'
+    searchInput.placeholder = '搜索 tmux 会话...'
+    searchInput.value = filterText || ''
+    let debounceTimer
+    searchInput.addEventListener('input', () => {
+      clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        _loadTmuxSessions(searchInput.value)
+      }, 200)
+    })
+    searchWrap.appendChild(searchInput)
+    section.appendChild(searchWrap)
+  }
+
+  // Show up to 30 sessions (after filtering)
+  const visible = sessions.slice(0, 30)
+  for (const sess of visible) {
+    const item = document.createElement('div')
+    item.className = 'tmux-session-item'
+    item.title = `Click to attach: ${sess.name}`
+
+    const info = document.createElement('div')
+    info.className = 'tmux-session-info'
+
+    const nameRow = document.createElement('div')
+    nameRow.className = 'tmux-session-name-row'
+
+    const nameEl = document.createElement('span')
+    nameEl.className = 'tmux-session-name'
+    nameEl.textContent = sess.name
+    nameRow.appendChild(nameEl)
+
+    // Badge showing the current pane command
+    if (sess.paneCommand) {
+      const cmd = sess.paneCommand.toLowerCase()
+      let badgeType = 'other'
+      if (cmd.includes('claude')) badgeType = 'claude'
+      else if (cmd.includes('codex')) badgeType = 'codex'
+      else if (cmd === 'bash' || cmd === 'sh') badgeType = 'bash'
+      else if (cmd === 'node') badgeType = 'node'
+
+      const badge = document.createElement('span')
+      badge.className = `tmux-session-badge tmux-badge-${badgeType}`
+      badge.textContent = sess.paneCommand
+      nameRow.appendChild(badge)
+    }
+
+    info.appendChild(nameRow)
+
+    if (sess.preview) {
+      const preview = document.createElement('pre')
+      preview.className = 'tmux-session-preview'
+      preview.textContent = sess.preview
+      info.appendChild(preview)
+    }
+
+    item.appendChild(info)
+
+    const connectBtn = document.createElement('button')
+    connectBtn.type = 'button'
+    connectBtn.className = 'tmux-session-connect'
+    connectBtn.textContent = '连接'
+    connectBtn.title = `Attach to ${sess.name}`
+    connectBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      _connectTmuxSession(sess.name)
+    })
+    item.appendChild(connectBtn)
+
+    // Also allow clicking the whole item
+    item.addEventListener('click', () => _connectTmuxSession(sess.name))
+
+    section.appendChild(item)
+  }
+
+  if (sessions.length > 30) {
+    const more = document.createElement('div')
+    more.className = 'tmux-session-more'
+    more.textContent = `还有 ${sessions.length - 30} 个会话未显示，请搜索过滤`
+    section.appendChild(more)
+  }
+
+  list.prepend(section)
+}
+
+async function _connectTmuxSession(sessionName) {
+  // Close the drawer
+  document.getElementById('agent-drawer')?.classList.remove('open')
+  document.getElementById('agent-drawer-backdrop')?.classList.remove('open')
+  document.getElementById('agent-drawer-toggle')?.classList.remove('active')
+
+  // Dispatch event for terminal-view to handle
+  document.dispatchEvent(new CustomEvent('nanocode:connect-tmux', {
+    detail: { tmuxTarget: sessionName, label: sessionName },
+  }))
 }
 
 // ── Running sub-agents ───────────────────────────────────────────────────────

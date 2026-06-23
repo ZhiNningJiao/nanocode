@@ -182,7 +182,10 @@ export function createTerminalRoutes(store) {
     const claudeSessionId = typeof req.body?.claudeSessionId === 'string' && req.body.claudeSessionId.trim()
       ? req.body.claudeSessionId.trim()
       : undefined
-    const tab = store.createTab(req.params.id, { label, type, claudeSessionId })
+    const tmuxTarget = typeof req.body?.tmuxTarget === 'string' && req.body.tmuxTarget.trim()
+      ? req.body.tmuxTarget.trim()
+      : undefined
+    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, tmuxTarget })
     broadcastTabs(req.params.id)
     res.status(201).json(tab)
   })

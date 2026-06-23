@@ -1227,27 +1227,38 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         return
       }
 
-      const launcherFn = TAB_LAUNCHERS[tabType] || TAB_LAUNCHERS.bash
-      const launchCmd = launcherFn()
-
       const sessionKey = `${projectId}:bash:${tabId}`
       const isRemote = !!project.ssh_host
       let command
       let args
       let cwd
 
-      if (isRemote) {
-        command = SSH
-        args = buildSshArgs(project, `cd ${sq(project.cwd)} && ${launchCmd}`)
-        cwd = home
-      } else if (tabType === 'bash') {
-        command = SHELL
-        args = IS_WIN ? [] : ['--login']
-        cwd = project.cwd
-      } else {
+      if (tabType === 'tmux') {
+        const tmuxTarget = tab?.tmuxTarget
+        if (!tmuxTarget) {
+          ws.send(JSON.stringify({ type: 'error', error: 'tmux tab has no tmuxTarget' }))
+          return
+        }
         command = 'bash'
-        args = ['-lc', launchCmd]
-        cwd = project.cwd
+        args = ['-lc', `tmux attach-session -t ${sq(tmuxTarget)} 2>/dev/null || tmux new-session -t ${sq(tmuxTarget)} 2>/dev/null; exec bash -l`]
+        cwd = home
+      } else {
+        const launcherFn = TAB_LAUNCHERS[tabType] || TAB_LAUNCHERS.bash
+        const launchCmd = launcherFn()
+
+        if (isRemote) {
+          command = SSH
+          args = buildSshArgs(project, `cd ${sq(project.cwd)} && ${launchCmd}`)
+          cwd = home
+        } else if (tabType === 'bash') {
+          command = SHELL
+          args = IS_WIN ? [] : ['--login']
+          cwd = project.cwd
+        } else {
+          command = 'bash'
+          args = ['-lc', launchCmd]
+          cwd = project.cwd
+        }
       }
 
       const scrollbackDir = process.env.NANOCODE_SCROLLBACK_DIR

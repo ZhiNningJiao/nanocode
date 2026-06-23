@@ -9,6 +9,7 @@ import {
   fitTerminals,
   isInitialized,
 } from './terminal-view.js'
+import { getEnabledTabTypes, setEnabledTabTypes } from './tab-manager.js'
 import { showHosts, showProjects, hideLanding } from './landing.js'
 import { slugify, hostSlug, projectSlug, projectPath, navigateTo } from './router.js'
 import { initThemeToggle } from './theme.js'
@@ -513,6 +514,7 @@ function loadSettings(serverSettings) {
   loadClaudeEffortSettings(serverSettings)
   loadGlobalPermissionModeSettings(serverSettings)
   loadLangSelect()
+  loadTabTypesSettings()
 }
 
 // ─── Render mode save ────────────────────────────────────────────────────────
@@ -566,6 +568,41 @@ if (codexRenderModeSaveBtn) {
 }
 
 // N43-R9: Codex model save handler removed — model is now set via /model command
+
+// ─── Tab Types (plugin load/unload) ──────────────────────────────────────────
+
+function loadTabTypesSettings() {
+  const enabled = getEnabledTabTypes()
+  document.querySelectorAll('.tab-type-checkbox').forEach(cb => {
+    cb.checked = enabled.includes(cb.dataset.tabType)
+  })
+}
+
+const tabTypesSaveBtn = document.getElementById('tab-types-save-btn')
+const tabTypesStatusEl = document.getElementById('tab-types-status')
+
+if (tabTypesSaveBtn) {
+  tabTypesSaveBtn.addEventListener('click', () => {
+    const enabled = []
+    document.querySelectorAll('.tab-type-checkbox').forEach(cb => {
+      if (cb.checked) enabled.push(cb.dataset.tabType)
+    })
+    if (enabled.length === 0) {
+      if (tabTypesStatusEl) {
+        tabTypesStatusEl.textContent = '至少保留一个类型'
+        tabTypesStatusEl.className = 'settings-status error'
+        setTimeout(() => { tabTypesStatusEl.textContent = '' }, 3000)
+      }
+      return
+    }
+    setEnabledTabTypes(enabled)
+    if (tabTypesStatusEl) {
+      tabTypesStatusEl.textContent = '已保存'
+      tabTypesStatusEl.className = 'settings-status success'
+      setTimeout(() => { tabTypesStatusEl.textContent = '' }, 3000)
+    }
+  })
+}
 
 if (fontSizeRange && fontSizeValue) {
   fontSizeRange.addEventListener('input', () => {

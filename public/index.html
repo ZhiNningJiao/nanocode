@@ -301,6 +301,36 @@
                 <span class="settings-status" id="font-size-status"></span>
               </div>
             </div>
+
+            <!-- Tab Types (plugin load/unload) -->
+            <div class="settings-subsection">
+              <div class="settings-label-row"><span data-i18n="settings.tabtypes.label">Tab Types</span> <span class="settings-hint-inline" data-i18n="settings.tabtypes.hint">Enable/disable tab types in the + menu</span></div>
+              <div class="settings-toggle-row">
+                <label class="toggle-label"><input type="checkbox" class="tab-type-checkbox" data-tab-type="bash" checked /> <span data-i18n="settings.tabtypes.bash">Terminal (bash)</span></label>
+              </div>
+              <div class="settings-toggle-row">
+                <label class="toggle-label"><input type="checkbox" class="tab-type-checkbox" data-tab-type="claude" checked /> <span data-i18n="settings.tabtypes.claude">Claude Code</span></label>
+              </div>
+              <div class="settings-toggle-row">
+                <label class="toggle-label"><input type="checkbox" class="tab-type-checkbox" data-tab-type="codex" checked /> <span data-i18n="settings.tabtypes.codex">Codex</span></label>
+              </div>
+              <div class="settings-toggle-row">
+                <label class="toggle-label"><input type="checkbox" class="tab-type-checkbox" data-tab-type="agent" checked /> <span data-i18n="settings.tabtypes.agent">Cursor Agent</span></label>
+              </div>
+              <div class="settings-toggle-row">
+                <label class="toggle-label"><input type="checkbox" class="tab-type-checkbox" data-tab-type="opencode" checked /> <span data-i18n="settings.tabtypes.opencode">OpenCode</span></label>
+              </div>
+              <div class="settings-toggle-row">
+                <label class="toggle-label"><input type="checkbox" class="tab-type-checkbox" data-tab-type="meshy-aigw" checked /> <span data-i18n="settings.tabtypes.meshy">Meshy AIGW (Kimi)</span></label>
+              </div>
+              <div class="settings-toggle-row">
+                <label class="toggle-label"><input type="checkbox" class="tab-type-checkbox" data-tab-type="tmux" checked /> <span data-i18n="settings.tabtypes.tmux">Tmux Session</span></label>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="btn btn-primary" id="tab-types-save-btn" data-i18n="btn.save">Save</button>
+                <span class="settings-status" id="tab-types-status"></span>
+              </div>
+            </div>
             </div><!-- /settings-section-body[display] -->
           </section>
 
