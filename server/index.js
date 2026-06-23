@@ -620,7 +620,7 @@ app.get('/api/tmux/list', asyncWrap(async (_req, res) => {
       let preview = ''
       try {
         const { stdout: paneOut } = await execFileAsync(
-          'tmux', ['capture-pane', '-t', `${name}:0`, '-p', '-e', '-J'],
+          'tmux', ['capture-pane', '-t', `${name}:0`, '-p', '-J'],
           { timeout: 3000 }
         )
         const lines = paneOut.split('\n').filter(l => l.trim())

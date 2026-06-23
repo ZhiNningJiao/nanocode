@@ -5,6 +5,8 @@
  */
 
 let _agents = []
+let _drawerOpen = false
+let _refreshTimer = null
 
 export function initAgentDrawer() {
   const drawer = document.getElementById('agent-drawer')
@@ -20,15 +22,19 @@ export function initAgentDrawer() {
     drawer.classList.add('open')
     backdrop?.classList.add('open')
     toggleBtn?.classList.add('active')
+    _drawerOpen = true
     _loadTmuxSessions()
     _loadAgents()
     _loadRecentAgents()
     _loadSubagents()
+    _startAutoRefresh()
   }
   function close() {
     drawer.classList.remove('open')
     backdrop?.classList.remove('open')
     toggleBtn?.classList.remove('active')
+    _drawerOpen = false
+    _stopAutoRefresh()
   }
 
   toggleBtn?.addEventListener('click', () => drawer.classList.contains('open') ? close() : open())
@@ -49,6 +55,52 @@ export function initAgentDrawer() {
     if (document.getElementById('agent-add-name')) document.getElementById('agent-add-name').value = ''
     if (document.getElementById('agent-add-tmux')) document.getElementById('agent-add-tmux').value = ''
   })
+
+  // Initial badge update on load + periodic refresh
+  _updateToggleBadge()
+  setInterval(_updateToggleBadge, 30000)
+}
+
+function _startAutoRefresh() {
+  _stopAutoRefresh()
+  _refreshTimer = setInterval(() => {
+    if (_drawerOpen) {
+      _loadTmuxSessions(_currentFilter)
+      _loadSubagents()
+    }
+  }, 15000)
+}
+
+function _stopAutoRefresh() {
+  if (_refreshTimer) {
+    clearInterval(_refreshTimer)
+    _refreshTimer = null
+  }
+}
+
+let _currentFilter = ''
+
+async function _updateToggleBadge() {
+  try {
+    const sessions = await fetch('/api/tmux/list').then(r => r.json())
+    const count = (sessions || []).filter(s => {
+      const cmd = (s.paneCommand || '').toLowerCase()
+      return cmd.includes('claude') || cmd.includes('codex') || cmd.includes('node')
+    }).length
+    const toggleBtn = document.getElementById('agent-drawer-toggle')
+    if (!toggleBtn) return
+    let badge = toggleBtn.querySelector('.agent-toggle-badge')
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span')
+        badge.className = 'agent-toggle-badge'
+        toggleBtn.appendChild(badge)
+      }
+      badge.textContent = count
+    } else {
+      badge?.remove()
+    }
+  } catch {}
 }
 
 async function _loadAgents() {
@@ -64,6 +116,7 @@ async function _loadTmuxSessions(filterText) {
   const list = document.getElementById('agent-list')
   if (!list) return
 
+  _currentFilter = filterText || ''
   list.querySelector('.tmux-session-section')?.remove()
 
   let sessions = []
@@ -73,6 +126,8 @@ async function _loadTmuxSessions(filterText) {
     return
   }
   if (!sessions || !sessions.length) return
+
+  _updateToggleBadge()
 
   // Apply filter if provided
   if (filterText) {
