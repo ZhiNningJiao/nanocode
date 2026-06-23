@@ -34,18 +34,33 @@ export function isNtfyConfigured() {
 /**
  * POST a push notification to ntfy.
  * See https://docs.ntfy.sh/publish/ for header spec.
+ *
+ * Exported so the Linear notification bridge can reuse the same server-side
+ * push path while keeping ntfy URL/topic out of callers and logs.
+ *
+ * Returns { ok: true } on success or { ok: false, error: string } on failure so
+ * callers (e.g. the ntfy test endpoint) can report reachability without logging
+ * the ntfy URL or topic.
  */
-async function pushNtfy({ title, message, priority = 3, tags = [] }) {
+// HTTP headers must be Latin-1 (ByteString).  ntfy Title/Tags headers crash
+// with "Cannot convert argument to a ByteString" if they contain CJK or other
+// code points > 255.  Sanitize to ASCII-safe strings so the push never throws
+// regardless of what a caller passes in.
+function sanitizeHeader(str) {
+  return String(str || '').replace(/[^\x20-\x7E]/g, '').trim() || 'notification'
+}
+
+export async function pushNtfy({ title, message, priority = 3, tags = [] }) {
   const cfg = getNtfyConfig()
-  if (!cfg) return { ok: false, reason: 'not-configured' }
+  if (!cfg) return { ok: false, reason: 'not-configured', error: 'ntfy not configured' }
   const endpoint = cfg.url.replace(/\/$/, '') + '/' + cfg.topic
   try {
     const resp = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        'Title': title,
+        'Title': sanitizeHeader(title),
         'Priority': String(priority),
-        'Tags': tags.join(','),
+        'Tags': sanitizeHeader(tags.join(',')),
         'Content-Type': 'text/plain',
       },
       body: message,
@@ -53,13 +68,13 @@ async function pushNtfy({ title, message, priority = 3, tags = [] }) {
     })
     if (!resp.ok) {
       console.warn(`[ntfy] push non-OK: HTTP ${resp.status}`)
-      return { ok: false, reason: `HTTP ${resp.status}` }
+      return { ok: false, reason: `HTTP ${resp.status}`, error: `HTTP ${resp.status}` }
     }
     console.log(`[ntfy] sent: ${title}`)
     return { ok: true }
   } catch (err) {
     console.warn('[ntfy] push failed:', err.message)
-    return { ok: false, reason: err.message }
+    return { ok: false, reason: err.message, error: err.message }
   }
 }
 
@@ -212,6 +227,89 @@ function handleEvidenceChange(repo, broadcast) {
     broadcast({ type: 'activity', repo, heading: ev.heading, time })
   } catch (e) {
     console.warn('[watcher] evidence read:', e.message)
+  }
+}
+
+// ─── Linear important-post ntfy ─────────────────────────────────────────────
+
+const IMPORTANT_KEYWORDS = [
+  // 过审 / 通过 / PASS
+  /\bpass\b/i, /\bapproved?\b/i, /过审/, /通过/, /验收通过/,
+  // 卡点 / 阻塞 / blocker
+  /\bblocker\b/i, /\bblocked\b/i, /卡点/, /阻塞/, /堵住/,
+  // 需主人拍板 / 决策
+  /\bneeds? (?:your|owner|manual|human) (?:approval|review|decision)\b/i,
+  /\brequires? (?:your|owner|manual|human) (?:approval|review|decision)\b/i,
+  /需主人拍板/, /需要主人/, /主人确认/, /等待决策/,
+]
+
+// Keep a short in-memory record of important pushes so the background Linear
+// poller (C) does not re-notify the same comment that B just pushed.
+const RECENT_IMPORTANT_TTL_MS = 10 * 60 * 1000
+const recentImportantPushes = new Map()
+
+function recordImportantPush(identifier, summary) {
+  recentImportantPushes.set(identifier, { summary: String(summary || ''), at: Date.now() })
+}
+
+/**
+ * Return true if `body` looks like a comment that was just pushed as important
+ * by the B endpoint.  This is a lightweight B/C cross-dedup guard; the C path
+ * still relies on persisted comment IDs for its primary deduplication.
+ */
+export function isRecentImportantPush(identifier, body) {
+  const rec = recentImportantPushes.get(identifier)
+  if (!rec) return false
+  if (Date.now() - rec.at > RECENT_IMPORTANT_TTL_MS) {
+    recentImportantPushes.delete(identifier)
+    return false
+  }
+  if (!body || typeof body !== 'string') return false
+  return body.toLowerCase().includes(rec.summary.toLowerCase())
+}
+
+/**
+ * Decide whether a Linear comment summary counts as "important" enough to
+ * interrupt the owner immediately.  Only PASS/blocker/owner-decision posts
+ * are pushed; routine progress chatter is silently ignored.
+ */
+export function classifyLinearImportance(text) {
+  if (!text || typeof text !== 'string') return { important: false, reason: null }
+  for (const re of IMPORTANT_KEYWORDS) {
+    if (re.test(text)) {
+      const match = text.match(re)?.[0] || 'keyword'
+      return { important: true, reason: match }
+    }
+  }
+  return { important: false, reason: null }
+}
+
+/**
+ * Push an ntfy notification for an important Linear post.
+ * Called by /api/notify/linear-important (server-side only) when an AI agent
+ * posts a comment that needs the owner's attention.
+ */
+export async function pushNtfyLinearImportant({ identifier, summary, reason, priority = 4 }) {
+  const classification = reason
+    ? { important: true, reason }
+    : classifyLinearImportance(summary)
+  if (!classification.important) {
+    console.log(`[linear-notif] suppressed routine post ${identifier}: ${summary?.slice(0, 60) || ''}`)
+    return { pushed: false, reason: 'not important' }
+  }
+  // Remember this important post so the background Linear poller can skip
+  // re-notifying the same comment a few minutes later.
+  recordImportantPush(identifier, summary)
+  const pushResult = await pushNtfy({
+    title: `Linear ${identifier}`,
+    message: `${summary?.slice(0, 120) || 'important update'}`,
+    priority,
+    tags: ['linear', 'warning'],
+  })
+  return {
+    pushed: pushResult.ok,
+    reason: classification.reason,
+    error: pushResult.ok ? undefined : pushResult.error,
   }
 }
 
