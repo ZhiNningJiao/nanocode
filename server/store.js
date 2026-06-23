@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 
-const TAB_TYPES = new Set(['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw'])
+const TAB_TYPES = new Set(['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw', 'tmux'])
 
 function emptyData() {
   return { projects: [], settings: {}, tabs: {} }
@@ -127,6 +127,8 @@ export function createStore(filePath = ':memory:') {
       tab.claudeSessionStarted = false
     } else if (type === 'codex') {
       tab.codexThreadId = opts.codexThreadId || null
+    } else if (type === 'tmux') {
+      tab.tmuxTarget = opts.tmuxTarget || null
     }
     existing.push(tab)
     save()
@@ -168,7 +170,7 @@ export function createStore(filePath = ':memory:') {
     if (!data.tabs[projectId]) return null
     const tab = data.tabs[projectId].find((t) => t.id === tabId)
     if (!tab) return null
-    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue']
+    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget']
     let changed = false
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {

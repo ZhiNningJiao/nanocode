@@ -385,3 +385,25 @@ commit 03beb00
 - 验证：browse 渲染测试截图 /tmp/favicon-badge-test.png，左=logo+badge(3) 右=原始logo，SVG drawImage 成功
 - 测试：npm test 71/71 pass，run-favicon.log 干净，curl 3001/api/health 200
 - 截图：/tmp/favicon-badge-test.png
+
+## 2026-06-24 [Agent tmux 会话浏览器 + 标签页类型启用/禁用]
+- 任务：提升 nanocode 易用性：① Agent 抽屉栏中 tmux 会话浏览+点击连接，② 插件标签页类型加载/卸载 UI，③ 整体操作便捷度
+- 功能 1 — tmux 会话浏览器（Agent 抽屉栏）：
+  - `public/js/agents.js`：`_loadTmuxSessions()` 拉取 `/api/tmux/list`，渲染会话列表（名称、命令徽章、创建时间、预览、连接按钮）；搜索过滤器按名称实时过滤
+  - `public/js/agents.js`：`_connectTmuxSession(target)` 派发 `nanocode:connect-tmux` 事件
+  - `public/js/terminal-view.js`：监听 `nanocode:connect-tmux`，调用 `api.createTab()` 创建 `tmux` 类型标签页
+  - `public/js/api.js`：`createTab()` 新增 `tmuxTarget` 和 `claudeSessionId` 选项支持
+  - `server/index.js`：`/api/tmux/list` 增强 `paneCommand` 字段（从 `#{pane_current_command}` 提取）
+  - `server/store.js`：`TAB_TYPES` 新增 `tmux`；`createTab` 支持 `tmuxTarget`；`updateTab` allowed 列表加入 `tmuxTarget`
+  - `terminal/routes.js`：`POST /api/projects/:id/tabs` 读取 `tmuxTarget` 传给 store
+  - `terminal/claude-session-controller.js`：tmux 类型标签页使用 `tmux attach-session -t <target>` 启动 PTY
+  - `public/style.css`：tmux 浏览器 CSS（搜索框、会话卡片、命令徽章 claude/codex/bash/node、预览文本、连接按钮 hover）
+  - `public/js/i18n.js`：tmux 浏览器相关文案 en/zh 翻译
+- 功能 2 — 标签页类型启用/禁用（设置面板）：
+  - `public/js/tab-manager.js`：导出 `getEnabledTabTypes()` / `setEnabledTabTypes()`；`_showNewTabMenu()` 按 enabledTypes 过滤；`NEW_TAB_OPTIONS` 和 `TYPE_ICON_SVG` 新增 tmux 类型
+  - `public/index.html`：设置面板新增标签页类型复选框区域（每种类型一个 checkbox）
+  - `public/js/app.js`：`loadTabTypesSettings()` 加载 + 保存处理器，使用 `localStorage` 键 `nanocodeEnabledTabTypes`
+  - `public/js/i18n.js`：标签页类型标签 en/zh 翻译
+- 测试：`npm test` 138/138 pass，0 fail
+- 热部署：9476 起 → kill 9475 → 9475 重启 → kill 9476，`/api/health` 200
+- API 验证：`/api/tmux/list` 返回 `paneCommand` 字段（bash/node 等），确认生效

@@ -62,6 +62,16 @@ const translations = {
     'settings.subagent.prompt': 'Show prompts sent to subagents',
     'settings.subagent.activity': 'Show subagent activity (verbose, off by default)',
     'settings.fontsize.label': 'Terminal font size',
+    // Tab types
+    'settings.tabtypes.label': 'Tab Types',
+    'settings.tabtypes.hint': 'Enable/disable tab types in the + menu',
+    'settings.tabtypes.bash': 'Terminal (bash)',
+    'settings.tabtypes.claude': 'Claude Code',
+    'settings.tabtypes.codex': 'Codex',
+    'settings.tabtypes.agent': 'Cursor Agent',
+    'settings.tabtypes.opencode': 'OpenCode',
+    'settings.tabtypes.meshy': 'Meshy AIGW (Kimi)',
+    'settings.tabtypes.tmux': 'Tmux Session',
     // Monitor subsections
     'settings.services.label': 'Port Health',
     'settings.services.hint': 'Checked every 30s',
@@ -159,6 +169,16 @@ const translations = {
     'settings.subagent.prompt': '显示发给 subagent 的 prompt',
     'settings.subagent.activity': '显示 subagent 活动（通常较冗长，默认关）',
     'settings.fontsize.label': '终端字号',
+    // Tab types
+    'settings.tabtypes.label': 'Tab 类型',
+    'settings.tabtypes.hint': '启用/禁用 + 菜单中的 tab 类型',
+    'settings.tabtypes.bash': '终端 (bash)',
+    'settings.tabtypes.claude': 'Claude Code',
+    'settings.tabtypes.codex': 'Codex',
+    'settings.tabtypes.agent': 'Cursor Agent',
+    'settings.tabtypes.opencode': 'OpenCode',
+    'settings.tabtypes.meshy': 'Meshy AIGW (Kimi)',
+    'settings.tabtypes.tmux': 'Tmux 会话',
     // Monitor subsections
     'settings.services.label': '端口健康',
     'settings.services.hint': '每 30s 检查',

@@ -600,6 +600,44 @@ app.get('/api/agents/discover', asyncWrap(async (_req, res) => {
   } catch { res.json([]) }
 }))
 
+// ─── Tmux session browser ─────────────────────────────────────────────────────
+// List all tmux sessions with a short capture-pane preview (last 5 lines)
+// and the current pane command (so the UI can badge claude/codex/bash sessions).
+app.get('/api/tmux/list', asyncWrap(async (_req, res) => {
+  try {
+    const { stdout: listOut } = await execFileAsync(
+      'tmux', ['list-sessions', '-F', '#{session_name}\t#{session_windows}\t#{session_created}\t#{pane_current_command}'],
+      { timeout: 5000 }
+    )
+    const sessions = []
+    for (const line of listOut.trim().split('\n').filter(Boolean)) {
+      const parts = line.split('\t')
+      const name = parts[0]
+      const windowsStr = parts[1]
+      const createdStr = parts[2]
+      const paneCmd = parts[3] || ''
+      if (!name) continue
+      let preview = ''
+      try {
+        const { stdout: paneOut } = await execFileAsync(
+          'tmux', ['capture-pane', '-t', `${name}:0`, '-p', '-e', '-J'],
+          { timeout: 3000 }
+        )
+        const lines = paneOut.split('\n').filter(l => l.trim())
+        preview = lines.slice(-5).join('\n')
+      } catch { /* session may have no pane or restricted access */ }
+      sessions.push({
+        name,
+        windows: parseInt(windowsStr, 10) || 1,
+        created: parseInt(createdStr, 10) ? new Date(parseInt(createdStr, 10) * 1000).toISOString() : null,
+        paneCommand: paneCmd,
+        preview,
+      })
+    }
+    res.json(sessions)
+  } catch { res.json([]) }
+}))
+
 // ─── Agent health monitor ─────────────────────────────────────────────────────
 // Tracks idle/stuck/approval/rate-limited/crashed state for active claude and
 // codex sessions. Events are fed via sessionController hooks in routes.js.
