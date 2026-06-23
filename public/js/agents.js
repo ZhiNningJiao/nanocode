@@ -131,6 +131,19 @@ async function _loadTmuxSessions(filterText) {
 
   _updateToggleBadge()
 
+  // Sort: AI sessions (claude/codex/node) first, then others; within each group, newest first
+  const isAi = (s) => {
+    const cmd = (s.paneCommand || '').toLowerCase()
+    return cmd.includes('claude') || cmd.includes('codex') || cmd.includes('node')
+  }
+  const byCreated = (a, b) => (b.created || '').localeCompare(a.created || '')
+  sessions = [...sessions].sort((a, b) => {
+    const aiA = isAi(a), aiB = isAi(b)
+    if (aiA && !aiB) return -1
+    if (!aiA && aiB) return 1
+    return byCreated(a, b)
+  })
+
   // Apply filter if provided
   if (filterText) {
     const ft = filterText.toLowerCase()
@@ -325,11 +338,11 @@ async function _loadSubagents() {
     const stopBtn = document.createElement('button')
     stopBtn.type = 'button'
     stopBtn.className = 'subagent-stop-btn'
-    stopBtn.textContent = '停止'
+    stopBtn.textContent = t('agents.subagent_stop')
     stopBtn.title = 'SIGTERM'
     stopBtn.addEventListener('click', async (e) => {
       e.stopPropagation()
-      if (!confirm(`停止 sub-agent PID ${sub.pid}?`)) return
+      if (!confirm(t('agents.subagent_stop_confirm', sub.pid))) return
       stopBtn.disabled = true
       stopBtn.textContent = '...'
       try {
@@ -342,14 +355,14 @@ async function _loadSubagents() {
         if (data.ok) {
           item.remove()
         } else {
-          alert(data.error || '停止失败')
+          alert(data.error || t('agents.subagent_stop_failed'))
           stopBtn.disabled = false
     stopBtn.textContent = t('agents.subagent_stop')
         }
       } catch (err) {
-        alert('停止失败: ' + err.message)
+        alert(t('agents.subagent_stop_failed') + ': ' + err.message)
         stopBtn.disabled = false
-        stopBtn.textContent = '停止'
+        stopBtn.textContent = t('agents.subagent_stop')
       }
     })
     item.appendChild(stopBtn)

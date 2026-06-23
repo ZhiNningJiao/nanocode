@@ -426,3 +426,33 @@ commit 03beb00
 - 热部署：9476 起 → kill 9475 → 9475 重启 → kill 9476，`/api/health` 200
 - 前端验证：agents.js badge 代码 2 处、app.js instantBound 2 处、style.css badge CSS 1 处，均已部署
 - commit: 343e76b，push fork zhining/nanocode-history-replay-fix
+
+## 2026-06-24 [Driver dogfooding — agent drawer i18n + recent sessions dedup + UX polish]
+- 任务：以 driver 视角使用 nanocode（9475），发现并修复易用性痛点
+- 发现痛点（Playwright 驱动真实 9475 页面，dump DOM + 截图）：
+  1. Agent 抽屉栏所有文本硬编码中文：tmux 会话标题、"连接"按钮、"搜索 tmux 会话..." placeholder、"还有 N 个会话未显示"、"刷新"、"运行中 Sub-agents"、"当前没有运行中的 sub-agent"、"停止"、"最近会话"、"(无摘要)" —— 切换语言为 EN 后仍显示中文
+  2. 最近会话列表被 40+ 条重复 "work" 条目淹没（同一 project、同一 prompt 前缀，只是不同 session ID）
+  3. summary 截取 120 字符太长，在抽屉栏占位过大
+  4. relTimeFromMtime 返回 "刚刚"（硬编码中文）
+  5. tmux session preview max-height 4.5em 略高，抽屉栏空间利用率低
+  6. recent-agent-summary 只显示 1 行（white-space: nowrap），长 prompt 被截断到看不见内容
+- 改进 1 — i18n 全量覆盖（`public/js/i18n.js` + `public/js/agents.js`）：
+  - 新增 13 个 `agents.*` 翻译键（en/zh 双语）
+  - `t()` 函数支持函数值（参数化翻译如 `agents.tmux_more`、`agents.subagents_title`）
+  - `agents.js` 导入 `t()`，所有硬编码中文替换为 `t('agents.xxx')` 调用
+  - 涵盖：tmux 标题、连接按钮、搜索 placeholder、刷新 tooltip、更多提示、subagent 标题/空态/停止、最近会话标题、无摘要、无 agent
+- 改进 2 — 最近会话去重（`terminal/recent-agents.js`）：
+  - `scanRecentAgents` 按 (projectName + summary 前40字符) 去重，保留最新条目
+  - 结果从 40+ 条 → 3 条（实测验证），大幅减少噪音
+  - 截取长度 120→80 字符，返回 `null` 替代硬编码中文 "(无摘要)"（由前端 i18n 兜底）
+- 改进 3 — relTime i18n（`terminal/recent-agents.js`）：
+  - `relTimeFromMtime` "刚刚"→"just now"
+  - 移除 `cwdFromDirName` 里的 `console.warn` 噪音（每次打开抽屉刷屏）
+- 改进 4 — CSS 紧凑化（`public/style.css`）：
+  - `.tmux-session-preview` max-height 4.5em→3em（3 行→2 行，更多会话可见）
+  - `.recent-agent-summary` 1 行 nowrap→2 行 -webkit-line-clamp（长 prompt 可读性提升）
+- 修复 bug：i18n.js 重复 `zh: {` 块导致 SyntaxError（Unexpected strict mode reserved word），前端全挂
+- 测试：`npm test` 138/138 pass，0 fail
+- 热部署：kill 9475 → PORT=9475 重启 → `/api/health` 200
+- 前端验证：Playwright 实测 EN 模式所有 agent drawer 文本正确翻译，ZH 模式中文正常，0 console error
+- commit: 599d6f0，push fork zhining/nanocode-history-replay-fix

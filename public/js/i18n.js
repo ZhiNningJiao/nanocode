@@ -125,9 +125,13 @@ const translations = {
     'agents.subagents_title': (n) => `Running sub-agents (${n})`,
     'agents.subagents_empty': 'No sub-agents running',
     'agents.subagent_stop': 'Stop',
+    'agents.subagent_stop_confirm': (pid) => `Stop sub-agent PID ${pid}?`,
+    'agents.subagent_stop_failed': 'Failed to stop',
     'agents.recent_title': 'Recent sessions',
     'agents.no_summary': '(no summary)',
     'agents.no_agents': 'No agents configured.',
+    'settings.tabtypes.keep_one': 'Keep at least one type',
+    'settings.tabtypes.saved': 'Saved',
   },
   zh: {
     // Header
@@ -245,9 +249,13 @@ const translations = {
     'agents.subagents_title': (n) => `运行中 Sub-agents (${n})`,
     'agents.subagents_empty': '当前没有运行中的 sub-agent',
     'agents.subagent_stop': '停止',
+    'agents.subagent_stop_confirm': (pid) => `停止 sub-agent PID ${pid}?`,
+    'agents.subagent_stop_failed': '停止失败',
     'agents.recent_title': '最近会话',
     'agents.no_summary': '(无摘要)',
     'agents.no_agents': '暂无 agent。',
+    'settings.tabtypes.keep_one': '至少保留一个类型',
+    'settings.tabtypes.saved': '已保存',
   },
 }
 
