@@ -4,6 +4,8 @@
  * Also shows recent Claude sessions from /api/recent-agents for quick resume.
  */
 
+import { t } from './i18n.js'
+
 let _agents = []
 let _drawerOpen = false
 let _refreshTimer = null
@@ -146,13 +148,13 @@ async function _loadTmuxSessions(filterText) {
 
   const title = document.createElement('span')
   title.className = 'tmux-session-title'
-  title.textContent = `tmux 会话 (${sessions.length})`
+  title.textContent = `${t('agents.tmux_sessions')} (${sessions.length})`
   header.appendChild(title)
 
   const refreshBtn = document.createElement('button')
   refreshBtn.type = 'button'
   refreshBtn.className = 'tmux-session-refresh'
-  refreshBtn.title = '刷新'
+  refreshBtn.title = t('agents.tmux_refresh')
   refreshBtn.textContent = '⟳'
   refreshBtn.addEventListener('click', (e) => {
     e.stopPropagation()
@@ -170,7 +172,7 @@ async function _loadTmuxSessions(filterText) {
     const searchInput = document.createElement('input')
     searchInput.type = 'text'
     searchInput.className = 'tmux-search-input settings-input'
-    searchInput.placeholder = '搜索 tmux 会话...'
+    searchInput.placeholder = t('agents.tmux_search_placeholder')
     searchInput.value = filterText || ''
     let debounceTimer
     searchInput.addEventListener('input', () => {
@@ -230,7 +232,7 @@ async function _loadTmuxSessions(filterText) {
     const connectBtn = document.createElement('button')
     connectBtn.type = 'button'
     connectBtn.className = 'tmux-session-connect'
-    connectBtn.textContent = '连接'
+    connectBtn.textContent = t('agents.tmux_connect')
     connectBtn.title = `Attach to ${sess.name}`
     connectBtn.addEventListener('click', (e) => {
       e.stopPropagation()
@@ -247,7 +249,7 @@ async function _loadTmuxSessions(filterText) {
   if (sessions.length > 30) {
     const more = document.createElement('div')
     more.className = 'tmux-session-more'
-    more.textContent = `还有 ${sessions.length - 30} 个会话未显示，请搜索过滤`
+    more.textContent = t('agents.tmux_more', sessions.length - 30)
     section.appendChild(more)
   }
 
@@ -287,13 +289,13 @@ async function _loadSubagents() {
 
   const title = document.createElement('div')
   title.className = 'subagent-section-title'
-  title.textContent = `运行中 Sub-agents (${subagents.length})`
+  title.textContent = t('agents.subagents_title', subagents.length)
   section.appendChild(title)
 
   if (!subagents.length) {
     const empty = document.createElement('div')
     empty.className = 'subagent-empty'
-    empty.textContent = '当前没有运行中的 sub-agent'
+    empty.textContent = t('agents.subagents_empty')
     section.appendChild(empty)
     list.prepend(section)
     return
@@ -342,7 +344,7 @@ async function _loadSubagents() {
         } else {
           alert(data.error || '停止失败')
           stopBtn.disabled = false
-          stopBtn.textContent = '停止'
+    stopBtn.textContent = t('agents.subagent_stop')
         }
       } catch (err) {
         alert('停止失败: ' + err.message)
@@ -380,7 +382,7 @@ async function _loadRecentAgents() {
 
   const title = document.createElement('div')
   title.className = 'recent-agent-title'
-  title.textContent = '最近会话'
+  title.textContent = t('agents.recent_title')
   section.appendChild(title)
 
   for (const entry of entries) {
@@ -402,7 +404,7 @@ async function _loadRecentAgents() {
 
     const summary = document.createElement('div')
     summary.className = 'recent-agent-summary'
-    summary.textContent = entry.summary || '(无摘要)'
+    summary.textContent = entry.summary || t('agents.no_summary')
     info.appendChild(summary)
 
     item.appendChild(info)
@@ -489,7 +491,7 @@ function _render() {
   if (!_agents.length) {
     const empty = document.createElement('div')
     empty.className = 'agent-list-empty'
-    empty.textContent = 'No agents configured. Add one below or click ⟳ to discover from tmux.'
+    empty.textContent = t('agents.no_agents')
     list.appendChild(empty)
     return
   }

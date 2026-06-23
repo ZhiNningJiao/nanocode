@@ -115,6 +115,19 @@ const translations = {
     // Mute button
     'mute.on': 'Muted — click to unmute',
     'mute.off': 'Sound on — click to mute',
+    // Agent drawer
+    'agents.title': 'Agents',
+    'agents.tmux_sessions': 'tmux sessions',
+    'agents.tmux_connect': 'Connect',
+    'agents.tmux_search_placeholder': 'Search tmux sessions…',
+    'agents.tmux_refresh': 'Refresh',
+    'agents.tmux_more': (n) => `${n} more sessions hidden — use search to filter`,
+    'agents.subagents_title': (n) => `Running sub-agents (${n})`,
+    'agents.subagents_empty': 'No sub-agents running',
+    'agents.subagent_stop': 'Stop',
+    'agents.recent_title': 'Recent sessions',
+    'agents.no_summary': '(no summary)',
+    'agents.no_agents': 'No agents configured.',
   },
   zh: {
     // Header
@@ -222,6 +235,19 @@ const translations = {
     // Mute button
     'mute.on': '已静音——点击取消',
     'mute.off': '声音开——点击静音',
+    // Agent drawer
+    'agents.title': 'Agents',
+    'agents.tmux_sessions': 'tmux 会话',
+    'agents.tmux_connect': '连接',
+    'agents.tmux_search_placeholder': '搜索 tmux 会话…',
+    'agents.tmux_refresh': '刷新',
+    'agents.tmux_more': (n) => `还有 ${n} 个会话未显示，请搜索过滤`,
+    'agents.subagents_title': (n) => `运行中 Sub-agents (${n})`,
+    'agents.subagents_empty': '当前没有运行中的 sub-agent',
+    'agents.subagent_stop': '停止',
+    'agents.recent_title': '最近会话',
+    'agents.no_summary': '(无摘要)',
+    'agents.no_agents': '暂无 agent。',
   },
 }
 
@@ -231,10 +257,11 @@ export function getLang() {
   return _currentLang
 }
 
-export function t(key) {
-  return (translations[_currentLang] && translations[_currentLang][key]) ||
+export function t(key, ...args) {
+  const val = (translations[_currentLang] && translations[_currentLang][key]) ||
     (translations['en'] && translations['en'][key]) ||
     key
+  return typeof val === 'function' ? val(...args) : val
 }
 
 export function setLang(lang) {

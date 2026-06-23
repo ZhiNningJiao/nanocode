@@ -9,7 +9,7 @@ const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000
 export function relTimeFromMtime(mtimeMs, nowMs) {
   const diff = nowMs - mtimeMs
   const mins = Math.floor(diff / 60000)
-  if (mins < 1) return '刚刚'
+  if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
@@ -38,7 +38,6 @@ export function cwdFromJsonl(jsonlPath) {
 }
 
 export function cwdFromDirName(dirName) {
-  console.warn(`[recent-agents] no cwd in jsonl for dir=${dirName}, falling back to dir-name heuristic`)
   return dirName.replace(/^-/, '/').replace(/-/g, '/')
 }
 
@@ -61,16 +60,16 @@ export function extractSummary(jsonlPath) {
         if (Array.isArray(parts)) {
           for (const p of parts) {
             if (p.type === 'text' && typeof p.text === 'string' && p.text.trim()) {
-              return p.text.trim().slice(0, 120)
+              return p.text.trim().slice(0, 80)
             }
           }
         } else if (typeof parts === 'string' && parts.trim()) {
-          return parts.trim().slice(0, 120)
+          return parts.trim().slice(0, 80)
         }
       }
     }
   } catch {}
-  return '(无摘要)'
+  return null
 }
 
 export function scanRecentAgents(home, now = Date.now()) {
@@ -107,7 +106,7 @@ export function scanRecentAgents(home, now = Date.now()) {
   if (cutoff.length < 5) cutoff = allEntries.slice(0, 5)
   cutoff = cutoff.slice(0, 50)
 
-  return cutoff.map((e) => {
+  const mapped = cutoff.map((e) => {
     const cwd = cwdFromJsonl(e.fullPath) || cwdFromDirName(e.dirName)
     const cwdParts = cwd.split('/').filter(Boolean)
     const projectName = cwdParts[cwdParts.length - 1] || e.dirName
@@ -123,6 +122,19 @@ export function scanRecentAgents(home, now = Date.now()) {
       _mtimeMs: e.mtimeMs,
     }
   })
+
+  // Deduplicate: keep only the most recent entry per (projectName + summary-prefix) combo.
+  // This prevents the list from being flooded with many identical "work" sessions.
+  const seen = new Set()
+  const deduped = []
+  for (const entry of mapped) {
+    const key = entry.projectName + '::' + (entry.summary || '').slice(0, 40)
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(entry)
+  }
+
+  return deduped.slice(0, 20)
 }
 
 export function createRecentAgentsService({ home = homedir() } = {}) {
