@@ -407,3 +407,22 @@ commit 03beb00
 - 测试：`npm test` 138/138 pass，0 fail
 - 热部署：9476 起 → kill 9475 → 9475 重启 → kill 9476，`/api/health` 200
 - API 验证：`/api/tmux/list` 返回 `paneCommand` 字段（bash/node 等），确认生效
+
+## 2026-06-24 [易用性迭代 — tmux预览净化/即时开关/徽章/自动刷新]
+- 任务：以 driver 视角使用 nanocode，发现并修复 4 个易用性痛点
+- 改进 1 — tmux 预览 ANSI 净化（`server/index.js`）：
+  - 问题：`/api/tmux/list` 的 `capture-pane` 用 `-e` 标志保留了 ANSI 转义码，预览文本满是 `\x1b[1m` 等乱码
+  - 修法：去掉 `-e` 标志，输出纯文本；验证预览可读（如 `cc-builtin: cmd=node, preview='注意：最终 git status…'`）
+- 改进 2 — 标签页类型即时生效（`public/js/app.js`）：
+  - 问题：标签页类型复选框需点 Save 才生效，不像 tool-fold/subagent 开关那样即时
+  - 修法：checkbox change 事件即时调 `setEnabledTabTypes()`，Save 按钮保留但变为可选确认；最后一个类型不可取消（防全空）
+- 改进 3 — Agent 抽屉按钮徽章（`public/js/agents.js` + `public/style.css`）：
+  - 问题：header 的 Agent 按钮（👥图标）不显示有多少 AI agent 正在运行
+  - 修法：`_updateToggleBadge()` 拉取 `/api/tmux/list`，统计 claude/codex/node 会话数，在按钮右上角显示绿色数字徽章；每 30s 自动刷新
+- 改进 4 — 抽屉打开时自动刷新（`public/js/agents.js`）：
+  - 问题：tmux 会话列表只在打开抽屉时加载一次，不自动更新
+  - 修法：`_startAutoRefresh()` 每 15s 刷新 tmux 会话 + subagent 列表；关闭抽屉时停止定时器
+- 测试：`npm test` 138/138 pass，0 fail
+- 热部署：9476 起 → kill 9475 → 9475 重启 → kill 9476，`/api/health` 200
+- 前端验证：agents.js badge 代码 2 处、app.js instantBound 2 处、style.css badge CSS 1 处，均已部署
+- commit: 343e76b，push fork zhining/nanocode-history-replay-fix
