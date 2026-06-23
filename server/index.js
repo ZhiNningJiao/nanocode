@@ -14,7 +14,8 @@ import { getStore } from './store.js'
 import { createTerminalRoutes } from '../terminal/routes.js'
 import { createFileRoutes } from '../terminal/files.js'
 import { seedRemoteDefaults } from '../terminal/remote.js'
-import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete, pushNtfyMessage, isNtfyConfigured } from './qa-watcher.js'
+import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete, pushNtfyMessage, isNtfyConfigured, pushNtfyLinearImportant } from './qa-watcher.js'
+import { startLinearNotifier, stopLinearNotifier, pushNtfyTest, runLinearPoll } from './linear-notif.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 import { loadPersonalConfig } from '../terminal/personal-config.js'
 import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntry } from './akari-proxy.js'
@@ -218,6 +219,35 @@ app.post('/api/notify/ntfy-publish', async (req, res) => {
   res.json({ ok: true })
 })
 
+// ─── Linear important-post ntfy push ────────────────────────────────────────
+// AI agents call this after posting an important Linear comment (PASS/blocker/
+// owner decision). The actual ntfy push runs server-side so keys stay server-side.
+app.post('/api/notify/linear-important', (req, res) => {
+  const { identifier, summary, reason } = req.body || {}
+  if (!identifier || !summary) {
+    return res.status(400).json({ error: 'identifier and summary required' })
+  }
+  pushNtfyLinearImportant({ identifier, summary, reason })
+    .then((result) => res.json({ ok: true, ...result }))
+    .catch((err) => {
+      console.warn('[linear-notif] important push failed:', err.message)
+      res.status(500).json({ ok: false, error: 'push failed' })
+    })
+})
+
+// ─── ntfy channel test ──────────────────────────────────────────────────────
+// Lets the owner verify the server can reach the internal ntfy server before
+// relying on B/C notifications.
+app.post('/api/notify/test-ntfy', asyncWrap(async (_req, res) => {
+  const result = await pushNtfyTest()
+  res.json({ ok: true, ...result })
+}))
+
+// ─── Manual Linear poll trigger (for testing) ────────────────────────────────
+app.post('/api/notify/linear-poll', asyncWrap(async (_req, res) => {
+  const result = await runLinearPoll()
+  res.json({ ok: true, ...result })
+}))
 // ─── Settings ─────────────────────────────────────────────────────────────
 
 const VALID_CLI_PROVIDERS = new Set(['claude', 'agent', 'opencode', 'codex', 'meshy-aigw', 'fable5'])
@@ -914,6 +944,11 @@ function broadcastNotify(msg) {
 }
 
 startQaWatcher(broadcastNotify)
+
+// Start the Linear → ntfy polling bridge (no webhook, all keys server-side).
+// Reads poll interval and API key from the store; gracefully degrades if
+// Linear key or lanes.json is unavailable.
+startLinearNotifier({ store, broadcastNotify })
 
 // Run initial check after startup, then every 30s
 setTimeout(() => runServiceChecks(broadcastNotify), 5000)
