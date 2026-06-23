@@ -575,6 +575,33 @@ function loadTabTypesSettings() {
   const enabled = getEnabledTabTypes()
   document.querySelectorAll('.tab-type-checkbox').forEach(cb => {
     cb.checked = enabled.includes(cb.dataset.tabType)
+    if (!cb.dataset.instantBound) {
+      cb.dataset.instantBound = '1'
+      cb.addEventListener('change', () => {
+        const current = getEnabledTabTypes()
+        if (cb.checked) {
+          if (!current.includes(cb.dataset.tabType)) current.push(cb.dataset.tabType)
+        } else {
+          if (current.length <= 1) {
+            cb.checked = true
+            if (tabTypesStatusEl) {
+              tabTypesStatusEl.textContent = '至少保留一个类型'
+              tabTypesStatusEl.className = 'settings-status error'
+              setTimeout(() => { tabTypesStatusEl.textContent = '' }, 3000)
+            }
+            return
+          }
+          const idx = current.indexOf(cb.dataset.tabType)
+          if (idx >= 0) current.splice(idx, 1)
+        }
+        setEnabledTabTypes(current)
+        if (tabTypesStatusEl) {
+          tabTypesStatusEl.textContent = '已保存'
+          tabTypesStatusEl.className = 'settings-status success'
+          setTimeout(() => { tabTypesStatusEl.textContent = '' }, 2000)
+        }
+      })
+    }
   })
 }
 
@@ -583,23 +610,10 @@ const tabTypesStatusEl = document.getElementById('tab-types-status')
 
 if (tabTypesSaveBtn) {
   tabTypesSaveBtn.addEventListener('click', () => {
-    const enabled = []
-    document.querySelectorAll('.tab-type-checkbox').forEach(cb => {
-      if (cb.checked) enabled.push(cb.dataset.tabType)
-    })
-    if (enabled.length === 0) {
-      if (tabTypesStatusEl) {
-        tabTypesStatusEl.textContent = '至少保留一个类型'
-        tabTypesStatusEl.className = 'settings-status error'
-        setTimeout(() => { tabTypesStatusEl.textContent = '' }, 3000)
-      }
-      return
-    }
-    setEnabledTabTypes(enabled)
     if (tabTypesStatusEl) {
       tabTypesStatusEl.textContent = '已保存'
       tabTypesStatusEl.className = 'settings-status success'
-      setTimeout(() => { tabTypesStatusEl.textContent = '' }, 3000)
+      setTimeout(() => { tabTypesStatusEl.textContent = '' }, 2000)
     }
   })
 }
