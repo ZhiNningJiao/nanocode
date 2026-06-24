@@ -1281,6 +1281,12 @@ export class ClaudeBlockRenderer {
           type: 'attach',
           projectId: this.projectId,
           sessionType: 'bash',
+          // tabType hint: this renderer only ever drives a claude tab. The server
+          // normally reads the tab's stored type, but if the stored tab is missing
+          // (deleted/renamed/deduped while this tab is still open) it would default
+          // to 'bash' and silently drop our claude-input messages. The hint lets the
+          // server route to the claude stream-json bridge even then.
+          tabType: 'claude',
           tabId: this.tabId,
           cols: 200,
           rows: 50,
