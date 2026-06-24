@@ -1207,7 +1207,23 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       }
 
       const tab = store.getTab ? store.getTab(projectId, tabId) : null
-      const tabType = tab?.type || 'bash'
+      // Resolve the tab type. Normally the stored tab metadata wins. But when the
+      // stored tab is MISSING (e.g. it was deleted/renamed/deduped while the
+      // browser still has it open, or store/UI drifted), `tab?.type` is undefined
+      // and we used to silently fall back to 'bash'. That routed an open claude/
+      // codex tab to a raw bash PTY which ignores `claude-input`/`codex-input`
+      // messages entirely → the user types in the box and the agent never sees it.
+      // To survive that drift, honor the client-provided `tabType` hint (the
+      // ClaudeBlockRenderer / CodexBlockRenderer know their own kind) when there is
+      // no stored tab. Stored metadata still takes precedence when present.
+      const clientTabTypeHint =
+        msg.tabType === 'claude' || msg.tabType === 'codex' || msg.tabType === 'bash'
+          ? msg.tabType
+          : null
+      const tabType = tab?.type || clientTabTypeHint || 'bash'
+      if (!tab && clientTabTypeHint && clientTabTypeHint !== 'bash') {
+        console.warn(`[ws:attach] tabId=${tabId} not found in store; honoring client tabType hint='${clientTabTypeHint}' (would have wrongly defaulted to bash and dropped input)`)
+      }
       console.log(`[ws:attach] projectId=${projectId} tabId=${tabId} tabType=${tabType}`)
 
       if (tabType === 'claude') {

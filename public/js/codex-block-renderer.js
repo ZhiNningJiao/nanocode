@@ -524,6 +524,10 @@ export class CodexBlockRenderer {
         type: 'attach',
         projectId: this.projectId,
         sessionType: 'bash',
+        // tabType hint: see claude-block-renderer. This renderer only drives a codex
+        // tab; the hint keeps codex routing alive even if the stored tab metadata is
+        // missing (which would otherwise default to bash and drop codex-input).
+        tabType: 'codex',
         tabId: this.tabId,
         cols,
         rows,
