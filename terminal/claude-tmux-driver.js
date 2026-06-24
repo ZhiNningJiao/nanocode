@@ -19,6 +19,13 @@ const TMUX_BIN = process.env.NANOCODE_TMUX_BIN || '/usr/bin/tmux'
 const SOCKET_DIR = `${process.env.HOME}/.nanocode/tmux-sessions`
 const BRIDGE_SCRIPT = new URL('./claude-tmux-bridge.mjs', import.meta.url).pathname
 
+// Idle-watchdog backstop for an in-flight turn. The deadline resets on every
+// live event from the bridge, so a long but healthy turn is never killed — it
+// only fires when the bridge goes completely silent (crash with no socket
+// close, hung child, etc.). Generous default because legitimate tool turns can
+// idle (e.g. waiting on a long subprocess) between streamed events.
+const TURN_IDLE_TIMEOUT_MS = Number(process.env.NANOCODE_TMUX_TURN_IDLE_MS) || 10 * 60 * 1000
+
 function getClaudeCodeExecutableOverride() {
   const value = process.env.NANOCODE_CLAUDE_CODE_EXECUTABLE
   return typeof value === 'string' && value.trim() ? value.trim() : ''
@@ -147,25 +154,54 @@ class TmuxBridgeClient {
     this.pingId = 0
     this.pendingPongs = new Map()
     this.connected = false
+    // Listeners notified when the socket drops mid-turn (close/error). This is
+    // the critical signal that lets an in-flight turn reject instead of hanging
+    // forever — without it a dead bridge wedges cs.busy=true and every future
+    // user message silently queues and never reaches the agent.
+    this.disconnectListeners = []
+  }
+
+  _notifyDisconnect(reason) {
+    const listeners = this.disconnectListeners.slice()
+    for (const fn of listeners) {
+      try { fn(reason) } catch {}
+    }
   }
 
   async _connectSocket() {
     return new Promise((resolve, reject) => {
       const socket = createConnection(this.socketPath)
+      let settled = false
       socket.on('connect', () => {
         this.socket = socket
         this.connected = true
         this.buffer = ''
+        settled = true
         resolve()
       })
       socket.on('data', (chunk) => this._onData(chunk))
-      socket.on('close', () => { this.connected = false })
+      socket.on('close', () => {
+        this.connected = false
+        this._notifyDisconnect(new Error('tmux bridge socket closed'))
+      })
       socket.on('error', (err) => {
         this.connected = false
-        reject(err)
+        // If the error happens before connect resolves, surface it to the
+        // ensureConnected() caller; otherwise notify in-flight turns.
+        if (!settled) { settled = true; reject(err) }
+        else this._notifyDisconnect(err)
       })
       socket.setTimeout(0)
     })
+  }
+
+  // Subscribe to socket-drop events. Returns an unsubscribe fn.
+  onDisconnect(listener) {
+    this.disconnectListeners.push(listener)
+    return () => {
+      const idx = this.disconnectListeners.indexOf(listener)
+      if (idx >= 0) this.disconnectListeners.splice(idx, 1)
+    }
   }
 
   async ensureConnected() {
@@ -338,7 +374,20 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
 
     try {
       await new Promise((resolve, reject) => {
-        const remove = client.onMessage((msg) => {
+        let done = false
+        let removeMsg = () => {}
+        let removeDisconnect = () => {}
+        let watchdog = null
+        const cleanup = () => {
+          if (done) return
+          done = true
+          removeMsg()
+          removeDisconnect()
+          if (watchdog) { clearTimeout(watchdog); watchdog = null }
+        }
+        const finish = (fn, arg) => { cleanup(); fn(arg) }
+
+        removeMsg = client.onMessage((msg) => {
           if (msg.type === 'event' && msg.event) {
             const event = msg.event
             if (event?.type === 'system' && event?.subtype === 'init' && event?.session_id) {
@@ -355,15 +404,39 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
               sawResult = true
               finalSubtype = event.subtype || finalSubtype
             }
+            // A live event means the bridge is alive and producing output —
+            // push the watchdog deadline forward so a long but healthy turn
+            // is never killed by the idle backstop.
+            if (watchdog) {
+              clearTimeout(watchdog)
+              watchdog = setTimeout(onWatchdog, TURN_IDLE_TIMEOUT_MS)
+            }
             claudeBroadcast(cs, event)
           } else if (msg.type === 'turn-done') {
-            remove()
-            resolve(msg.event || { type: 'result', subtype: 'success' })
+            finish(resolve, msg.event || { type: 'result', subtype: 'success' })
           } else if (msg.type === 'turn-error') {
-            remove()
-            reject(new Error(msg.error || 'tmux bridge turn error'))
+            finish(reject, new Error(msg.error || 'tmux bridge turn error'))
           }
         })
+
+        // ── Disconnect guard (root-cause fix) ──────────────────────────────
+        // If the bridge socket drops mid-turn (bridge crash, tmux kill, server
+        // restart), no turn-done/turn-error will ever arrive. Reject here so the
+        // finally block clears cs.busy; otherwise busy wedges true forever and
+        // every subsequent user message silently queues and never reaches the
+        // agent — the "我发的东西接收不到 / 被迫重发" bug.
+        removeDisconnect = client.onDisconnect((reason) => {
+          finish(reject, reason instanceof Error ? reason : new Error('tmux bridge disconnected'))
+        })
+
+        // ── Idle watchdog (backstop) ───────────────────────────────────────
+        // Even with the disconnect guard, guarantee cs.busy can never wedge
+        // permanently: if no event/turn-done arrives within the idle window,
+        // give up on this turn. Reset on every live event above.
+        const onWatchdog = () => {
+          finish(reject, new Error('tmux bridge turn timed out (no output)'))
+        }
+        watchdog = setTimeout(onWatchdog, TURN_IDLE_TIMEOUT_MS)
 
         // Expose a currentProc proxy so the controller interrupt handler can
         // signal the bridge without knowing it is talking to tmux.
@@ -376,7 +449,13 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
         }
         cs.currentProc = procProxy
 
-        client.send({ type: 'user', text: userText })
+        try {
+          client.send({ type: 'user', text: userText })
+        } catch (err) {
+          // Socket already dead when we tried to dispatch — fail fast instead
+          // of waiting for a turn-done that can never come.
+          finish(reject, err instanceof Error ? err : new Error('tmux bridge send failed'))
+        }
       })
     } catch (err) {
       wasInterrupted = cs.currentProc?._nanocodeInterrupted === true

@@ -190,6 +190,79 @@ describe('claude tmux driver', () => {
     await bridge.close()
   })
 
+  it('clears cs.busy when the bridge socket drops mid-turn (no wedged busy)', async () => {
+    // Regression test for the "messages silently queue forever" bug: when the
+    // bridge socket dropped mid-turn, the turn promise never resolved/rejected,
+    // so cs.busy stayed true and every subsequent user message was queued and
+    // never delivered to the agent. The disconnect guard must reject the turn
+    // so the finally block clears cs.busy.
+    const sessionKey = 'proj-drop:claude:tab-drop'
+    const socketPath = join(TEST_DIR, 'drop-bridge.sock')
+    const bridge = createFakeBridgeServer(socketPath)
+    await bridge.ready
+
+    // On receiving the user turn, emit an init event then drop the connection
+    // WITHOUT sending turn-done — simulating a bridge crash / tmux kill / restart.
+    bridge.onMessage((msg, socket) => {
+      if (msg.type === 'user') {
+        socket.write(JSON.stringify({
+          type: 'event',
+          event: { type: 'system', subtype: 'init', session_id: 'drop-session', tools: [] },
+        }) + '\n')
+        // Drop mid-turn.
+        setTimeout(() => { try { socket.destroy() } catch {} }, 20)
+      }
+    })
+
+    const broadcasts = []
+    const driver = createClaudeTmuxDriver({
+      store: { getSetting: () => null, updateTabMetadata: () => {} },
+      claudeBroadcast: (cs, event) => broadcasts.push(event),
+      rerunTurn: () => {},
+    })
+
+    // Inject a pre-connected client pointed at the fake bridge so run() does not
+    // try to launch a real tmux session.
+    const client = driver._getBridgeClient(sessionKey, {})
+    client.socketPath = socketPath
+    await client._connectSocket()
+    // Short-circuit ensureConnected().
+    client.ensureConnected = async () => {}
+
+    const cs = {
+      sessionKey,
+      claudeSessionId: 'initial',
+      busy: false,
+      turnCount: 0,
+      queue: [],
+      explicitSessionId: false,
+      tabLabel: '',
+    }
+
+    await driver.run(cs, 'hello agent', sessionKey, TEST_DIR)
+
+    // The turn must have settled: busy cleared, proc released. Previously this
+    // would hang forever and the assertion below would never be reached (the
+    // test would time out), or busy would remain true.
+    assert.equal(cs.busy, false, 'cs.busy must be cleared after a mid-turn disconnect')
+    assert.equal(cs.currentProc, null, 'currentProc must be released')
+
+    // A follow-up turn must actually dispatch (not silently queue). Re-point the
+    // client at a fresh, healthy bridge connection and verify the turn completes.
+    bridge.onMessage((msg, socket) => {
+      if (msg.type === 'user') {
+        socket.write(JSON.stringify({ type: 'turn-done', event: { type: 'result', subtype: 'success' } }) + '\n')
+      }
+    })
+    await client._connectSocket()
+    client.ensureConnected = async () => {}
+    await driver.run(cs, 'second message', sessionKey, TEST_DIR)
+    assert.equal(cs.busy, false, 'second turn must also settle cleanly')
+    assert.equal(cs.queue.length, 0, 'second message must dispatch, not queue')
+
+    await bridge.close()
+  })
+
   it('writes and reads the session id persistence file', async () => {
     const sessionKey = 'proj-persist:claude:tab-persist'
     const driver = createClaudeTmuxDriver({
