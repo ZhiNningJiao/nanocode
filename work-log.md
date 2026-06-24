@@ -1,5 +1,14 @@
 # Work Log
 
+## 2026-06-24 [NCBUG 紧急通信修复部署验证]
+- 任务：修复/部署 nanocode 9475 文本框消息发给 agent 后 agent 收不到的问题，保持 9475/9476 至少一个可用。
+- 接手状态：已有修复提交在分支 `zhining/fix-tmux-busy-wedge-dropped-messages`。关键提交：`c2d7eef fix(tmux): clear cs.busy on mid-turn bridge disconnect so messages stop silently queuing`、`a71faf4 fix(routing): honor client tabType hint when stored tab is missing`、`3776934 docs: update work-log with tmux filter/kill/drawer/manage-tabtypes iteration`。
+- 根因确认：消息链路是前端 `claude-input` → `/ws/terminal` → `terminal/claude-session-controller.js` → `terminal/claude-tmux-driver.js` → tmux bridge/Claude SDK。主要断点是 tmux bridge socket 中途断开时 `runTmuxTurn` 的 Promise 不 settle，`cs.busy` 永久为 true，后续用户消息只进 `cs.queue` 不投递给 agent。另一个已修复风险是存储 tab 丢失时 WS attach 默认回 bash，导致 `claude-input` 被 bash PTY 忽略。
+- 测试证据：`npm test` 全量通过，`tests 139`, `pass 139`, `fail 0`。其中 `claude tmux driver` 回归覆盖 bridge 收到 user 后发 init 再断 socket、不发 `turn-done` 的场景，断言 `cs.busy` 复位且第二条消息能继续 dispatch。
+- 部署步骤：先重启 9476：`PORT=9476 node server/index.js`，验证 `curl http://127.0.0.1:9476/` → `200`，页面 asset version `v=3776934`；再重启 9475，期间 9476 保持在线；最终 `curl` 验证 9475/9476 均 `200`，9475 asset version `v=3776934`。
+- 真链路验证：通过 9475 创建临时 Claude tab，WebSocket attach 后发送 `claude-input`：`Reply with exactly this marker and nothing else: NCBUG_OK_1782271869036`。收到结果：`{"user":true,"init":true,"result":true,"assistantIncludesMarker":true,"assistant":"NCBUG_OK_1782271869036"}`，证明前端消息已真实到达目标 agent 并返回。
+- 远端：推送到 `fork` 的当前分支 `zhining/fix-tmux-busy-wedge-dropped-messages`。
+
 ## 2026-06-24 [dogfood UX: tmux filter/kill, Escape-close drawer, manage tab types shortcut]
 - 任务：作为真实用户 dogfood nanocode，发现并修复 4 个操作痛点
 - 痛点 & 修复：
