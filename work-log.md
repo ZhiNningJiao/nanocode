@@ -1,5 +1,18 @@
 # Work Log
 
+## 2026-06-24 [dogfood UX: tmux filter/kill, Escape-close drawer, manage tab types shortcut]
+- 任务：作为真实用户 dogfood nanocode，发现并修复 4 个操作痛点
+- 痛点 & 修复：
+  1. **tmux session 列表无类型筛选**（91 sessions 全混在一起）→ 新增 filter chips (All/AI/Claude/Codex/Node/Bash)，AI 分组聚合 claude+codex+node，`_currentTypeFilter` 状态过滤
+  2. **无 kill session 按钮**（死 session 无法清理）→ 每行加 × 按钮 + 确认弹窗；后端新增 `DELETE /api/tmux/kill`，session name 用 `^[a-zA-Z0-9._-]+$` regex 防注入
+  3. **Escape 不关 agent drawer**（backdrop 阻止点击）→ agents.js 加 keydown listener，Escape 关抽屉
+  4. **新 tab 菜单无 "Manage tab types" 快捷入口** → tab-manager.js 新增菜单项，点击打开 settings 并滚到 tab type checkboxes
+- i18n: 新增 5 key (tmux_filter_all, tmux_filter_ai, tmux_kill_title, tmux_kill_confirm, tmux_kill_failed) en+zh
+- CSS: `.tmux-filter-chips`, `.tmux-filter-chip`, `.tmux-session-btns`, `.tmux-session-kill`, `.tab-new-menu-manage` + light theme
+- 验证：`npm test` 138/138 pass 0 fail；dogfood_drive.mjs: filter chips=6, kill buttons=30, manage link=true, console errors=0
+- 热部署：9475 重启成功，`DELETE /api/tmux/kill` API 验证通过（nonexistent session 返回 404 错误，不崩溃）
+- commit: e87abb1, push fork zhining/fix-tmux-busy-wedge-dropped-messages
+
 ## 2026-06-24 [9475 实时通信丢消息 — tmux bridge busy 永久卡死修复]
 - 现象：主人在 9475 文本框给 agent 发消息，消息不实时送达，同一条长消息被迫重发 5 次（像被打断/丢失）。
 - 根因（具体到函数）：`terminal/claude-tmux-driver.js` 的 `runTmuxTurn`。本轮 turn 的 Promise **只**在 bridge Unix socket 收到 `turn-done`/`turn-error` 时 resolve/reject。一旦 socket 中途断开（bridge 崩溃 / tmux 被 kill / turn 进行中 server 重启），这两条消息永远不会到，Promise 永久挂起 → `finally` 永不执行 → **`cs.busy` 永久停留 true**。busy 卡死后，后续每一条 `claude-input` 都被 `if (cs.busy)` 分支塞进 `cs.queue`（弹 "Message queued"），永远不投递给 agent。这就是"发的东西收不到 / 被迫重发"。`TmuxBridgeClient` 的 `socket.on('close')` 当时只翻 `this.connected=false`，不通知在途 turn，所以断连完全静默。
