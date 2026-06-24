@@ -1,5 +1,13 @@
 # Work Log
 
+## 2026-06-24 [9475 实时通信丢消息 — tmux bridge busy 永久卡死修复]
+- 现象：主人在 9475 文本框给 agent 发消息，消息不实时送达，同一条长消息被迫重发 5 次（像被打断/丢失）。
+- 根因（具体到函数）：`terminal/claude-tmux-driver.js` 的 `runTmuxTurn`。本轮 turn 的 Promise **只**在 bridge Unix socket 收到 `turn-done`/`turn-error` 时 resolve/reject。一旦 socket 中途断开（bridge 崩溃 / tmux 被 kill / turn 进行中 server 重启），这两条消息永远不会到，Promise 永久挂起 → `finally` 永不执行 → **`cs.busy` 永久停留 true**。busy 卡死后，后续每一条 `claude-input` 都被 `if (cs.busy)` 分支塞进 `cs.queue`（弹 "Message queued"），永远不投递给 agent。这就是"发的东西收不到 / 被迫重发"。`TmuxBridgeClient` 的 `socket.on('close')` 当时只翻 `this.connected=false`，不通知在途 turn，所以断连完全静默。
+- 修复（3 层）：①`TmuxBridgeClient` 新增 `onDisconnect()`，socket close/error 时通知在途 turn；②`runTmuxTurn` 注册 disconnect guard，断连即 reject → finally 清 `cs.busy` + 释放 `currentProc`；③加 idle 看门狗兜底（每个 live event 重置，默认 10min，`NANOCODE_TMUX_TURN_IDLE_MS` 可调），保证即使无 socket close 的静默 hang 也不会永久卡 busy；④dispatch 时 `send()` 失败立即 fail-fast。
+- 验证：新增回归测试（fake bridge 收到 user turn 后发 init 再 destroy socket，不发 turn-done）→ 断言 `cs.busy` 复位、`currentProc` 释放、后续消息正常 dispatch 而非入队。`node --test claude-tmux-driver.test.js` 4/4 pass（含新测试，日志可见 `turn error: tmux bridge socket closed` 即 guard 触发）；`npm test` 全量 139/139 pass，0 fail。
+- 红线遵守：**未重启 9475**（主人可能正在用）。修复在源码，下次重启生效。
+- 产出：分支 `zhining/fix-tmux-busy-wedge-dropped-messages` 已 push 到 fork，commit c2d7eef。run log: `run-tmux-msgfix.log`。
+
 ## 2026-06-07 [subagent 事件隔离 — 输入框闪烁修复]
 - 任务：修复 claude tab 派出 subagent 时，输入框闪烁 + 消息被误锁进队列
 - 根因：`_isLiveTurnEvent` 未检查 `parent_tool_use_id`，subagent 流式事件被误当主 turn 进行中 → thinking 抖动 → 输入框闪；`_handleResult` 未检查 `parent_tool_use_id`，subagent result 误触发主 turn 的 `_setThinking(false)` + `turn-complete` + flush
