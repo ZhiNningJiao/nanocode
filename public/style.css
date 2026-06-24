@@ -3150,6 +3150,7 @@ body.workspace-active .landing-overlay { display: none; }
   color: #b4e878;
   cursor: pointer;
   transition: background 0.12s ease;
+  white-space: nowrap;
 }
 .tmux-session-connect:hover {
   background: rgba(140,198,63,0.2);
@@ -3196,6 +3197,93 @@ body.workspace-active .landing-overlay { display: none; }
 .tmux-badge-bash { background: rgba(255,255,255,0.1); color: var(--fg-3, rgba(255,255,255,0.5)); }
 .tmux-badge-node { background: rgba(135,206,235,0.15); color: #87ceeb; }
 .tmux-badge-other { background: rgba(255,255,255,0.06); color: var(--fg-3, rgba(255,255,255,0.4)); }
+
+.tmux-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px 6px;
+}
+.tmux-filter-chip {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  color: var(--fg-3, rgba(255,255,255,0.45));
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+}
+.tmux-filter-chip:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--fg-2, rgba(255,255,255,0.7));
+}
+.tmux-filter-chip.active {
+  background: rgba(140,198,63,0.18);
+  border-color: rgba(140,198,63,0.4);
+  color: #b4e878;
+}
+.tmux-session-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.tmux-session-kill {
+  font-size: 12px;
+  line-height: 1;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid rgba(229,57,53,0.3);
+  background: rgba(229,57,53,0.08);
+  color: rgba(229,57,53,0.7);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.tmux-session-kill:hover {
+  background: rgba(229,57,53,0.2);
+  color: #ef5350;
+}
+.tmux-session-kill:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tab-new-menu-manage {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  margin-top: 4px;
+  padding-top: 6px;
+  opacity: 0.7;
+}
+.tab-new-menu-manage:hover { opacity: 1; }
+
+[data-theme="light"] .tmux-filter-chip {
+  border-color: rgba(0,0,0,0.12);
+  background: rgba(0,0,0,0.03);
+  color: var(--fg-3, rgba(0,0,0,0.45));
+}
+[data-theme="light"] .tmux-filter-chip:hover {
+  background: rgba(0,0,0,0.06);
+}
+[data-theme="light"] .tmux-filter-chip.active {
+  background: rgba(140,198,63,0.15);
+  border-color: rgba(140,198,63,0.4);
+  color: #5a8a2a;
+}
+[data-theme="light"] .tmux-session-kill {
+  border-color: rgba(229,57,53,0.25);
+  background: rgba(229,57,53,0.05);
+  color: rgba(229,57,53,0.6);
+}
+[data-theme="light"] .tmux-session-kill:hover {
+  background: rgba(229,57,53,0.15);
+}
+[data-theme="light"] .tab-new-menu-manage {
+  border-top-color: rgba(0,0,0,0.08);
+}
 
 [data-theme="light"] .tmux-search-input {
   border-color: rgba(0,0,0,0.12);
