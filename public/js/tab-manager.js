@@ -520,6 +520,24 @@ export class TabManager {
       })
       menu.appendChild(item)
     }
+    // "Manage tab types" shortcut — opens settings to the tab types section
+    const manageItem = document.createElement('button')
+    manageItem.type = 'button'
+    manageItem.className = 'tab-new-menu-item tab-new-menu-manage'
+    manageItem.innerHTML =
+      `<span class="tab-new-menu-icon">${MANAGE_ICON_SVG}</span>` +
+      `<span class="tab-new-menu-label">${'Manage tab types'}</span>`
+    manageItem.addEventListener('click', () => {
+      this._closeNewTabMenu()
+      const settingsBtn = document.getElementById('settings-toggle-btn')
+      if (settingsBtn) settingsBtn.click()
+      // Scroll to tab types section after panel opens
+      setTimeout(() => {
+        const cb = document.querySelector('.tab-type-checkbox')
+        if (cb) cb.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 400)
+    })
+    menu.appendChild(manageItem)
     document.body.appendChild(menu)
     const rect = anchor.getBoundingClientRect()
     menu.style.position = 'fixed'
@@ -584,5 +602,7 @@ const TYPE_ICON_SVG = {
   // Tmux: terminal split icon
   tmux: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>`,
 }
+
+const MANAGE_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="16" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/></svg>`
 
 export { TYPE_ICON_SVG }

@@ -638,6 +638,20 @@ app.get('/api/tmux/list', asyncWrap(async (_req, res) => {
   } catch { res.json([]) }
 }))
 
+// Kill a tmux session by name
+app.delete('/api/tmux/kill', asyncWrap(async (req, res) => {
+  const { name } = req.body || {}
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' })
+  // Prevent command injection: only allow alphanumeric, dash, underscore, dot
+  if (!/^[a-zA-Z0-9._-]+$/.test(name)) return res.status(400).json({ error: 'invalid session name' })
+  try {
+    await execFileAsync('tmux', ['kill-session', '-t', name], { timeout: 5000 })
+    res.json({ ok: true, name })
+  } catch (err) {
+    res.status(404).json({ error: err.message?.slice(0, 200) || 'kill failed' })
+  }
+}))
+
 // ─── Agent health monitor ─────────────────────────────────────────────────────
 // Tracks idle/stuck/approval/rate-limited/crashed state for active claude and
 // codex sessions. Events are fed via sessionController hooks in routes.js.

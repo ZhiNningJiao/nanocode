@@ -42,6 +42,12 @@ export function initAgentDrawer() {
   toggleBtn?.addEventListener('click', () => drawer.classList.contains('open') ? close() : open())
   closeBtn?.addEventListener('click', close)
   backdrop?.addEventListener('click', close)
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && drawer.classList.contains('open')) {
+      close()
+    }
+  })
   // 【保留·暂隐藏】按钮在 index.html 已注释掉，discoverBtn 为 null，?. 保证此绑定安全跳过，功能代码(_discover)完整保留
   discoverBtn?.addEventListener('click', _discover)
 
@@ -81,6 +87,16 @@ function _stopAutoRefresh() {
 }
 
 let _currentFilter = ''
+let _currentTypeFilter = 'all'
+
+function _getSessionType(sess) {
+  const cmd = (sess.paneCommand || '').toLowerCase()
+  if (cmd.includes('claude')) return 'claude'
+  if (cmd.includes('codex')) return 'codex'
+  if (cmd === 'bash' || cmd === 'sh') return 'bash'
+  if (cmd === 'node') return 'node'
+  return 'other'
+}
 
 async function _updateToggleBadge() {
   try {
@@ -144,7 +160,16 @@ async function _loadTmuxSessions(filterText) {
     return byCreated(a, b)
   })
 
-  // Apply filter if provided
+  // Apply type filter
+  if (_currentTypeFilter !== 'all') {
+    if (_currentTypeFilter === 'ai') {
+      sessions = sessions.filter(isAi)
+    } else {
+      sessions = sessions.filter(s => _getSessionType(s) === _currentTypeFilter)
+    }
+  }
+
+  // Apply text filter if provided
   if (filterText) {
     const ft = filterText.toLowerCase()
     sessions = sessions.filter(s =>
@@ -177,6 +202,31 @@ async function _loadTmuxSessions(filterText) {
   header.appendChild(refreshBtn)
 
   section.appendChild(header)
+
+  // Type filter chips
+  const filterWrap = document.createElement('div')
+  filterWrap.className = 'tmux-filter-chips'
+  const filterOptions = [
+    { key: 'all', label: t('agents.tmux_filter_all') },
+    { key: 'ai', label: t('agents.tmux_filter_ai') },
+    { key: 'claude', label: 'Claude' },
+    { key: 'codex', label: 'Codex' },
+    { key: 'node', label: 'Node' },
+    { key: 'bash', label: 'Bash' },
+  ]
+  for (const opt of filterOptions) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'tmux-filter-chip' + (_currentTypeFilter === opt.key ? ' active' : '')
+    chip.textContent = opt.label
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation()
+      _currentTypeFilter = opt.key
+      _loadTmuxSessions(_currentFilter)
+    })
+    filterWrap.appendChild(chip)
+  }
+  section.appendChild(filterWrap)
 
   // Search filter (only if there are many sessions)
   if (sessions.length > 5 || filterText) {
@@ -242,6 +292,38 @@ async function _loadTmuxSessions(filterText) {
 
     item.appendChild(info)
 
+    const btnRow = document.createElement('div')
+    btnRow.className = 'tmux-session-btns'
+
+    const killBtn = document.createElement('button')
+    killBtn.type = 'button'
+    killBtn.className = 'tmux-session-kill'
+    killBtn.textContent = '×'
+    killBtn.title = t('agents.tmux_kill_title')
+    killBtn.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      if (!confirm(t('agents.tmux_kill_confirm', sess.name))) return
+      killBtn.disabled = true
+      try {
+        const res = await fetch('/api/tmux/kill', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: sess.name }),
+        })
+        const data = await res.json()
+        if (data.ok) {
+          item.remove()
+        } else {
+          alert(data.error || t('agents.tmux_kill_failed'))
+          killBtn.disabled = false
+        }
+      } catch (err) {
+        alert(t('agents.tmux_kill_failed') + ': ' + err.message)
+        killBtn.disabled = false
+      }
+    })
+    btnRow.appendChild(killBtn)
+
     const connectBtn = document.createElement('button')
     connectBtn.type = 'button'
     connectBtn.className = 'tmux-session-connect'
@@ -251,7 +333,9 @@ async function _loadTmuxSessions(filterText) {
       e.stopPropagation()
       _connectTmuxSession(sess.name)
     })
-    item.appendChild(connectBtn)
+    btnRow.appendChild(connectBtn)
+
+    item.appendChild(btnRow)
 
     // Also allow clicking the whole item
     item.addEventListener('click', () => _connectTmuxSession(sess.name))
