@@ -16,6 +16,7 @@ import { createFileRoutes } from '../terminal/files.js'
 import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete } from './qa-watcher.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 import { createPluginHost, loadPlugins, discoverPlugins } from './plugin-host.js'
+import { registerTeamRoutes, handleTeamLoginWs, isTeamLoginRequest } from './team-manager.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // Plugin/network failures (fetch timeout, connection refused, bad response,
@@ -246,6 +247,13 @@ app.post('/api/plugins/toggle', (req, res) => {
   res.json({ ok: true, name, enabled: !!enabled, needsReload: true })
 })
 
+// ─── Dual-team management (MES-13273) ──────────────────────────────────────
+// Plugin-management panel's "Dual-Team login/switch" buttons. The active-team
+// setting is read by the SDK driver which injects CLAUDE_CONFIG_DIR into every
+// spawned claude session. Credentials are never read — only their existence is
+// checked, and the login PTY is the user's own interactive terminal.
+registerTeamRoutes(app, store, broadcastNotify)
+
 // ─── Auth status (P1-4) ────────────────────────────────────────────────────
 
 let _authStatusCache = null
@@ -471,6 +479,7 @@ const terminalWss = new WebSocketServer({
 const tabsWss = new WebSocketServer({ noServer: true })
 const notifyWss = new WebSocketServer({ noServer: true })
 const pluginWss = new WebSocketServer({ noServer: true })
+const teamLoginWss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
   const parsed = new URL(req.url, `http://${req.headers.host}`)
@@ -485,6 +494,16 @@ server.on('upgrade', (req, socket, head) => {
       socket.destroy()
       return
     }
+  }
+
+  // Dual-team login terminal (MES-13273): interactive `claude` PTY with the
+  // team's CLAUDE_CONFIG_DIR so the user can log in. Checked before the static
+  // pathname branches because the path has a :team segment.
+  if (isTeamLoginRequest(pathname)) {
+    teamLoginWss.handleUpgrade(req, socket, head, (ws) => {
+      handleTeamLoginWs(ws, req)
+    })
+    return
   }
 
   // Let plugins handle their own WebSocket paths first.
