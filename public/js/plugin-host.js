@@ -344,11 +344,6 @@ export function createPluginUiHost({ notifyWs } = {}) {
       return
     }
 
-    if (plugins.length === 0) {
-      container.innerHTML = '<div class="plugin-manager-empty">No plugins found.</div>'
-      return
-    }
-
     const list = document.createElement('div')
     list.className = 'plugin-manager-list'
 
@@ -412,6 +407,210 @@ export function createPluginUiHost({ notifyWs } = {}) {
         span.textContent = !enabled ? 'On' : 'Off'
       }
     })
+
+    // Dual-team login/switch section (MES-13273).
+    renderTeamManagement(container).catch((err) => {
+      console.warn('[plugin-ui] team management render failed:', err)
+    })
+  }
+
+  /**
+   * Render the dual-team login/switch section into the plugin manager.
+   *
+   * Shows Team1 / Team2 status (configured / active) and offers one-click
+   * "Switch" (set the active team for new claude sessions) and "Login" (open an
+   * interactive xterm modal running `claude` with the team's CLAUDE_CONFIG_DIR).
+   *
+   * SECURITY: credentials are never displayed. "configured" only reflects the
+   * existence of a credentials file; the login modal is the user's own
+   * interactive terminal — NanoCode only relays bytes.
+   */
+  async function renderTeamManagement(container) {
+    const section = document.createElement('div')
+    section.className = 'team-management'
+    section.innerHTML = '<div class="plugin-manager-loading">Loading teams…</div>'
+    container.appendChild(section)
+
+    let status
+    try {
+      const res = await fetch('/api/teams')
+      if (!res.ok) throw new Error((await res.text()) || 'fetch failed')
+      status = await res.json()
+    } catch (err) {
+      section.innerHTML = `<div class="plugin-manager-error">Failed to load teams: ${escapeHtml(String(err?.message || err))}</div>`
+      return
+    }
+
+    function paint() {
+      const teams = status.teams || []
+      section.innerHTML = `
+        <h3 class="team-management-title">Dual-Team Management</h3>
+        <p class="plugin-manager-hint">
+          Same email, two teams. Switch sets which team new claude sessions use
+          (CLAUDE_CONFIG_DIR). Login opens an interactive terminal to
+          authenticate that team. Credentials are never shown.
+        </p>
+        <div class="team-management-list"></div>
+      `
+      const listEl = section.querySelector('.team-management-list')
+      teams.forEach((team) => {
+        const row = document.createElement('div')
+        row.className = `team-row${team.active ? ' team-row-active' : ''}`
+        row.innerHTML = `
+          <div class="team-row-info">
+            <div class="team-row-name">
+              ${escapeHtml(team.name)}
+              ${team.active ? '<span class="team-badge team-badge-active">Active</span>' : ''}
+              <span class="team-badge team-badge-${team.configured ? 'on' : 'off'}">${team.configured ? 'Logged in' : 'Not logged in'}</span>
+            </div>
+            <div class="team-row-dir">${escapeHtml(team.configDir || '')}</div>
+          </div>
+          <div class="team-row-actions">
+            <button type="button" class="btn btn-secondary team-btn-switch" data-team="${escapeHtml(team.key)}" ${team.active ? 'disabled' : ''}>Switch</button>
+            <button type="button" class="btn btn-primary team-btn-login" data-team="${escapeHtml(team.key)}">Login</button>
+          </div>
+        `
+        listEl.appendChild(row)
+      })
+
+      listEl.addEventListener('click', async (e) => {
+        const btn = e.target.closest('button[data-team]')
+        if (!btn) return
+        const teamKey = btn.dataset.team
+        if (btn.classList.contains('team-btn-switch')) {
+          await switchTeam(teamKey)
+        } else if (btn.classList.contains('team-btn-login')) {
+          openTeamLoginTerminal(teamKey)
+        }
+      })
+    }
+
+    async function switchTeam(teamKey) {
+      try {
+        const res = await fetch('/api/teams/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ team: teamKey }),
+        })
+        if (!res.ok) throw new Error((await res.text()) || 'switch failed')
+        const data = await res.json()
+        status = { teams: data.teams, activeTeam: data.activeTeam }
+        paint()
+        showToast(`Switched active team to ${data.activeTeam}.`)
+      } catch (err) {
+        showToast(`Failed to switch team: ${err?.message || err}`)
+      }
+    }
+
+    paint()
+
+    // Live-update when the server pushes a team status change (e.g. another tab
+    // switched the team). Routed via the notify WS as plugin:team:update.
+    if (!section.dataset.teamListenerAttached) {
+      section.dataset.teamListenerAttached = '1'
+      onMessage((msg) => {
+        if (msg?.type === 'plugin:team:update' && msg.teams) {
+          status = { teams: msg.teams, activeTeam: msg.activeTeam }
+          if (section.isConnected) paint()
+        }
+      })
+    }
+  }
+
+  /**
+   * Open a modal containing an xterm terminal connected to /ws/team-login/:team.
+   * The server spawns `claude` with the team's CLAUDE_CONFIG_DIR so the user can
+   * complete login interactively. NanoCode only relays bytes — it never reads
+   * credentials.
+   */
+  function openTeamLoginTerminal(team) {
+    const TerminalCtor = window.Terminal
+    const FitAddonCtor = window.FitAddon?.FitAddon || window.FitAddon
+    if (typeof TerminalCtor !== 'function') {
+      showToast('Terminal library not loaded. Reload the page.')
+      return
+    }
+
+    // Backdrop + modal
+    const overlay = document.createElement('div')
+    overlay.className = 'team-login-modal-overlay'
+    overlay.innerHTML = `
+      <div class="team-login-modal">
+        <div class="team-login-modal-header">
+          <span class="team-login-modal-title">Login — ${escapeHtml(team)}</span>
+          <button type="button" class="btn-icon team-login-modal-close" aria-label="Close">&#10005;</button>
+        </div>
+        <div class="team-login-terminal"></div>
+        <div class="team-login-modal-hint">Interactive claude session for this team. Run /login to authenticate if needed. Close when done.</div>
+      </div>
+    `
+    document.body.appendChild(overlay)
+
+    const termEl = overlay.querySelector('.team-login-terminal')
+    const term = new TerminalCtor({
+      fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, monospace",
+      fontSize: 13,
+      cursorBlink: true,
+      allowProposedApi: true,
+    })
+    const fitAddon = FitAddonCtor ? new FitAddonCtor() : null
+    if (fitAddon) term.loadAddon(fitAddon)
+    term.open(termEl)
+    requestAnimationFrame(() => { try { fitAddon?.fit() } catch {} })
+
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const url = `${protocol}//${location.host}/ws/team-login/${encodeURIComponent(team)}`
+    const ws = new WebSocket(url)
+    ws.binaryType = 'arraybuffer'
+
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(() => {
+        try {
+          fitAddon?.fit()
+          const dims = term.cols != null ? { type: 'resize', cols: term.cols, rows: term.rows } : null
+          if (dims && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(dims))
+        } catch {}
+      })
+    })
+    resizeObserver.observe(termEl)
+
+    ws.addEventListener('open', () => {
+      if (term.cols != null) {
+        try { ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })) } catch {}
+      }
+    })
+    ws.addEventListener('message', (ev) => {
+      let data
+      if (ev.data instanceof ArrayBuffer) data = new TextDecoder().decode(ev.data)
+      else data = ev.data
+      try { term.write(data) } catch {}
+    })
+    ws.addEventListener('close', () => {
+      try { term.writeln('\r\n[connection closed]') } catch {}
+    })
+    ws.addEventListener('error', () => {
+      try { term.writeln('\r\n[connection error]') } catch {}
+    })
+
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(data) } catch {}
+      }
+    })
+
+    function close() {
+      try { ws.close() } catch {}
+      resizeObserver.disconnect()
+      try { term.dispose() } catch {}
+      overlay.remove()
+    }
+    overlay.querySelector('.team-login-modal-close').addEventListener('click', close)
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close() })
+    // ESC to close
+    const onKey = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey) } }
+    document.addEventListener('keydown', onKey)
+
+    term.focus()
   }
 
   function escapeHtml(str) {

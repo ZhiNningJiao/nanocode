@@ -2792,6 +2792,152 @@ body.workspace-active .landing-overlay { display: none; }
   pointer-events: none;
 }
 
+/* ── Dual-team management (MES-13273) ──────────────────────────────────── */
+.team-management {
+  margin-top: 18px;
+  border-top: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+  padding-top: 12px;
+}
+.team-management-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-2, rgba(255,255,255,0.8));
+  margin: 0 0 4px;
+}
+.team-management-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.team-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 6px;
+}
+.team-row-active {
+  border-color: rgba(80, 180, 120, 0.45);
+  background: rgba(80, 180, 120, 0.07);
+}
+.team-row-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-2, rgba(255,255,255,0.8));
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.team-row-dir {
+  font-size: 10px;
+  color: var(--fg-3, rgba(255,255,255,0.38));
+  margin-top: 2px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  word-break: break-all;
+}
+.team-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.team-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--fg-3, rgba(255,255,255,0.55));
+}
+.team-badge-active {
+  background: rgba(80, 180, 120, 0.18);
+  border-color: rgba(80, 180, 120, 0.5);
+  color: #6fd49a;
+}
+.team-badge-on { color: #6fd49a; border-color: rgba(80, 180, 120, 0.35); }
+.team-badge-off { color: #e0a458; border-color: rgba(224, 164, 88, 0.35); }
+.team-btn-switch, .team-btn-login {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: var(--fg-2, rgba(255,255,255,0.8));
+}
+.team-btn-switch:disabled { opacity: 0.4; cursor: default; }
+.team-btn-login {
+  background: var(--accent, #4a8dff);
+  border-color: transparent;
+  color: #fff;
+}
+.team-btn-switch:not(:disabled):hover { background: rgba(255,255,255,0.1); }
+.team-btn-login:hover { filter: brightness(1.1); }
+
+/* ── Team login modal (xterm) ──────────────────────────────────────────── */
+.team-login-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+  padding: 24px;
+}
+.team-login-modal {
+  width: min(760px, 96vw);
+  height: min(460px, 86vh);
+  background: var(--bg-2, #1a1b1e);
+  border: 1px solid var(--glass-border, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+}
+.team-login-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+  background: rgba(255,255,255,0.02);
+}
+.team-login-modal-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-1, rgba(255,255,255,0.9));
+}
+.team-login-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--fg-3, rgba(255,255,255,0.5));
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.team-login-modal-close:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.team-login-terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px;
+  background: #000;
+}
+.team-login-terminal .xterm {
+  height: 100%;
+}
+.team-login-modal-hint {
+  font-size: 10px;
+  color: var(--fg-3, rgba(255,255,255,0.4));
+  padding: 6px 12px;
+  border-top: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+}
+
 /* Fleet term plugin */
 .fleet-term-layout {
   display: flex;

@@ -1,5 +1,6 @@
 import { query as defaultQuery } from '@anthropic-ai/claude-agent-sdk'
 import { createPersistentSpawnHook } from './claude-persistent-spawn.js'
+import { wrapSpawnWithTeamEnv } from './team-env.js'
 
 // One persistent-spawn hook shared across all streaming sessions.
 // createPersistentSpawnHook() registers its process.once('exit') guard at
@@ -380,8 +381,9 @@ export function createClaudeSdkDriver({
             claudeBroadcast(cs, { type: 'system', subtype: 'stderr', text: trimmed })
           },
           // Persistent spawn hook so the main claude process survives nanocode,
-          // and so we can record its PID for sub-agent discovery.
-          spawnClaudeCodeProcess: (opts) => {
+          // and so we can record its PID for sub-agent discovery. Wrapped so the
+          // active team's CLAUDE_CONFIG_DIR is injected (dual-team support).
+          spawnClaudeCodeProcess: wrapSpawnWithTeamEnv(store, (opts) => {
             const proxy = _persistentSpawnHook(opts)
             if (proxy?.pid) {
               try {
@@ -389,7 +391,7 @@ export function createClaudeSdkDriver({
               } catch {}
             }
             return proxy
-          },
+          }),
           ...sessionOptions,
         },
       })
@@ -565,7 +567,7 @@ export function createClaudeSdkDriver({
     teardownStreamingSession(cs)
 
     const options = buildStreamingOptions(cs, cwd)
-    const baseSpawn = options.spawnClaudeCodeProcess || _persistentSpawnHook
+    const baseSpawn = wrapSpawnWithTeamEnv(store, options.spawnClaudeCodeProcess || _persistentSpawnHook)
     options.spawnClaudeCodeProcess = (opts) => {
       const proxy = baseSpawn(opts)
       if (proxy?.pid) {
