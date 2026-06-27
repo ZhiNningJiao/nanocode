@@ -218,4 +218,55 @@ describe('claude tmux driver', () => {
 
     unlinkSync(sessionIdFile)
   })
+
+  it('releases cs.busy when the bridge socket closes mid-turn', async () => {
+    // Regression: if the bridge process dies while a turn is in flight, the
+    // turn promise used to hang forever (no turn-done/turn-error would ever
+    // arrive), leaving cs.busy permanently true — the session was wedged.
+    // The driver must reject the turn and clear cs.busy so the session can
+    // recover.
+    const sessionKey = 'proj-hang:claude:tab-hang'
+    const socketPath = join(TEST_DIR, 'hang-bridge.sock')
+    const bridge = createFakeBridgeServer(socketPath)
+    await bridge.ready
+
+    const driver = createClaudeTmuxDriver({
+      store: { getSetting: () => null, updateTabMetadata: () => null },
+      claudeBroadcast: () => {},
+      rerunTurn: () => {},
+    })
+
+    // Pre-connect the bridge client so ensureConnected() short-circuits and
+    // never launches a real tmux session.
+    const client = driver._getBridgeClient(sessionKey, { onSessionId: () => {} })
+    client.socketPath = socketPath
+    await client._connectSocket()
+
+    const cs = {
+      sessionKey,
+      claudeSessionId: 'sess-hang',
+      busy: false,
+      turnCount: 0,
+      queue: [],
+      explicitSessionId: false,
+    }
+
+    // Accept the user message but intentionally never reply with turn-done,
+    // simulating a bridge that crashes mid-turn.
+    bridge.onMessage(() => {})
+
+    const runPromise = driver.run(cs, 'hello', sessionKey, TEST_DIR)
+    await wait(50)
+    assert.equal(cs.busy, true, 'busy should be true while the turn is in flight')
+
+    // Bridge dies mid-turn.
+    bridge.closeConnections()
+
+    // run() catches turn errors internally, so this resolves (not rejects).
+    await runPromise
+    assert.equal(cs.busy, false, 'busy must be cleared after the bridge socket dies')
+
+    try { client.close() } catch {}
+    await bridge.close()
+  })
 })
