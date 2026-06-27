@@ -15,7 +15,7 @@
   header .team{font-size:12px;color:var(--muted)}
   .add{background:var(--bg3);border:1px dashed var(--bd);color:var(--muted);border-radius:8px;padding:5px 12px;cursor:pointer;font:inherit}
   .add:hover{color:var(--accent);border-color:var(--accent)}
-  /* mosaic */
+  /* mosaic — responsive: 1 col phone (stacked cards), 2 tablet, 3 desktop */
   .mosaic{display:grid;grid-template-columns:repeat(3,1fr);grid-auto-rows:1fr;gap:10px;padding:10px;height:calc(100vh - 47px)}
   .lane{background:var(--bg2);border:1px solid var(--bd);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;cursor:pointer;transition:.18s;min-height:0}
   .lane:hover{border-color:var(--accent)}
@@ -46,6 +46,32 @@
   .btn.ghost{background:var(--bg3);color:var(--fg)}
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--bd);border-radius:10px;padding:10px 16px;font-size:13px;opacity:0;transition:.2s;z-index:60}
   .toast.show{opacity:1}
+  /* ── Responsive: phone (390×844) + desktop ──────────────────────────────
+     Tablet: 2 cols. Phone: 1 col stacked compact cards (lane body trimmed to
+     the last line + status); expanded lane becomes a full-screen overlay and
+     the rail flips to a horizontal bottom strip so one thumb can switch lanes. */
+  @media (max-width:900px){
+    .mosaic{grid-template-columns:repeat(2,1fr)}
+  }
+  @media (max-width:600px){
+    header{padding:8px 12px;gap:8px}
+    header h1{font-size:13px}
+    .mosaic{grid-template-columns:1fr;grid-auto-rows:auto;gap:8px;padding:8px;overflow-y:auto}
+    .lane{min-height:84px}
+    .lane-head{padding:11px 12px;min-height:44px}          /* ≥44px touch target */
+    .lane-head b{font-size:14px}
+    .lane-body{display:none}                                /* compact: hide tail, show foot only */
+    .lane-foot{padding:8px 12px;font-size:12px}
+    /* expanded = full-screen takeover overlay on phone */
+    .lane.expanded{position:fixed;inset:0;z-index:80;border-radius:0;grid-column:auto;grid-row:auto}
+    .lane.expanded .lane-body{display:block}
+    .expanded-layout{flex-direction:column}
+    .lane.expanded .rail{width:100%;flex-direction:row;overflow-x:auto;border-left:0;border-top:1px solid var(--bd);padding:8px;gap:8px}
+    .lane.expanded .rail .mini{flex:none;width:140px}
+    .lane.expanded .expanded-input input{font-size:16px;padding:11px 12px} /* no iOS zoom + ≥44px */
+    .lane.expanded .btn{min-height:44px}
+    .add{min-height:44px;padding:8px 14px}
+  }
 </style>
 </head>
 <body>

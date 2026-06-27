@@ -10,8 +10,8 @@
  */
 
 import { TerminalPane } from './terminal-pane.js'
-import { ClaudeBlockRenderer } from './claude-block-renderer.js'
-import { CodexBlockRenderer } from './codex-block-renderer.js'
+import { rendererRegistry } from './renderer-registry.js'
+import './default-renderers.js' // side-effect: registers Claude/Codex/Terminal defaults
 import { fetchTabs, createTab, deleteTab, patchTab } from './api.js'
 
 const ACTIVE_KEY_PREFIX = 'activeTab:'
@@ -365,20 +365,15 @@ export class TabManager {
       },
     }
 
-    // Claude tabs use a DOM block renderer by default (rich text, mobile-friendly).
-    // If the global renderMode setting is 'terminal', use raw PTY instead.
-    // Codex tabs: separate codexRenderMode setting, defaults to 'terminal' (xterm raw).
-    // Set codexRenderMode to 'block' in Settings to opt into CodexBlockRenderer (experimental).
-    const renderMode = (() => { try { return window.__nanocodeState?.renderMode || 'block' } catch { return 'block' } })()
-    const codexRenderMode = (() => { try { return window.__nanocodeState?.codexRenderMode || 'terminal' } catch { return 'terminal' } })()
-    const useClaudeRenderer = type === 'claude' && renderMode !== 'terminal'
-    const useCodexRenderer = type === 'codex' && codexRenderMode === 'block'
-    let pane
-    if (useClaudeRenderer) {
-      pane = new ClaudeBlockRenderer(paneEl, paneOpts)
-    } else if (useCodexRenderer) {
-      pane = new CodexBlockRenderer(paneEl, paneOpts)
-    } else {
+    // Renderer selection is data-driven via the renderer registry (core's only
+    // extension point for output rendering). Each renderer registers a gate over
+    // the render-mode settings; the registry picks the highest-priority eligible
+    // entry, falling back to the '*' TerminalPane. See renderer-registry.js +
+    // default-renderers.js. A plugin can override via ui.registerRenderer().
+    let pane = rendererRegistry.createPane(type, paneEl, paneOpts)
+    if (!pane) {
+      // Defensive: only if no renderer is registered at all (shouldn't happen
+      // because default-renderers.js always loads the '*' fallback).
       pane = new TerminalPane(paneEl, paneOpts)
     }
 

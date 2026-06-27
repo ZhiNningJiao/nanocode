@@ -9,12 +9,16 @@
  *   - Local events: ui.on(event, cb) / ui.emit(event, payload)
  *   - Settings UI:  ui.registerSetting({ id, render(container) })
  *   - Full panel:   ui.registerPanel(id, { title, render(container) })
+ *   - Renderer:     ui.registerRenderer(sessionType, { name, factory, gate, priority })
+ *     — register a custom terminal/agent output renderer (overrides defaults
+ *     by priority). Cleaned up on plugin unload.
  *   - Server messages: ui.onMessage(cb) — receives notify-WS payloads whose
  *     type starts with "plugin:".
  *   - REST settings: ui.fetchSettings() / ui.updateSetting(key, value)
  */
 
 import { fetchSettings, updateSetting } from './api.js'
+import { rendererRegistry } from './renderer-registry.js'
 
 /**
  * Create the client plugin host.
@@ -30,7 +34,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
   const panels = new Map()
   let _notifyWs = notifyWs
 
-  /** @type {Map<string, { panels: Set<string>, settings: Set<string>, messages: Set<Function> }>} */
+  /** @type {Map<string, { panels: Set<string>, settings: Set<string>, messages: Set<Function>, renderers: Set<{sessionType:string,name:string}> }>} */
   const pluginRegistry = new Map()
 
   /** @type {Map<string, HTMLElement>} id -> panel element */
@@ -112,6 +116,17 @@ export function createPluginUiHost({ notifyWs } = {}) {
       throw new Error('registerPanel: id and render() required')
     }
     panels.set(id, { title: def.title || id, render: def.render })
+  }
+
+  /**
+   * Register a custom output renderer for a session type. Delegates to the
+   * renderer registry (core's single rendering extension point). A plugin can
+   * override the built-in Claude/Codex/Terminal renderers by registering with a
+   * higher priority. Removed on unload so the default renderer is restored.
+   * Returns the registered name (for bookkeeping / unregister).
+   */
+  function registerRenderer(sessionType, def) {
+    return rendererRegistry.register(sessionType, def)
   }
 
   function _setActivePanel(id) {
@@ -225,7 +240,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
    * reloading the page.
    */
   function _uiForPlugin(name) {
-    const registry = { panels: new Set(), settings: new Set(), messages: new Set() }
+    const registry = { panels: new Set(), settings: new Set(), messages: new Set(), renderers: new Set() }
     pluginRegistry.set(name, registry)
 
     const wrapOnMessage = (cb) => {
@@ -240,6 +255,11 @@ export function createPluginUiHost({ notifyWs } = {}) {
       registry.settings.add(def.id)
       return registerSetting(def)
     }
+    const wrapRegisterRenderer = (sessionType, def) => {
+      const rname = registerRenderer(sessionType, def)
+      registry.renderers.add({ sessionType, name: rname })
+      return rname
+    }
 
     return {
       on,
@@ -247,6 +267,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
       onMessage: wrapOnMessage,
       registerSetting: wrapRegisterSetting,
       registerPanel: wrapRegisterPanel,
+      registerRenderer: wrapRegisterRenderer,
       attachNotifyWs,
       fetchSettings,
       updateSetting,
@@ -296,6 +317,11 @@ export function createPluginUiHost({ notifyWs } = {}) {
       }
     }
     for (const cb of registry.messages) messageCallbacks.delete(cb)
+    // Unregister any custom renderers the plugin added so the default renderer
+    // is restored for the affected session types.
+    for (const { sessionType, name: rname } of registry.renderers) {
+      rendererRegistry.unregister(sessionType, rname)
+    }
     pluginRegistry.delete(name)
 
     // Re-render so any remaining plugin settings stay in place and the tab
@@ -641,6 +667,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
     registerSetting,
     renderSettings,
     registerPanel,
+    registerRenderer,
     renderPanels,
     showPanel,
     hasPanel,

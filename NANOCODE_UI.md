@@ -1,10 +1,11 @@
 # NanoCode UI — Interaction Analysis & 5 Design Directions
 
 **Repo:** `~/code/nanocode2` · **Branch:** `zhining/plugins`
-**Author:** PM/architect pass · **Date:** 2026-06-27
+**Author:** PM/architect pass · **Date:** 2026-06-27 (updated: responsive pass)
 **Scope:** (C) analyze the current UI interaction state machine + holes/anti-patterns;
 (D) propose 5 distinct UI versions that differ at the **interaction-logic** level,
-not just visual skin. Mockups live in `public/mockups/v1..v5.html`.
+not just visual skin. (E) dual-viewport interaction maps for the responsive pass.
+Mockups live in `public/mockups/v1..v5.html` — all five are responsive (phone 390×844 + desktop).
 
 ---
 
@@ -329,7 +330,7 @@ busy/bg indicator.
 | Input location | docked bottom | expanded lane | under transcript | bottom panel | top bar |
 | Multi-agent | weak | **native** | medium | medium | medium |
 | Keyboard-first | medium | low | low | medium | **native** |
-| Mobile | great | poor | good | poor | poor |
+| Mobile | great | good (stacked cards) | good (bottom sheet) | good (drawer) | good (touch bar) |
 | Review/gate | none | status strip | artifact tabs | **accept/reject** | transient |
 | Build cost | low | medium | medium | **high** | medium |
 | Best for | deep single task | patrol/monitor | reading output | code editing | power ops |
@@ -352,3 +353,81 @@ pursued, since it inverts the terminal-first model.
 
 Mockups for all five live in `public/mockups/v1..v5.html` as static,
 self-contained HTML prototypes (no build step) so each paradigm can be felt.
+
+---
+
+## Part E — Dual-viewport interaction maps (responsive pass)
+
+All five mockups are now genuinely responsive: each has a `viewport` meta tag
+and `@media` breakpoints. Below is the per-variant desktop vs phone (390×844)
+interaction map. **Design constraints:** touch targets ≥44px, input font-size
+≥16px (prevents iOS auto-zoom), no horizontal scroll at 390px (verified by
+headless Playwright check — 0 overflow, 0 console errors on all 5).
+
+### V1 — Focus Mode
+
+| Aspect | Desktop (≥640px) | Phone (390×844) |
+|--------|-----------------|-----------------|
+| Switcher access | `Cmd/Ctrl+K` keyboard overlay | Tap the floating **pill** (project+tab+team) → opens switcher |
+| Input | Slim input docked at bottom | 16px font, full-width, 44px send button |
+| Kbd hints | Visible `⌘K` hint text | Hidden (no keyboard); pill is the affordance |
+| Overflow | Pill floats top-right | Pill floats top-right, compact padding |
+
+**Breakpoint:** `@media (max-width:640px)` — reduces padding, hides kbd hints,
+enlarges pill to 44px tap target, input goes full-width 16px.
+
+### V2 — Multi-Lane Dashboard
+
+| Aspect | Desktop (≥900px) | Phone (390×844) |
+|--------|-----------------|-----------------|
+| Grid | 3-4 column mosaic | 1 column (stacked cards) |
+| Expand lane | Lane takes ~70%, rail shows mini tiles | Lane expands to **full-screen overlay** (covers mosaic) |
+| Collapse | `Esc` or click rail | Tap backdrop or close button |
+| Tablet (600-900px) | — | 2 column grid |
+
+**Breakpoints:** `@media (max-width:900px)` → 2 columns; `@media (max-width:600px)` → 1 column stacked, expanded lane = full-screen overlay.
+
+### V3 — Chat-First / Canvas
+
+| Aspect | Desktop (≥760px) | Phone (390×844) |
+|--------|-----------------|-----------------|
+| Canvas | Right-side panel (40% width, static) | **Bottom sheet** — slides up from bottom (`translateY(100%)` → `0`) |
+| Close canvas | Click artifact tab or close button | Tap **✕ close** button (`.canvas-close`, mobile-only) |
+| Transcript | Left 60%, scrolls independently | Full-width, canvas covers bottom portion when open |
+| Input | Bottom of transcript, 40% width under transcript | 16px font, full-width, 44px send |
+
+**Breakpoint:** `@media (max-width:760px)` — canvas transforms from static side panel to sliding bottom sheet with close button; `_syncCanvas()` JS toggles `.canvas.open`.
+
+### V4 — Workspace IDE
+
+| Aspect | Desktop (≥820px) | Phone (390×844) |
+|--------|-----------------|-----------------|
+| File tree | Left sidebar, persistent | **Drawer** — slides in from left, hidden by default |
+| Open tree | Always visible | Tap **☰ hamburger** (`.menu-btn`, mobile-only) |
+| Close tree | — | Tap backdrop (`.tree-backdrop`) or select a file |
+| Diff/preview | Center-top, full height | Stacks below terminal (terminal shrinks) |
+| Accept/Reject | Side buttons | Full-width 44px buttons |
+| Terminal | Bottom panel, tabbed | Shrinks to make room for diff |
+
+**Breakpoint:** `@media (max-width:820px)` — tree becomes a drawer with hamburger toggle + backdrop; diff and terminal stack vertically; accept/reject buttons go full-width 44px.
+
+### V5 — Command Console
+
+| Aspect | Desktop (≥640px) | Phone (390×844) |
+|--------|-----------------|-----------------|
+| Insert mode entry | `i` key | Tap **✉ insert toggle** (`.insert-btn`, mobile-only) |
+| Suggestion rows | Keyboard-navigable, compact | Full-width 44px tap targets |
+| Kbd help | Visible `?`/`Esc` hints | Hidden (no keyboard) |
+| Output pane | Transient, auto-dismiss | Same (touch to dismiss) |
+
+**Breakpoint:** `@media (max-width:640px)` — shows insert toggle button (✉), enlarges suggestion rows to 44px, hides keyboard help text. `enterInsert`/`exitInsert` JS toggles button active state.
+
+### Responsive verification
+
+Headless Playwright checks were run against a live 9478 server instance:
+
+1. **Overflow check** — all 5 mockups + gallery at 390×844 and 1280×800:
+   `scrollWidth ≤ clientWidth` (0 horizontal overflow), 0 console errors. ✅
+2. **Affordance check** — mobile-only elements (`.canvas-close`, `.menu-btn`,
+   `.tree-backdrop`, `.insert-btn`) are `display:none` at 1280px and visible at
+   390px; shared elements (`.pill`, `.lane`) visible at both. ✅

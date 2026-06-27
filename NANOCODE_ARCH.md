@@ -1,10 +1,11 @@
 # NanoCode Architecture — Core/Plugin Boundary & Extraction Plan
 
 **Repo:** `~/code/nanocode2` · **Branch:** `zhining/plugins`
-**Author:** PM/architect pass · **Date:** 2026-06-27
+**Author:** PM/architect pass · **Date:** 2026-06-27 (updated: renderer pass)
 **Scope:** Analyze the core/plugin boundary, compare against reference extension
-systems (VS Code, Fastify, Backstage, ttyd/wetty), identify gaps, and propose a
-safe, incremental extraction + lifecycle plan.
+systems (VS Code, Fastify, Backstage, ttyd/wetty, webpack, Obsidian), identify
+gaps, and propose a safe, incremental extraction + lifecycle plan. The renderer
+registry extraction (§6.5) is now implemented.
 
 ---
 
@@ -35,6 +36,13 @@ The gaps are narrow but real, and all fixable additively without a refactor:
 
 **None** of these require moving existing code out of core. The extraction plan
 below is about *what could* move to plugins to keep core lean, ranked by safety.
+
+> **Update (renderer pass):** Block rendering — previously hard-wired if/else in
+> `tab-manager.js` dispatching Claude/Codex/Terminal pane types — has been
+> extracted into a **renderer registry** extension point
+> (`renderer-registry.js` + `default-renderers.js`). `tab-manager.js` now
+> resolves panes through the registry instead of branching on session type.
+> Plugins can register custom renderers via `ui.registerRenderer()`. See §6.5.
 
 ---
 
@@ -87,6 +95,7 @@ These are the load-bearing primitives everything else builds on:
 | Plugin host (both) | `server/plugin-host.js`, `public/js/plugin-host.js` | The extension boundary itself |
 | Notify broadcast | `broadcastNotify` in `index.js:550` | Plugin → browser push channel |
 | Team manager | `server/team-manager.js` | Credential-existence check + login PTY (security-sensitive) |
+| Renderer registry | `public/js/renderer-registry.js` | Pane-type → renderer dispatch; the browser extension point for block rendering |
 
 ### 2.3 Plugin-owned capabilities (correctly already extracted)
 
@@ -96,6 +105,7 @@ These are the load-bearing primitives everything else builds on:
 | Worktree/team health dashboard | `monitor` | settings, routes, notify, panel |
 | Fleet terminal (multi-PTY) | `fleet-term` | settings, routes, **registerWebSocket**, panel |
 | Dual-team login/switch | (in `plugin-host.js` UI + `team-manager.js`) | routes, notify, WS — *see §6.2* |
+| Block pane rendering | `default-renderers.js` (registered as default plugins) | `ui.registerRenderer(sessionType, {factory, gate, priority})` — *see §6.5* |
 
 ---
 
@@ -350,6 +360,68 @@ team-login, fleet-term, terminal), consider adopting `reconnecting-websocket`
 (4.4.0) to deduplicate the backoff/retry logic. Not warranted at the current
 count.
 
+### 6.5 Block-renderer extraction — DONE
+
+**Problem:** `tab-manager.js` had a hard-wired if/else chain dispatching on
+session type: Claude sessions got `ClaudeBlockRenderer`, Codex sessions got
+`CodexBlockRenderer`, everything else got `TerminalPane`. Adding a new pane
+type meant editing core; there was no way for a plugin to contribute a custom
+renderer.
+
+**Solution (implemented):**
+
+| File | Role |
+|------|------|
+| `public/js/renderer-registry.js` | The registry: `register(sessionType, {name, factory, gate, priority})`, `createPane(type, el, opts)`, `unregister`, `list`. Selection = match `sessionType` + pass `gate(settings)` + highest `priority`. `*` is the universal fallback (TerminalPane, priority 0). |
+| `public/js/default-renderers.js` | Side-effect module that registers the 3 built-in renderers as "default plugins": ClaudeBlockRenderer (priority 10, gated on `renderMode !== 'terminal'`), CodexBlockRenderer (priority 10, gated on `codexRenderMode === 'block'`), TerminalPane (`*`, priority 0, always on). |
+| `public/js/tab-manager.js` | Refactored: replaced if/else with `rendererRegistry.createPane(type, paneEl, paneOpts)`. No more direct imports of ClaudeBlockRenderer / CodexBlockRenderer. |
+| `public/js/plugin-host.js` | New `ui.registerRenderer(sessionType, {name, factory, gate, priority})` extension point. Per-plugin ownership tracked in `registry.renderers Set` so `unloadClientPlugin` can unregister cleanly. |
+
+**Design model (webpack `module.rules` + VS Code `CustomEditor`):**
+
+The renderer registry borrows two ideas:
+- **webpack `module.rules`** ([loader concepts](https://webpack.js.org/configuration/module/#ruletest)): each rule has a `test` predicate + a loader; the first match wins. NanoCode's analog is `sessionType` (exact match) + `gate(settings)` (runtime predicate). Priority breaks ties when multiple rules match the same type.
+- **VS Code `CustomEditorProvider`** ([extensibility patterns](https://code.visualstudio.com/api/extension-guides/custom-editors)): a plugin registers a factory that produces a webview for a given resource type. NanoCode's `factory(paneEl, opts)` returns a pane instance the same way.
+
+**Selection algorithm** (`rendererRegistry.createPane`):
+
+```
+1. Collect all entries where entry.sessionType === type && entry.gate(settings)
+2. If none match, fall back to entries where entry.sessionType === '*' && entry.gate(settings)
+3. Among candidates, pick the highest priority
+4. Instantiate: entry.factory(paneEl, paneOpts)
+5. If factory throws, fall through to next candidate (defensive)
+```
+
+This guarantees: (a) a pane is always rendered (TerminalPane `*` fallback), (b)
+plugins can override built-ins by registering a higher priority for the same
+session type, (c) a plugin's renderer is automatically unregistered when the
+plugin is unloaded.
+
+**Tests:** `server/tests/renderer-registry.test.js` — 10 cases covering
+register/get, missing-factory throw, gate filtering, priority ordering, `*`
+fallback, null handling, createPane instantiation, re-register replaces,
+unregister cleanup, and list introspection. Test count: 207 → 217, 0 failures.
+
+### 6.6 Full feature extraction table
+
+A complete inventory of features that are or could be plugin-extracted:
+
+| Feature | Current home | Status | Difficulty | Extraction method |
+|---------|-------------|--------|------------|-------------------|
+| Block pane rendering | `default-renderers.js` | ✅ done | low | `renderer-registry.js` + `ui.registerRenderer()` |
+| TTS (GPT-SoVITS proxy) | `plugins/tts/` | ✅ done | low | settings + events + routes |
+| Worktree/team health dashboard | `plugins/monitor/` | ✅ done | low | settings + routes + notify + panel |
+| Fleet terminal (multi-PTY) | `plugins/fleet-term/` | ✅ done | medium | settings + routes + `registerWebSocket` + panel |
+| Service checks (`runServiceChecks`) | `index.js` | candidate | low | relocate loop to `services` plugin |
+| QA watcher (`startQaWatcher`) | `server/qa-watcher.js` | candidate | low | side-effect loop → `qa` plugin |
+| Dual-team login/switch | `plugin-host.js` UI + `team-manager.js` | borderline | high | security-sensitive; see §6.2 |
+| Settings panel UI | `plugin-host.js` (browser) | borderline | medium | could move to `settings` plugin; currently shared host concern |
+| Notify broadcast | `index.js:550` | ❌ never | — | core dispatcher; plugins push *through* it |
+| WS upgrade router | `index.js:484` | ❌ never | — | core dispatcher to plugin WS |
+| Session busy-lock/queue | `claude-session-controller.js` | ❌ never | — | safety-critical hinge |
+| Auth / system mode | `server/auth/`, `router-mode.js` | ❌ never | — | security boundary |
+
 ---
 
 ## 7. Recommended lifecycle improvements (this change set)
@@ -381,8 +453,22 @@ The accompanying code change implements §4.1–§4.3 additively:
 5. **Tests** — `server/tests/plugin-host.test.js` gains cases for lifecycle,
    status, and dependency validation.
 
-All changes are additive: a plugin that ignores the new APIs behaves exactly as
-before. The `npm test` baseline (196 pass) is the regression gate.
+**Renderer-registry pass (this change set, additive):**
+
+6. **`public/js/renderer-registry.js`** — new registry module (register /
+   unregister / createPane / list / `_reset`). Selection by sessionType +
+   gate(settings) + priority; `*` universal fallback.
+7. **`public/js/default-renderers.js`** — side-effect import that registers the
+   3 built-in renderers (ClaudeBlockRenderer, CodexBlockRenderer, TerminalPane)
+   as default plugins with appropriate gates and priorities.
+8. **`public/js/tab-manager.js`** — replaced if/else dispatch with
+   `rendererRegistry.createPane()`; removed direct renderer imports.
+9. **`public/js/plugin-host.js`** — added `ui.registerRenderer()` extension
+   point with per-plugin ownership tracking + clean unregister on unload.
+10. **`server/tests/renderer-registry.test.js`** — 10 new unit tests.
+
+All changes are additive: existing plugins and renderers behave exactly as
+before. The `npm test` baseline (207 pass) grows to 217, 0 failures.
 
 ---
 
@@ -393,9 +479,22 @@ Server: `index.js`, `plugin-host.js`, `store.js`, `team-manager.js`,
 Terminal: `routes.js`, `sessions.js`, `claude-session-controller.js`,
 `claude-tmux-driver.js`, `agent-health-monitor.js`, `team-env.js`
 Frontend: `app.js`, `tab-manager.js`, `terminal-view.js`, `sidebar.js`,
-`agents.js`, `state.js`, `plugin-host.js`, `index.html`
+`agents.js`, `state.js`, `plugin-host.js` (browser), `index.html`,
+`renderer-registry.js` (new), `default-renderers.js` (new),
+`claude-block-renderer.js`, `codex-block-renderer.js`
 Plugins: `README.md`, `tts/{server.js,client.js,plugin.json}`,
 `monitor/{server.js,client.js,plugin.json,config.json}`,
 `fleet-term/{server.js,client.js,plugin.json}`
-Tests: `plugin-host.test.js`, `fleet-term.test.js`, `tts-plugin.test.js`
+Tests: `plugin-host.test.js`, `fleet-term.test.js`, `tts-plugin.test.js`,
+`renderer-registry.test.js` (new)
 Prior art: `research/arch-refactor/NANOCODE_ARCH_REPORT.md`, `NANOCODE_REVIEW.md`
+
+### 8.1 Reference research (external)
+
+| Source | What was studied | How it informed the design |
+|--------|-----------------|---------------------------|
+| [VS Code — Extension Capabilities Overview](https://code.visualstudio.com/api) | `contributes` manifest, `activationEvents`, `CustomEditorProvider` | The `ui.registerRenderer()` API mirrors `CustomEditorProvider`'s factory-for-resource-type pattern |
+| [VS Code — Extension Host](https://code.visualstudio.com/api/advanced-topics/extension-host) | Separate extension-host process, activation lifecycle | Confirmed NanoCode's same-process model is acceptable for trusted first-party plugins; the Disposable pattern informed `registerLifecycle` |
+| [webpack — Module Rules](https://webpack.js.org/configuration/module/) | `module.rules` with `test` predicate + loader + first-match-wins | Directly inspired the renderer registry's `sessionType` + `gate(settings)` + `priority` selection model |
+| [Obsidian — Plugin API](https://help.obsidian.md/Extending+Obsidian) | `registerMarkdownPostProcessor`, `registerView`, `registerCommands` | Obsidian's post-processor pattern (decorate rendered markdown by type) is the conceptual ancestor of `registerRenderer` |
+| [Tauri — Sidecar / Shell](https://tauri.app/v1/guides/building/sidecar/) | Managed external process lifecycle | Context for NanoCode's tmux-bridge durability model (a sidecar that outlives the host) |

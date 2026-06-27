@@ -61,6 +61,29 @@
   .raw-toggle:hover{color:var(--fg)}
   .raw-drawer{height:0;overflow:hidden;border-top:0 solid var(--bd);background:#000;transition:.2s;font-family:ui-monospace,monospace;font-size:12px;color:var(--ok);padding:0 16px}
   .raw-drawer.open{height:120px;border-top:1px solid var(--bd);padding:10px 16px;overflow:auto}
+  /* mobile canvas close affordance (hidden on desktop) */
+  .canvas-close{display:none}
+  /* ── Responsive: phone (390×844) + desktop ──────────────────────────────
+     Phone: transcript full-width; canvas becomes a slide-up bottom sheet that
+     appears when an artifact is opened and dismisses on close. Composer stays
+     sticky; raw drawer stacks above it. */
+  @media (max-width:760px){
+    header{padding:8px 12px;gap:8px}
+    header b{font-size:13px}
+    .transcript{padding:14px 14px 4px}
+    .msg{max-width:100%}
+    .canvas{position:fixed;left:0;right:0;bottom:0;height:72vh;width:100%;min-width:0;border-left:0;border-top:1px solid var(--bd);border-radius:16px 16px 0 0;transform:translateY(100%);transition:transform .25s ease;z-index:70;box-shadow:0 -8px 32px rgba(0,0,0,.5)}
+    .canvas.open{transform:translateY(0)}
+    .canvas-close{display:flex;align-items:center;justify-content:center;padding:8px;cursor:pointer;color:var(--muted);font-size:12px;min-height:36px}
+    .canvas-close:active{color:var(--fg)}
+    .ctab{padding:12px 12px;min-height:44px}
+    .cfile{font-size:11px}
+    .cfile .ln .no{width:32px;padding-right:8px}
+    .composer{padding:10px 14px}
+    .composer textarea{font-size:16px}               /* no iOS zoom */
+    .send{min-height:44px;padding:10px 14px}
+    .raw-drawer.open{height:90px}
+  }
 </style>
 </head>
 <body>
@@ -79,7 +102,8 @@
     <div class="msg"><div class="who bot">Claude</div><div class="bubble streaming">Looking at router-mode.js to add the refresh route…<span class="cursor">▋</span></div></div>
   </div>
 
-  <div class="canvas">
+  <div class="canvas" id="canvas">
+    <div class="canvas-close" id="canvasClose">▾ close canvas</div>
     <div class="ctabs" id="ctabs"></div>
     <div class="cview" id="cview"><div class="empty">Click an artifact block<br>(📄 ✏️ 🌐) in the transcript<br>to open it here</div></div>
   </div>
@@ -98,10 +122,14 @@ const ARTS={
   session:{title:'session.js (read)',type:'file',body:`<div class="viewer-meta">server/auth/session.js · 142 lines · read-only</div><div class="cfile"><div class="ln"><span class="no">1</span><span class="ctx">import { randomUUID } from 'node:crypto'</span></div><div class="ln"><span class="no">2</span><span class="ctx">const SESSION_TTL_MS = 1000*60*60*24*7</span></div><div class="ln"><span class="no">3</span><span class="ctx">function createSession(){ … }</span></div>`},
   viewer:{title:'case12.glb',type:'viewer',body:`<div class="viewer-meta"><b>case12 bind+retarget</b> · http://localhost:8770/g/c864c5b0</div><div style="padding:20px;text-align:center;color:var(--muted)">🌐 3D viewer placeholder<br>(GLB render would appear here)</div>`},
 };
-const ctabs=document.getElementById('ctabs'),cview=document.getElementById('cview');
+const ctabs=document.getElementById('ctabs'),cview=document.getElementById('cview'),canvas=document.getElementById('canvas');
 let openArts=[];
-function openArt(id){if(!ARTS[id])return;if(!openArts.includes(id))openArts.push(id);renderTabs(id);renderView(id)}
-function closeArt(id,e){e.stopPropagation();openArts=openArts.filter(a=>a!==id);if(openArts.length)renderTabs(openArts[openArts.length-1]);else{renderTabs(null);cview.innerHTML='<div class="empty">No artifacts open</div>'}}
+// On mobile the canvas is a slide-up sheet; .open shows it. No-op on desktop
+// (where .canvas is always visible via static layout).
+function _syncCanvas(){canvas.classList.toggle('open',openArts.length>0)}
+function openArt(id){if(!ARTS[id])return;if(!openArts.includes(id))openArts.push(id);renderTabs(id);renderView(id);_syncCanvas()}
+function closeArt(id,e){e.stopPropagation();openArts=openArts.filter(a=>a!==id);if(openArts.length)renderTabs(openArts[openArts.length-1]);else{renderTabs(null);cview.innerHTML='<div class="empty">No artifacts open</div>'}_syncCanvas()}
+document.getElementById('canvasClose').addEventListener('click',()=>{openArts=[];renderTabs(null);cview.innerHTML='<div class="empty">No artifacts open</div>';_syncCanvas()})
 function renderTabs(active){ctabs.innerHTML='';if(!openArts.length){ctabs.style.display='none';return}ctabs.style.display='flex';openArts.forEach(id=>{const a=ARTS[id];const t=document.createElement('div');t.className='ctab'+(id===active?' active':'');t.innerHTML=`<span>${a.type==='viewer'?'🌐':a.type==='file'?'📄':'✏️'}</span>${a.title}<span class="x">✕</span>`;t.onclick=()=>renderView(id);t.querySelector('.x').onclick=(e)=>closeArt(id,e);ctabs.appendChild(t)})}
 function renderView(id){const a=ARTS[id];renderTabs(id);cview.innerHTML=a.body}
 document.querySelectorAll('.block').forEach(b=>{b.style.cursor='pointer';b.querySelector('.bh').onclick=()=>openArt(b.dataset.art)});
