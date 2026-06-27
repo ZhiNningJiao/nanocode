@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Nanocode · Enhanced V2 — Mobile UX</title>
+<link rel="stylesheet" href="../style.css" />
+<style>
+  /* ═══ Enhanced V2 — Mobile UX ═══
+     Reuses all style.css. Adds: bottom 4-key nav, pane swipe zones,
+     single-hand reach lift, pull-to-new hint, floating FAB.
+     Mobile-first; desktop keeps original chrome (nav is mobile-only). */
+
+  /* --- Bottom navigation bar (mobile-only, replaces 2-key switch) --- */
+  .v2-bottomnav {
+    display: none;
+    position: relative; z-index: 5;
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    padding: 6px env(safe-area-inset-right, 8px) calc(6px + env(safe-area-inset-bottom, 0px)) env(safe-area-inset-left, 8px);
+    flex-shrink: 0;
+  }
+  .v2-bottomnav .row { display: grid; grid-template-columns: repeat(4,1fr); gap: 4px; }
+  .v2-navbtn {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    border: none; background: transparent; cursor: pointer;
+    padding: 6px 2px; border-radius: var(--radius-sm);
+    color: var(--text-tertiary); font-size: 10px; font-family: var(--font-sans);
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  }
+  .v2-navbtn svg { width: 22px; height: 22px; }
+  .v2-navbtn.active { color: var(--primary); }
+  .v2-navbtn .badge {
+    position: absolute; top: 2px; transform: translateX(11px);
+    min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
+    background: var(--error); color: #fff; font-size: 9px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .v2-navbtn { position: relative; }
+
+  /* --- Single-hand reach: lift input above keyboard + thumb zone --- */
+  .v2-reach {
+    display: none; align-items: center; gap: 6px;
+    padding: 4px var(--s-3); background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-tertiary);
+  }
+  .v2-reach button {
+    border: 1px solid var(--border); background: var(--bg-elevated);
+    border-radius: 14px; padding: 4px 12px; font-size: 11px; color: var(--text-secondary);
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .v2-reach button.active { background: var(--primary-subtle); border-color: var(--border-active); color: var(--primary); }
+
+  /* --- Pull-to-new hint (top of terminal) --- */
+  .v2-pullhint {
+    display: none; align-items: center; justify-content: center; gap: 6px;
+    height: 0; overflow: hidden; color: var(--primary);
+    font-size: 11px; transition: height var(--duration-standard) var(--ease-standard);
+    background: var(--primary-subtle);
+  }
+  .v2-pullhint.show { height: 30px; }
+
+  /* --- Floating Action Button (new tab / quick compose) --- */
+  .v2-fab {
+    display: none; position: absolute; z-index: 8;
+    right: 16px; bottom: 84px;
+    width: 52px; height: 52px; border-radius: 50%;
+    border: none; cursor: pointer;
+    background: var(--primary); color: #fff;
+    box-shadow: 0 6px 18px rgba(45,40,32,0.30);
+    align-items: center; justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .v2-fab:active { transform: scale(.92); }
+  .v2-fab svg { width: 24px; height: 24px; }
+
+  /* --- Pane swipe affordance dots --- */
+  .v2-swipe-dots {
+    display: none; justify-content: center; gap: 5px; padding: 4px 0;
+  }
+  .v2-swipe-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--border-hover); }
+  .v2-swipe-dots span.on { background: var(--primary); width: 16px; border-radius: 3px; }
+
+  @media (max-width: 768px) {
+    /* hide the old 2-key switch; bottom nav takes over */
+    .mobile-pane-switch { display: none !important; }
+    .v2-bottomnav { display: block; }
+    .v2-reach { display: flex; }
+    .v2-pullhint { display: flex; }
+    .v2-fab { display: inline-flex; }
+    .v2-swipe-dots { display: flex; }
+    /* input bar gains safe-area + slightly larger send target for thumb */
+    .chat-input-bar { padding-bottom: calc(var(--s-2) + env(safe-area-inset-bottom, 0px)); }
+    .send-btn { width: 44px; height: 44px; }
+  }
+</style>
+</head>
+<body>
+  <header class="app-header">
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+    <h1 class="app-title">Nanocode</h1>
+    <div class="header-pills">
+      <span class="connection-status connected">Bash: connected</span>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode"><span class="theme-icon theme-icon-dark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span></button>
+      <button type="button" class="settings-toggle-btn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    </div>
+  </header>
+
+  <main class="app-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header"><span class="sidebar-title">Projects</span><button type="button" class="btn-icon">+</button></div>
+      <div class="sidebar-projects">
+        <button class="sidebar-project active"><span class="sidebar-project-name">nanocode2</span></button>
+        <button class="sidebar-project"><span class="sidebar-project-name">meshy-dcc-pipeline</span><span class="sidebar-project-ssh">ssh</span></button>
+        <button class="sidebar-project"><span class="sidebar-project-name">muse-webapp</span></button>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <div class="main-content">
+      <div class="terminal-layout">
+        <!-- V2: pull-to-new hint -->
+        <div class="v2-pullhint" id="v2-pullhint"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg> Release to start new message</div>
+        <div class="split-container" id="split-container" style="--split:55%">
+          <div class="pane pane-left">
+            <div class="terminal-tab-strip" id="terminal-tab-strip">
+              <button class="tab-chip tab-chip-claude active"><span class="tab-chip-label">claude</span></button>
+              <button class="tab-chip tab-chip-codex"><span class="tab-chip-label">codex</span></button>
+              <button class="tab-chip-add">+</button>
+            </div>
+            <!-- V2: swipe dots -->
+            <div class="v2-swipe-dots" id="v2-dots"><span class="on"></span><span></span><span></span></div>
+            <div class="terminal-stack" id="terminal-stack">
+              <div class="cbr-container"><div class="cbr-scroll">
+                <div class="cbr-block cbr-block-prompt cbr-user-prompt"><p class="cbr-prompt-text">&gt; make the input bar easier to reach on a phone</p></div>
+                <div class="cbr-block cbr-block-text"><div class="cbr-text"><p>On it. I'll add a "reach" toggle that lifts the input into the thumb zone and a bottom nav so you never have to stretch to the top bar.</p></div></div>
+                <div class="cbr-block cbr-block-code"><div class="cbr-code-wrap"><div class="cbr-code-header"><span class="cbr-code-lang">css</span><button class="cbr-copy-btn">Copy</button></div><pre class="cbr-pre"><code class="cbr-code">.chat-input-bar {
+  padding-bottom: env(safe-area-inset-bottom);
+}</code></pre></div></div>
+                <div class="cbr-block cbr-block-text"><div class="cbr-text"><p>Swipe left/right between Terminal / Explorer / Agents now — try it.</p></div></div>
+              </div></div>
+            </div>
+          </div>
+          <div class="split-divider" id="split-divider"></div>
+          <div class="pane pane-right">
+            <div class="explorer-root" id="explorer-root" style="padding:var(--s-2);font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);overflow:auto">
+              <div style="color:var(--text-tertiary);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Explorer</div>
+              <div>📁 public/</div>
+              <div style="padding-left:14px">📄 index.html</div>
+              <div style="padding-left:14px">📄 style.css</div>
+              <div style="padding-left:14px">📁 js/</div>
+              <div style="padding-left:28px">📄 app.js</div>
+              <div style="padding-left:28px">📄 sidebar.js</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mobile-pane-switch" id="mobile-pane-switch">
+          <button type="button" class="mobile-pane-btn active" data-pane="left">Terminal</button>
+          <button type="button" class="mobile-pane-btn" data-pane="right">Explorer</button>
+        </div>
+
+        <div class="chat-input-bar" id="chat-input-bar">
+          <!-- V2: single-hand reach toolbar -->
+          <div class="v2-reach" id="v2-reach">
+            <span>Reach</span>
+            <button data-reach="low">Low</button>
+            <button class="active" data-reach="mid">Mid</button>
+            <button data-reach="high">High</button>
+            <span style="margin-left:auto">↑ pull down for new msg</span>
+          </div>
+          <div class="touch-toolbar" id="touch-toolbar">
+            <button class="touch-btn">Ctrl+C</button>
+            <button class="touch-btn">Clear</button>
+            <button class="touch-btn">&uarr;</button>
+            <button class="touch-btn">Tab</button>
+            <button class="touch-btn">Esc</button>
+          </div>
+          <div class="input-row">
+            <div class="input-wrap">
+              <textarea id="chat-input" class="chat-textarea" placeholder="Message claude…" rows="1" autocomplete="off" spellcheck="false"></textarea>
+            </div>
+            <button class="send-btn" id="send-btn" aria-label="Send"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+          </div>
+        </div>
+      </div>
+      <!-- V2: FAB -->
+      <button class="v2-fab" id="v2-fab" aria-label="New message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+    </div>
+  </main>
+
+  <!-- V2: bottom 4-key navigation -->
+  <nav class="v2-bottomnav" id="v2-bottomnav">
+    <div class="row">
+      <button class="v2-navbtn active" data-pane="left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Terminal</button>
+      <button class="v2-navbtn" data-pane="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Files</button>
+      <button class="v2-navbtn" data-pane="agents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>Agents<span class="badge">2</span></button>
+      <button class="v2-navbtn" data-pane="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</button>
+    </div>
+  </nav>
+
+  <script>
+    const $ = s => document.querySelector(s);
+    const $$ = s => document.querySelectorAll(s);
+    // bottom nav switches panes + swipe dots
+    const panes = ['left','right','agents','settings'];
+    const dots = $('#v2-dots');
+    function setPane(p) {
+      $$('.v2-navbtn').forEach(b=>b.classList.toggle('active', b.dataset.pane===p));
+      document.body.classList.remove('mobile-pane-left','mobile-pane-right');
+      if (p==='left'||p==='right') document.body.classList.add('mobile-pane-'+p);
+      // dots reflect first 3 (terminal/files/agents) on the swipeable track
+      const idx = Math.max(0, panes.indexOf(p));
+      if (dots) { dots.querySelectorAll('span').forEach((d,i)=>d.classList.toggle('on', i===idx && idx<3)); }
+    }
+    $$('.v2-navbtn').forEach(b=>b.addEventListener('click',()=>setPane(b.dataset.pane)));
+    // reach lift
+    $$('#v2-reach button').forEach(b=>b.addEventListener('click',()=>{
+      $$('#v2-reach button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
+      const r = b.dataset.reach; const bar=$('#chat-input-bar');
+      bar.style.transform = r==='high'?'translateY(-6px)':r==='low'?'translateY(8px)':'none';
+    }));
+    // sidebar drawer
+    $('#sidebar-toggle').addEventListener('click',()=>{ $('#sidebar').classList.toggle('open'); $('#sidebar-backdrop').classList.toggle('open'); });
+    $('#sidebar-backdrop').addEventListener('click',()=>{ $('#sidebar').classList.remove('open'); $('#sidebar-backdrop').classList.remove('open'); });
+    // theme
+    $('#theme-toggle').addEventListener('click',()=>{ const c=document.documentElement.getAttribute('data-theme'); document.documentElement.setAttribute('data-theme',c==='dark'?'light':'dark'); });
+    // pull-to-new demo: FAB + pull hint
+    $('#v2-fab').addEventListener('click',()=>{ const t=$('#chat-input'); t.focus(); });
+    // simple swipe (touch) between left/right
+    let sx=0;
+    document.addEventListener('touchstart',e=>{sx=e.touches[0].clientX},{passive:true});
+    document.addEventListener('touchend',e=>{
+      const dx=e.changedTouches[0].clientX-sx;
+      if(Math.abs(dx)>60){ setPane(dx<0?'right':'left'); }
+    },{passive:true});
+  </script>
+</body>
+</html>
