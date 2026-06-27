@@ -13,7 +13,8 @@
   .stage{display:flex;flex-direction:column;height:100vh;width:100vw}
   .pill{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:30;display:flex;gap:8px;align-items:center;
     background:var(--bg2);border:1px solid var(--bd);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--muted);
-    box-shadow:0 1px 8px rgba(0,0,0,.4)}
+    box-shadow:0 1px 8px rgba(0,0,0,.4);cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .pill:active{background:var(--bg3)}
   .pill b{color:var(--fg)}
   .pill .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
   .pill .dot.busy{background:var(--warn);animation:pulse 1.2s infinite}
@@ -45,6 +46,29 @@
   .foot kbd{background:var(--bg3);border:1px solid var(--bd);border-radius:4px;padding:0 5px}
   .toast{position:fixed;bottom:24px;right:24px;background:var(--bg3);border:1px solid var(--bd);border-radius:10px;padding:10px 14px;font-size:13px;opacity:0;transition:.2s;z-index:60}
   .toast.show{opacity:1}
+  /* ── Responsive: phone (390×844) + desktop both-first ───────────────────
+     Mobile: compact padding, ≥44px touch rows, 16px input (no iOS zoom),
+     pill wraps, kbd hint simplified. Desktop keeps the airy 32px layout. */
+  @media (max-width:640px){
+    .pill{top:8px;font-size:11px;gap:6px;padding:4px 10px;max-width:94vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .term{padding:44px 14px 0}
+    .scroll{font-size:12px}
+    .input-dock{padding:10px 14px 14px}
+    .input{padding:8px 10px}
+    .input textarea{font-size:16px}            /* ≥16px stops iOS auto-zoom */
+    .hint{display:none}                          /* kbd hint desktop-only */
+    .switcher{width:96vw;border-radius:14px}
+    .switcher input{font-size:16px;padding:14px 16px}
+    .row{padding:14px 16px;min-height:44px}     /* ≥44px touch target */
+    .row .ic{width:32px;height:32px}
+    .switcher .list{max-height:56vh}
+    .foot{display:none}                         /* arrow-key hint desktop-only */
+    .toast{bottom:14px;right:14px;left:14px;text-align:center}
+  }
+  @media (max-width:640px) and (orientation:landscape){
+    .term{padding:40px 14px 0}
+    .switcher .list{max-height:70vh}
+  }
 </style>
 </head>
 <body>
@@ -98,6 +122,8 @@ function open(){ov.classList.add('show');q.value='';filter();setTimeout(()=>q.fo
 function close(){ov.classList.remove('show')}
 function pick(i){const it=filtered[i]||filtered[0];if(!it)return;close();toast(`→ ${it.t}`)}
 q.oninput=filter;
+// Tap the pill (or click) to open the switcher — mobile has no ⌘K key.
+pill.addEventListener('click',open);
 document.addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();open();return}
   if(ov.classList.contains('show')){
