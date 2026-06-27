@@ -338,6 +338,7 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
 
     try {
       await new Promise((resolve, reject) => {
+        let settled = false
         const remove = client.onMessage((msg) => {
           if (msg.type === 'event' && msg.event) {
             const event = msg.event
@@ -357,13 +358,35 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
             }
             claudeBroadcast(cs, event)
           } else if (msg.type === 'turn-done') {
-            remove()
-            resolve(msg.event || { type: 'result', subtype: 'success' })
+            settle(resolve, msg.event || { type: 'result', subtype: 'success' })
           } else if (msg.type === 'turn-error') {
-            remove()
-            reject(new Error(msg.error || 'tmux bridge turn error'))
+            settle(reject, new Error(msg.error || 'tmux bridge turn error'))
           }
         })
+
+        // If the bridge socket dies mid-turn (process crash, OOM kill, host
+        // reboot, or destroy()), the bridge will never emit turn-done /
+        // turn-error. Without this guard the turn promise hangs forever and
+        // cs.busy stays true — the session becomes permanently unresponsive.
+        // Reject so the catch block broadcasts an error result and the
+        // finally clears cs.busy, letting the session recover.
+        const onClose = () => settle(reject, new Error('tmux bridge socket closed mid-turn'))
+        const onError = () => settle(reject, new Error('tmux bridge socket errored mid-turn'))
+        if (client.socket) {
+          client.socket.on('close', onClose)
+          client.socket.on('error', onError)
+        }
+
+        function settle(fn, value) {
+          if (settled) return
+          settled = true
+          remove()
+          if (client.socket) {
+            client.socket.removeListener('close', onClose)
+            client.socket.removeListener('error', onError)
+          }
+          fn(value)
+        }
 
         // Expose a currentProc proxy so the controller interrupt handler can
         // signal the bridge without knowing it is talking to tmux.
@@ -427,14 +450,14 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
       const client = bridgeClients.get(cs.sessionKey)
       if (!client) return
       await client.ensureConnected().catch(() => {})
-      client.send({ type: 'interrupt', force: !!force })
+      try { client.send({ type: 'interrupt', force: !!force }) } catch {}
     },
 
     async reset(cs, newSessionId) {
       const client = bridgeClients.get(cs.sessionKey)
       if (client) {
         await client.ensureConnected().catch(() => {})
-        client.send({ type: 'reset', sessionId: newSessionId })
+        try { client.send({ type: 'reset', sessionId: newSessionId }) } catch {}
       }
       cs.claudeSessionId = newSessionId
       cs.turnCount = 0
