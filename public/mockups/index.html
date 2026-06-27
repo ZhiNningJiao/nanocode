@@ -1,36 +1,72 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NanoCode UI Mockups</title>
+<link rel="stylesheet" href="../style.css">
 <style>
-  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--fg:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--bd:#30363d}
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,sans-serif;padding:40px 20px}
-  h1{font-size:22px;margin-bottom:6px}
-  p.sub{color:var(--muted);margin-bottom:28px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;max-width:1000px}
-  a.card{display:block;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:18px;text-decoration:none;color:var(--fg);transition:.15s}
-  a.card:hover{border-color:var(--accent);transform:translateY(-2px)}
-  .card .n{font-size:12px;color:var(--accent);font-weight:700;letter-spacing:.5px}
-  .card .t{font-size:17px;font-weight:600;margin:4px 0}
-  .card .d{font-size:13px;color:var(--muted)}
-  .card .tag{display:inline-block;margin-top:10px;font-size:11px;color:var(--muted);background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:2px 8px}
-  .nav{margin-top:30px;color:var(--muted);font-size:13px}
-  .nav a{color:var(--accent)}
+  body { overflow: auto; padding: var(--s-8) var(--s-4); }
+  .mk-wrap { max-width: 1040px; margin: 0 auto; }
+  .mk-h1 { font-size: var(--text-h1); font-weight: 700; margin: 0 0 4px; color: var(--text); }
+  .mk-sub { color: var(--text-secondary); margin-bottom: var(--s-8); font-size: 14px; }
+  .mk-group { margin-bottom: var(--s-8); }
+  .mk-group-label {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+    font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--primary); margin-bottom: var(--s-3);
+    padding: 3px 10px; border-radius: 10px; background: var(--primary-subtle);
+    border: 1px solid var(--border-active);
+  }
+  .mk-group-label.alt { color: var(--text-tertiary); background: var(--bg-tertiary); border-color: var(--border); }
+  .mk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s-4); }
+  a.card {
+    display: block; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: var(--s-5); text-decoration: none; color: var(--text);
+    transition: border-color var(--duration-fast), transform var(--duration-fast);
+  }
+  a.card:hover { border-color: var(--border-active); transform: translateY(-2px); }
+  .card .n { font-size: 11px; color: var(--primary); font-weight: 700; letter-spacing: .04em; }
+  .card .t { font-size: 17px; font-weight: 600; margin: 6px 0 4px; }
+  .card .d { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+  .card .tag {
+    display: inline-block; margin-top: 12px; font-size: 11px; color: var(--text-tertiary);
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 2px 8px;
+  }
+  .mk-back { margin-top: var(--s-8); color: var(--text-tertiary); font-size: 13px; }
+  .mk-back a { color: var(--primary); }
+  @media (max-width: 640px) { body { padding: var(--s-5) var(--s-3); } .mk-h1 { font-size: var(--text-h2); } }
 </style>
 </head>
 <body>
-<h1>NanoCode UI — 5 Interaction Paradigms</h1>
-<p class="sub">Static prototypes. Each differs at the interaction-logic level, not just visual skin. All five are responsive (phone 390×844 + desktop). See <code>NANOCODE_UI.md</code>.</p>
-<div class="grid">
-  <a class="card" href="v1-focus.html"><div class="n">V1</div><div class="t">Focus Mode</div><div class="d">Single conversation owns the screen; chrome summoned via ⌘K overlay / tappable pill.</div><span class="tag">mobile+desktop · single-task</span></a>
-  <a class="card" href="v2-dashboard.html"><div class="n">V2</div><div class="t">Multi-Lane Dashboard</div><div class="d">Parallel agent terminals in a mosaic; stacked cards on phone, expand to full-screen.</div><span class="tag">mobile+desktop · multi-agent</span></a>
-  <a class="card" href="v3-chat-canvas.html"><div class="n">V3</div><div class="t">Chat-First / Canvas</div><div class="d">Message-centric transcript + artifact canvas (bottom sheet on phone).</div><span class="tag">mobile+desktop · review</span></a>
-  <a class="card" href="v4-workspace-ide.html"><div class="n">V4</div><div class="t">Workspace IDE</div><div class="d">File-tree + terminal + diff triad; tree as drawer + bottom sheet on phone.</div><span class="tag">mobile+desktop · review gates</span></a>
-  <a class="card" href="v5-console.html"><div class="n">V5</div><div class="t">Command Console</div><div class="d">Keyboard-driven command bar (Vim/Raycast-like); ✉ toggle + touch suggestions on phone.</div><span class="tag">mobile+desktop · power-user</span></a>
+<div class="mk-wrap">
+  <h1 class="mk-h1">NanoCode UI Mockups</h1>
+  <p class="mk-sub">Two collections. <strong>Enhanced</strong> builds on the real nanocode UI (reuses <code>style.css</code> tokens) — 5 distinct enhancement directions, not new paradigms. <strong>Paradigms</strong> are the earlier 5 interaction-mode explorations. All are responsive (phone 390 + desktop 1280).</p>
+
+  <section class="mk-group">
+    <span class="mk-group-label">Enhanced — based on current UI</span>
+    <div class="mk-grid">
+      <a class="card" href="enhanced-v1.html"><div class="n">ENHANCED V1</div><div class="t">Desktop Power / Density</div><div class="d">Condensed status strip, ⌘K command palette, split presets, tab status dots, density toggle. Desktop-first; mobile unaffected.</div><span class="tag">desktop · keyboard</span></a>
+      <a class="card" href="enhanced-v2.html"><div class="n">ENHANCED V2</div><div class="t">Mobile UX</div><div class="d">Bottom 4-key nav, pane swipe, single-hand reach lift, pull-to-new, floating FAB. Mobile-first; desktop non-destructive.</div><span class="tag">mobile · ergonomics</span></a>
+      <a class="card" href="enhanced-v3.html"><div class="n">ENHANCED V3</div><div class="t">Visual Polish</div><div class="d">Layered block entrance, skeleton loaders, empty states, toast system, typing indicator, send micro-interaction. Both viewports.</div><span class="tag">visual · micro-interaction</span></a>
+      <a class="card" href="enhanced-v4.html"><div class="n">ENHANCED V4</div><div class="t">Multi-Agent Overview</div><div class="d">Tab grouping by project, pin tabs, agent overview grid, side-by-side compare. Desktop mosaic; mobile carousel.</div><span class="tag">multi-agent · panes</span></a>
+      <a class="card" href="enhanced-v5.html"><div class="n">ENHANCED V5</div><div class="t">A11y & Personalization</div><div class="d">Density tiers, font scale, high-contrast, reduced-motion, aria-live announcements, colorblind-safe status. Both viewports.</div><span class="tag">a11y · personalization</span></a>
+    </div>
+  </section>
+
+  <section class="mk-group">
+    <span class="mk-group-label alt">Paradigms — earlier explorations (new paradigms)</span>
+    <div class="mk-grid">
+      <a class="card" href="v1-focus.html"><div class="n">V1</div><div class="t">Focus Mode</div><div class="d">Single conversation owns the screen; chrome summoned via ⌘K overlay / tappable pill.</div><span class="tag">single-task</span></a>
+      <a class="card" href="v2-dashboard.html"><div class="n">V2</div><div class="t">Multi-Lane Dashboard</div><div class="d">Parallel agent terminals in a mosaic; stacked cards on phone.</div><span class="tag">multi-agent</span></a>
+      <a class="card" href="v3-chat-canvas.html"><div class="n">V3</div><div class="t">Chat-First / Canvas</div><div class="d">Message-centric transcript + artifact canvas (bottom sheet on phone).</div><span class="tag">review</span></a>
+      <a class="card" href="v4-workspace-ide.html"><div class="n">V4</div><div class="t">Workspace IDE</div><div class="d">File-tree + terminal + diff triad; tree as drawer + bottom sheet on phone.</div><span class="tag">review gates</span></a>
+      <a class="card" href="v5-console.html"><div class="n">V5</div><div class="t">Command Console</div><div class="d">Keyboard-driven command bar (Vim/Raycast-like); touch suggestions on phone.</div><span class="tag">power-user</span></a>
+    </div>
+  </section>
+
+  <p class="mk-back">← back to <a href="../">NanoCode</a> · UI writeup: <a href="../../NANOCODE_UI.md">NANOCODE_UI.md</a></p>
 </div>
-<p class="nav">← back to <a href="../">NanoCode</a> · architecture: <a href="../../NANOCODE_ARCH.md">NANOCODE_ARCH.md</a> · UI: <a href="../../NANOCODE_UI.md">NANOCODE_UI.md</a></p>
 </body>
 </html>

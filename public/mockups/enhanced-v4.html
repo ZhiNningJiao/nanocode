@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nanocode · Enhanced V4 — Multi-Agent Overview</title>
+<link rel="stylesheet" href="../style.css" />
+<style>
+  /* ═══ Enhanced V4 — Multi-Agent / Pane Management ═══
+     Reuses all style.css. Adds: tab grouping by project, pin tabs,
+     agent overview grid (fleet), side-by-side compare. */
+
+  /* --- Tab grouping: a subtle project label + divider --- */
+  .v4-tab-group { display: inline-flex; align-items: center; gap: 4px; }
+  .v4-group-label {
+    font-size: 9.5px; font-family: var(--font-mono); text-transform: uppercase;
+    letter-spacing: .06em; color: var(--text-muted); padding: 0 6px 0 2px;
+    border-right: 1px solid var(--border); margin-right: 2px; align-self: stretch;
+    display: flex; align-items: center;
+  }
+  .tab-chip .v4-pin {
+    display: none; width: 12px; height: 12px; color: var(--primary);
+    margin-left: 2px; flex-shrink: 0;
+  }
+  .tab-chip.pinned .v4-pin { display: inline-flex; }
+  .tab-chip.pinned { order: -1; }
+
+  /* --- overview toggle button in tab strip --- */
+  .v4-overview-btn {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+    border: 1px solid var(--border); background: var(--bg-elevated);
+    color: var(--text-secondary); border-radius: var(--radius-sm);
+    padding: 3px 9px; font-size: 11px; cursor: pointer; flex-shrink: 0;
+    font-family: var(--font-mono);
+  }
+  .v4-overview-btn.active { background: var(--primary-subtle); border-color: var(--border-active); color: var(--primary); }
+  .v4-overview-btn svg { width: 14px; height: 14px; }
+
+  /* --- Agent overview grid (fleet mosaic) --- */
+  .v4-fleet {
+    display: none; flex: 1; overflow-y: auto; padding: var(--s-3);
+    background: var(--bg);
+  }
+  body.v4-overview .v4-fleet { display: grid; }
+  body.v4-overview .split-container { display: none; }
+  body.v4-overview .chat-input-bar { display: none; }
+  .v4-fleet {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--s-3); align-content: start;
+  }
+  .v4-agent-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-md); overflow: hidden; cursor: pointer;
+    display: flex; flex-direction: column; min-height: 180px;
+    transition: border-color var(--duration-fast), transform var(--duration-fast);
+  }
+  .v4-agent-card:hover { border-color: var(--border-active); transform: translateY(-2px); }
+  .v4-agent-head {
+    display: flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3);
+    border-bottom: 1px solid var(--border); background: var(--bg-secondary);
+  }
+  .v4-agent-type {
+    width: 18px; height: 18px; border-radius: 5px; display: inline-flex;
+    align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0;
+  }
+  .v4-agent-type.claude { background: #13A1B8; }
+  .v4-agent-type.codex  { background: #4a88c4; }
+  .v4-agent-type.bash   { background: #5C5550; }
+  .v4-agent-name { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v4-status {
+    font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    padding: 2px 6px; border-radius: 8px; flex-shrink: 0;
+  }
+  .v4-status.running { background: var(--primary-subtle); color: var(--primary); }
+  .v4-status.idle { background: var(--bg-tertiary); color: var(--text-tertiary); }
+  .v4-status.blocked { background: var(--warning-bg); color: var(--warning); }
+  .v4-status.done { background: var(--success-bg); color: var(--success); }
+  .v4-agent-body {
+    flex: 1; padding: var(--s-2) var(--s-3); font-family: var(--font-mono);
+    font-size: 11px; color: var(--text-secondary); line-height: 1.5; overflow: hidden;
+  }
+  .v4-agent-body .ln { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v4-agent-foot { padding: var(--s-1) var(--s-3); border-top: 1px solid var(--border); font-size: 10px; color: var(--text-muted); display: flex; justify-content: space-between; }
+
+  /* --- Side-by-side compare --- */
+  .v4-compare { display: none; }
+  body.v4-comparing .v4-compare { display: grid; }
+  body.v4-comparing .split-container { display: none; }
+  body.v4-comparing .chat-input-bar { display: none; }
+  .v4-compare { flex: 1; grid-template-columns: 1fr 4px 1fr; min-height: 0; }
+  .v4-compare-pane { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: auto; display: flex; flex-direction: column; min-height: 0; }
+  .v4-compare-head { padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--border); background: var(--bg-secondary); display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 12px; }
+  .v4-compare-body { flex: 1; padding: var(--s-3); overflow-y: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; color: var(--text-secondary); }
+  .v4-compare-divider { background: var(--border-active); }
+
+  /* --- mobile: overview becomes swipeable carousel --- */
+  @media (max-width: 768px) {
+    .v4-fleet { grid-template-columns: 1fr; }
+    .v4-overview-btn span { display: none; }
+  }
+</style>
+</head>
+<body>
+  <header class="app-header">
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+    <h1 class="app-title">Nanocode</h1>
+    <div class="header-pills">
+      <span class="connection-status connected">Bash: connected</span>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode"><span class="theme-icon theme-icon-dark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span></button>
+      <button type="button" class="settings-toggle-btn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+      <button class="agent-drawer-toggle" id="agent-drawer-toggle" aria-label="Agent manager"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></button>
+    </div>
+  </header>
+
+  <main class="app-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header"><span class="sidebar-title">Projects</span><button type="button" class="btn-icon">+</button></div>
+      <div class="sidebar-projects">
+        <button class="sidebar-project active"><span class="sidebar-project-name">nanocode2</span></button>
+        <button class="sidebar-project"><span class="sidebar-project-name">meshy-dcc-pipeline</span><span class="sidebar-project-ssh">ssh</span></button>
+        <button class="sidebar-project"><span class="sidebar-project-name">muse-webapp</span></button>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <div class="main-content">
+      <div class="terminal-layout">
+        <div class="terminal-tab-strip" id="terminal-tab-strip">
+          <!-- V4: grouped + pinned tabs -->
+          <span class="v4-tab-group">
+            <span class="v4-group-label">nanocode2</span>
+            <button class="tab-chip tab-chip-claude active pinned"><span class="tab-chip-label">claude</span><svg class="v4-pin" viewBox="0 0 24 24" fill="currentColor"><path d="M16 3l5 5-4 1-3 3 1 4-3-1-4 4-1-3-3 1 1-4-2-2 4-1 3-3-1-4 3 1z"/></svg></button>
+            <button class="tab-chip tab-chip-codex"><span class="tab-chip-label">codex</span></button>
+            <button class="tab-chip"><span class="tab-chip-label">bash</span></button>
+          </span>
+          <span class="v4-tab-group">
+            <span class="v4-group-label">meshy-dcc</span>
+            <button class="tab-chip tab-chip-claude pinned"><span class="tab-chip-label">rig-fix</span><svg class="v4-pin" viewBox="0 0 24 24" fill="currentColor"><path d="M16 3l5 5-4 1-3 3 1 4-3-1-4 4-1-3-3 1 1-4-2-2 4-1 3-3-1-4 3 1z"/></svg></button>
+          </span>
+          <button class="tab-chip-add">+</button>
+          <!-- V4: overview + compare toggles -->
+          <button class="v4-overview-btn" id="v4-overview-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>Overview</span></button>
+          <button class="v4-overview-btn" id="v4-compare-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="8" height="16"/><rect x="13" y="4" width="8" height="16"/></svg><span>Compare</span></button>
+        </div>
+
+        <!-- normal split view -->
+        <div class="split-container" id="split-container" style="--split:55%">
+          <div class="pane pane-left">
+            <div class="terminal-stack" id="terminal-stack">
+              <div class="cbr-container"><div class="cbr-scroll">
+                <div class="cbr-block cbr-block-prompt cbr-user-prompt"><p class="cbr-prompt-text">&gt; group my tabs by project and let me see all agents at once</p></div>
+                <div class="cbr-block cbr-block-text"><div class="cbr-text"><p>Done. Tabs are now grouped under their project, the pinned claude tab sticks left, and the <strong>Overview</strong> button shows every agent as a live card.</p></div></div>
+              </div></div>
+            </div>
+          </div>
+          <div class="split-divider" id="split-divider"></div>
+          <div class="pane pane-right">
+            <div class="explorer-root" id="explorer-root" style="padding:var(--s-2);font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);overflow:auto">
+              <div style="color:var(--text-tertiary);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Explorer</div>
+              <div>📁 public/</div><div style="padding-left:14px">📄 index.html</div><div style="padding-left:14px">📄 style.css</div><div style="padding-left:14px">📁 js/</div><div style="padding-left:28px">📄 app.js</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- V4: agent overview grid -->
+        <div class="v4-fleet" id="v4-fleet">
+          <div class="v4-agent-card">
+            <div class="v4-agent-head"><span class="v4-agent-type claude">C</span><span class="v4-agent-name">claude · nanocode2</span><span class="v4-status running">running</span></div>
+            <div class="v4-agent-body"><div class="ln">&gt; refactor the sidebar toggle</div><div class="ln">debounce the click handler…</div><div class="ln">added 120ms guard ✓</div></div>
+            <div class="v4-agent-foot"><span>42.1k tokens</span><span>12.4s</span></div>
+          </div>
+          <div class="v4-agent-card">
+            <div class="v4-agent-head"><span class="v4-agent-type codex">X</span><span class="v4-agent-name">codex · nanocode2</span><span class="v4-status blocked">blocked</span></div>
+            <div class="v4-agent-body"><div class="ln">waiting for plan approval…</div><div class="ln">/model menu open</div></div>
+            <div class="v4-agent-foot"><span>8.3k tokens</span><span>idle 2m</span></div>
+          </div>
+          <div class="v4-agent-card">
+            <div class="v4-agent-head"><span class="v4-agent-type claude">C</span><span class="v4-agent-name">rig-fix · meshy-dcc</span><span class="v4-status done">done</span></div>
+            <div class="v4-agent-body"><div class="ln">&gt; fix neck joint orientation</div><div class="ln">rotated bone 90° ✓</div><div class="ln">tests pass</div></div>
+            <div class="v4-agent-foot"><span>15.7k tokens</span><span>QA ready</span></div>
+          </div>
+          <div class="v4-agent-card">
+            <div class="v4-agent-head"><span class="v4-agent-type bash">$</span><span class="v4-agent-name">bash · nanocode2</span><span class="v4-status idle">idle</span></div>
+            <div class="v4-agent-body"><div class="ln">~/code/nanocode2 $</div><div class="ln">_</div></div>
+            <div class="v4-agent-foot"><span>shell</span><span>ready</span></div>
+          </div>
+        </div>
+
+        <!-- V4: side-by-side compare -->
+        <div class="v4-compare" id="v4-compare">
+          <div class="v4-compare-pane">
+            <div class="v4-compare-head"><span class="v4-agent-type claude">C</span>claude · before</div>
+            <div class="v4-compare-body">
+              <div style="color:var(--error);background:var(--error-bg)">- toggleBtn.onclick = () =&gt; toggle()</div>
+              <div style="color:var(--text-muted)">  </div>
+              <div style="color:var(--text-tertiary)">// no debounce, rapid taps</div>
+            </div>
+          </div>
+          <div class="v4-compare-divider"></div>
+          <div class="v4-compare-pane">
+            <div class="v4-compare-head"><span class="v4-agent-type claude">C</span>claude · after</div>
+            <div class="v4-compare-body">
+              <div style="color:var(--success);background:var(--success-bg)">+ toggleBtn.onclick = debounce(toggle, 120)</div>
+              <div style="color:var(--text-muted)">  </div>
+              <div style="color:var(--text-tertiary)">// 120ms guard, leading edge</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mobile-pane-switch" id="mobile-pane-switch">
+          <button type="button" class="mobile-pane-btn active" data-pane="left">Terminal</button>
+          <button type="button" class="mobile-pane-btn" data-pane="right">Explorer</button>
+        </div>
+
+        <div class="chat-input-bar" id="chat-input-bar">
+          <div class="touch-toolbar" id="touch-toolbar"><button class="touch-btn">Ctrl+C</button><button class="touch-btn">Clear</button><button class="touch-btn">&uarr;</button><button class="touch-btn">Tab</button><button class="touch-btn">Esc</button></div>
+          <div class="input-row">
+            <div class="input-wrap"><textarea id="chat-input" class="chat-textarea" placeholder="Message claude…" rows="1" autocomplete="off" spellcheck="false"></textarea></div>
+            <button class="send-btn" id="send-btn" aria-label="Send"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const $=s=>document.querySelector(s);
+    $('#sidebar-toggle').addEventListener('click',()=>{ if(matchMedia('(max-width:768px)').matches){$('#sidebar').classList.toggle('open');$('#sidebar-backdrop').classList.toggle('open');}else{document.body.classList.toggle('sidebar-collapsed');} });
+    $('#sidebar-backdrop').addEventListener('click',()=>{ $('#sidebar').classList.remove('open');$('#sidebar-backdrop').classList.remove('open'); });
+    $('#theme-toggle').addEventListener('click',()=>{ const c=document.documentElement.getAttribute('data-theme');document.documentElement.setAttribute('data-theme',c==='dark'?'light':'dark'); });
+    document.querySelectorAll('.mobile-pane-btn').forEach(b=>b.addEventListener('click',()=>{ document.querySelectorAll('.mobile-pane-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.body.classList.remove('mobile-pane-left','mobile-pane-right');document.body.classList.add('mobile-pane-'+b.dataset.pane); }));
+    // overview toggle (exclusive of compare)
+    $('#v4-overview-btn').addEventListener('click',()=>{ const on=document.body.classList.toggle('v4-overview'); document.body.classList.remove('v4-comparing'); $('#v4-overview-btn').classList.toggle('active',on); $('#v4-compare-btn').classList.remove('active'); });
+    $('#v4-compare-btn').addEventListener('click',()=>{ const on=document.body.classList.toggle('v4-comparing'); document.body.classList.remove('v4-overview'); $('#v4-compare-btn').classList.toggle('active',on); $('#v4-overview-btn').classList.remove('active'); });
+    // pin toggle on click of pin area
+    document.querySelectorAll('.tab-chip').forEach(c=>c.addEventListener('contextmenu',e=>{e.preventDefault();c.classList.toggle('pinned');}));
+  </script>
+</body>
+</html>

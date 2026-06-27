@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nanocode · Enhanced V1 — Desktop Power</title>
+<link rel="stylesheet" href="../style.css" />
+<style>
+  /* ═══ Enhanced V1 — Desktop Power / Density ═══
+     Reuses ALL style.css tokens & cbr-* classes. Only adds:
+     condensed status strip, tab status dots, split presets, ⌘K palette. */
+
+  /* --- Condensed status strip (replaces single Bash pill) --- */
+  .v1-statusbar {
+    display: flex; align-items: center; gap: var(--s-2);
+    height: 26px; padding: 0 var(--s-3);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-tertiary);
+    flex-shrink: 0; overflow-x: auto; scrollbar-width: none;
+  }
+  .v1-statusbar::-webkit-scrollbar { display: none; }
+  .v1-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; border-radius: 10px;
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .v1-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .v1-pill.warn .dot { background: var(--warning); }
+  .v1-pill .k { color: var(--text-muted); }
+  .v1-pill .v { color: var(--text); font-weight: 600; }
+  .v1-pill.model .v { color: var(--primary); }
+  .v1-cmdk-hint {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: var(--radius-sm);
+    background: var(--primary-subtle); border: 1px solid var(--border-active);
+    color: var(--primary); cursor: pointer; white-space: nowrap; flex-shrink: 0;
+  }
+  .v1-cmdk-hint kbd {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+    background: var(--bg-tertiary); border-radius: 3px; padding: 1px 4px;
+  }
+
+  /* --- Tab status dots (running / idle / blocked) --- */
+  .tab-chip { position: relative; }
+  .v1-tabdot {
+    position: absolute; top: 3px; right: 5px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text-muted); flex-shrink: 0;
+  }
+  .v1-tabdot.running { background: var(--primary); animation: v1-pulse 1.4s ease-in-out infinite; }
+  .v1-tabdot.blocked { background: var(--warning); }
+  .v1-tabdot.done    { background: var(--success); }
+  @keyframes v1-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.7)} }
+
+  /* --- Split presets (segmented control in tab strip) --- */
+  .v1-split-presets {
+    margin-left: auto; display: inline-flex; gap: 2px;
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 2px; flex-shrink: 0;
+  }
+  .v1-split-presets button {
+    border: none; background: transparent; cursor: pointer;
+    width: 26px; height: 20px; border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-tertiary); transition: all var(--duration-fast);
+  }
+  .v1-split-presets button.active {
+    background: var(--primary); color: #fff;
+  }
+  .v1-split-presets svg { width: 14px; height: 14px; }
+
+  /* --- Compact density toggle (in statusbar) --- */
+  .v1-density { display: inline-flex; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+  .v1-density button { border: none; background: transparent; padding: 2px 8px; font-size: 10px; font-family: var(--font-mono); color: var(--text-tertiary); cursor: pointer; }
+  .v1-density button.active { background: var(--primary-subtle); color: var(--primary); }
+
+  /* --- ⌘K Command palette overlay --- */
+  .v1-cmdk {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(45,40,32,0.35); backdrop-filter: blur(4px);
+    display: none; align-items: flex-start; justify-content: center;
+    padding-top: 12vh;
+  }
+  .v1-cmdk.open { display: flex; }
+  .v1-cmdk-box {
+    width: min(560px, 92vw); background: var(--bg-elevated);
+    border: 1px solid var(--border-hover); border-radius: var(--radius-lg);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4); overflow: hidden;
+    animation: v1-pop 160ms var(--ease-standard);
+  }
+  @keyframes v1-pop { from{opacity:0;transform:translateY(-8px) scale(.98)} to{opacity:1;transform:none} }
+  .v1-cmdk-input {
+    width: 100%; border: none; outline: none; background: transparent;
+    padding: var(--s-4); font-family: var(--font-sans); font-size: 15px; color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  .v1-cmdk-list { max-height: 320px; overflow-y: auto; padding: var(--s-1); }
+  .v1-cmdk-item {
+    display: flex; align-items: center; gap: var(--s-2);
+    padding: 8px var(--s-3); border-radius: var(--radius-sm); cursor: pointer;
+    font-size: 13px; color: var(--text-secondary);
+  }
+  .v1-cmdk-item:hover, .v1-cmdk-item.sel { background: var(--primary-subtle); color: var(--text); }
+  .v1-cmdk-item .ic { width: 16px; color: var(--text-tertiary); flex-shrink: 0; }
+  .v1-cmdk-item .sc { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+  .v1-cmdk-foot { padding: var(--s-2) var(--s-3); border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); display: flex; gap: var(--s-3); }
+
+  /* statusbar hides gracefully on mobile, presets collapse */
+  @media (max-width: 768px) {
+    .v1-statusbar { height: 24px; font-size: 10px; padding: 0 var(--s-2); }
+    .v1-cmdk-hint, .v1-split-presets, .v1-density { display: none; }
+  }
+</style>
+</head>
+<body>
+  <header class="app-header">
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <h1 class="app-title">Nanocode</h1>
+    <div class="header-pills">
+      <span class="connection-status connected" id="status-bash">Bash: connected</span>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode"><span class="theme-icon theme-icon-dark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span></button>
+      <button type="button" class="settings-toggle-btn" id="settings-toggle-btn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+      <button class="agent-drawer-toggle" id="agent-drawer-toggle" aria-label="Agent manager"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></button>
+    </div>
+  </header>
+
+  <!-- V1 ENHANCEMENT: condensed status strip -->
+  <div class="v1-statusbar">
+    <span class="v1-pill"><span class="dot"></span><span class="k">bash</span><span class="v">ok</span></span>
+    <span class="v1-pill model"><span class="k">model</span><span class="v">claude-fable-5</span></span>
+    <span class="v1-pill"><span class="k">effort</span><span class="v">high</span></span>
+    <span class="v1-pill"><span class="k">tokens</span><span class="v">42.1k</span><span class="k">/200k</span></span>
+    <span class="v1-pill warn"><span class="dot"></span><span class="k">queue</span><span class="v">2</span></span>
+    <span class="v1-density" title="Density">
+      <button>Cozy</button><button class="active">Std</button><button>Tight</button>
+    </span>
+    <span class="v1-cmdk-hint" id="v1-cmdk-trigger"><kbd>⌘</kbd><kbd>K</kbd> command</span>
+  </div>
+
+  <main class="app-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header"><span class="sidebar-title">Projects</span><button type="button" class="btn-icon" title="Add project">+</button></div>
+      <div class="sidebar-projects">
+        <button class="sidebar-project active"><span class="sidebar-project-name">nanocode2</span></button>
+        <button class="sidebar-project"><span class="sidebar-project-name">meshy-dcc-pipeline</span><span class="sidebar-project-ssh">ssh</span></button>
+        <button class="sidebar-project"><span class="sidebar-project-name">muse-webapp</span></button>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <div class="main-content">
+      <div class="terminal-layout">
+        <div class="split-container" id="split-container" style="--split:60%">
+          <div class="pane pane-left">
+            <div class="terminal-tab-strip" id="terminal-tab-strip">
+              <button class="tab-chip tab-chip-claude active"><span class="v1-tabdot running" title="running"></span><span class="tab-chip-label">claude</span></button>
+              <button class="tab-chip tab-chip-codex"><span class="v1-tabdot blocked" title="blocked"></span><span class="tab-chip-label">codex</span></button>
+              <button class="tab-chip"><span class="v1-tabdot done" title="done"></span><span class="tab-chip-label">bash</span></button>
+              <button class="tab-chip-add">+</button>
+              <!-- V1 ENHANCEMENT: split presets -->
+              <span class="v1-split-presets" title="Split layout">
+                <button data-preset="100" title="Focus left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="1"/></svg></button>
+                <button class="active" data-preset="60" title="60/40"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="13" height="16" rx="1"/><rect x="18" y="4" width="3" height="16"/></svg></button>
+                <button data-preset="50" title="50/50"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="8" height="16" rx="1"/><rect x="13" y="4" width="8" height="16"/></svg></button>
+              </span>
+            </div>
+            <div class="terminal-stack" id="terminal-stack">
+              <!-- conversation (real cbr-* classes) -->
+              <div class="cbr-container"><div class="cbr-scroll">
+                <div class="cbr-block cbr-block-prompt cbr-user-prompt"><p class="cbr-prompt-text">&gt; refactor the sidebar toggle to debounce rapid taps</p></div>
+                <div class="cbr-block cbr-block-text"><div class="cbr-text"><p>Sure — I'll debounce the sidebar toggle and add a guard against mid-transition taps. Here's the plan:</p><ul><li>Wrap the click handler in a 120ms debounce</li><li>Ignore clicks while <code>transition</code> is running</li></ul></div></div>
+                <div class="cbr-block cbr-block-tool" data-fold="header"><div class="cbr-tool-card"><div class="cbr-tool-header"><span class="cbr-tool-icon-wrap"><svg class="cbr-tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span><span class="cbr-tool-name">Edit</span><span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)">public/js/sidebar.js</span></div></div></div>
+                <div class="cbr-block cbr-block-code"><div class="cbr-code-wrap"><div class="cbr-code-header"><span class="cbr-code-lang">js</span><button class="cbr-copy-btn">Copy</button></div><pre class="cbr-pre"><code class="cbr-code">toggleBtn.addEventListener('click', debounce(() =&gt; {
+  document.body.classList.toggle('sidebar-collapsed')
+}, 120, { leading: true }))</code></pre></div></div>
+                <div class="cbr-block cbr-block-text"><div class="cbr-text"><p>Done. Rapid taps now collapse/expand once per 120ms window.</p></div></div>
+              </div></div>
+            </div>
+          </div>
+          <div class="split-divider" id="split-divider"></div>
+          <div class="pane pane-right">
+            <div class="explorer-root" id="explorer-root" style="padding:var(--s-2);font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);overflow:auto">
+              <div style="color:var(--text-tertiary);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Explorer</div>
+              <div>📁 public/</div>
+              <div style="padding-left:14px">📄 index.html</div>
+              <div style="padding-left:14px">📄 style.css</div>
+              <div style="padding-left:14px;color:var(--primary)">📁 js/</div>
+              <div style="padding-left:28px">📄 app.js</div>
+              <div style="padding-left:28px;background:var(--sidebar-active);border-radius:3px">📄 sidebar.js</div>
+              <div style="padding-left:28px">📄 tab-manager.js</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mobile-pane-switch" id="mobile-pane-switch">
+          <button type="button" class="mobile-pane-btn active" data-pane="left">Terminal</button>
+          <button type="button" class="mobile-pane-btn" data-pane="right">Explorer</button>
+        </div>
+
+        <div class="chat-input-bar" id="chat-input-bar">
+          <div class="touch-toolbar" id="touch-toolbar">
+            <button class="touch-btn" data-action="ctrl-c">Ctrl+C</button>
+            <button class="touch-btn" data-action="ctrl-l">Clear</button>
+            <button class="touch-btn" data-action="arrow-up">&uarr;</button>
+            <button class="touch-btn" data-action="tab">Tab</button>
+            <button class="touch-btn" data-action="escape">Esc</button>
+          </div>
+          <div class="input-row">
+            <div class="input-wrap">
+              <textarea id="chat-input" class="chat-textarea" placeholder="Type a command… (⌘K for palette)" rows="1" autocomplete="off" spellcheck="false"></textarea>
+            </div>
+            <button class="send-btn" id="send-btn" aria-label="Send"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- V1 ENHANCEMENT: ⌘K command palette -->
+  <div class="v1-cmdk" id="v1-cmdk">
+    <div class="v1-cmdk-box">
+      <input class="v1-cmdk-input" placeholder="Run a command, open a file, switch tab…" id="v1-cmdk-input" />
+      <div class="v1-cmdk-list">
+        <div class="v1-cmdk-item sel"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>Open terminal tab<span class="sc">⌘T</span></div>
+        <div class="v1-cmdk-item"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg></span>Find file…<span class="sc">⌘P</span></div>
+        <div class="v1-cmdk-item"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6"/></svg></span>Toggle theme<span class="sc">⌘J</span></div>
+        <div class="v1-cmdk-item"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span>Split 50/50<span class="sc">⌘\</span></div>
+      </div>
+      <div class="v1-cmdk-foot"><span>↑↓ navigate</span><span>↵ select</span><span>esc close</span></div>
+    </div>
+  </div>
+
+  <script>
+    // Minimal interaction to demonstrate the enhancement
+    const $ = s => document.querySelector(s);
+    const cmdk = $('#v1-cmdk'), input = $('#v1-cmdk-input');
+    const open = () => { cmdk.classList.add('open'); setTimeout(()=>input.focus(),30); };
+    const close = () => cmdk.classList.remove('open');
+    $('#v1-cmdk-trigger').addEventListener('click', open);
+    addEventListener('keydown', e => {
+      if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k') { e.preventDefault(); cmdk.classList.contains('open')?close():open(); }
+      if (e.key==='Escape') close();
+    });
+    cmdk.addEventListener('click', e => { if(e.target===cmdk) close(); });
+    // split presets
+    document.querySelectorAll('.v1-split-presets button').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('.v1-split-presets button').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      const p = b.dataset.preset;
+      const sc = $('#split-container');
+      if (p==='100') { sc.style.setProperty('--split','100%'); } else { sc.style.setProperty('--split', p+'%'); }
+    }));
+    // sidebar toggle (mobile drawer) + theme
+    $('#sidebar-toggle').addEventListener('click', () => {
+      if (matchMedia('(max-width:768px)').matches) {
+        $('#sidebar').classList.toggle('open'); $('#sidebar-backdrop').classList.toggle('open');
+      } else { document.body.classList.toggle('sidebar-collapsed'); }
+    });
+    $('#sidebar-backdrop').addEventListener('click', () => { $('#sidebar').classList.remove('open'); $('#sidebar-backdrop').classList.remove('open'); });
+    $('#theme-toggle').addEventListener('click', () => {
+      const cur = document.documentElement.getAttribute('data-theme');
+      document.documentElement.setAttribute('data-theme', cur==='dark'?'light':'dark');
+    });
+    // mobile pane switch
+    document.querySelectorAll('.mobile-pane-btn').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('.mobile-pane-btn').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      document.body.classList.remove('mobile-pane-left','mobile-pane-right');
+      document.body.classList.add('mobile-pane-'+b.dataset.pane);
+    }));
+  </script>
+</body>
+</html>

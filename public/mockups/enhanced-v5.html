@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-density="comfortable" data-contrast="normal">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nanocode · Enhanced V5 — A11y & Personalization</title>
+<link rel="stylesheet" href="../style.css" />
+<style>
+  /* ═══ Enhanced V5 — Accessibility + Personalization ═══
+     Reuses all style.css. Adds: density tiers, font scale,
+     high-contrast, reduced-motion respect, aria-live region,
+     colorblind-safe status (shape + color). */
+
+  /* --- Density tiers --- */
+  [data-density="compact"] { font-size: 13px; }
+  [data-density="compact"] .cbr-scroll { gap: 6px; padding: 10px; }
+  [data-density="compact"] .cbr-block-text { padding: 8px 10px; }
+  [data-density="compact"] .tab-chip { height: 24px; font-size: 11px; padding: 3px 8px; }
+  [data-density="compact"] .terminal-tab-strip { min-height: 34px; padding: 4px 8px; }
+  [data-density="compact"] .chat-textarea { height: 34px; min-height: 34px; }
+  [data-density="compact"] .send-btn { width: 34px; height: 34px; }
+  [data-density="spacious"] { font-size: 15px; }
+  [data-density="spacious"] .cbr-scroll { gap: 16px; padding: 20px; }
+  [data-density="spacious"] .cbr-block-text { padding: 16px 20px; }
+  [data-density="spacious"] .chat-textarea { height: 44px; min-height: 44px; }
+  [data-density="spacious"] .send-btn { width: 44px; height: 44px; }
+
+  /* --- Font scale --- */
+  [data-fontscale="lg"] { font-size: 15px; }
+  [data-fontscale="lg"] .cbr-text { font-size: 1.05rem; }
+  [data-fontscale="xl"] { font-size: 17px; }
+  [data-fontscale="xl"] .cbr-text { font-size: 1.15rem; }
+
+  /* --- High contrast --- */
+  [data-contrast="high"] { --border: rgba(255,255,255,0.30); --border-hover: rgba(255,255,255,0.50); }
+  [data-contrast="high"] .cbr-block-text { border-width: 2px; }
+  [data-contrast="high"] .cbr-tool-header { border-bottom-width: 2px; }
+  [data-contrast="high"] :focus-visible { outline-width: 3px; outline-offset: 3px; }
+  [data-contrast="high"] .cbr-text { color: var(--text); }
+  [data-contrast="high"] .v5-status-dot { outline: 1.5px solid var(--text); }
+
+  /* --- Personalization bar --- */
+  .v5-persbar {
+    display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap;
+    padding: 6px var(--s-3); background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .v5-field { display: inline-flex; align-items: center; gap: 6px; }
+  .v5-field label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+  .v5-seg { display: inline-flex; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+  .v5-seg button { border: none; background: transparent; padding: 3px 9px; font-size: 11px; font-family: var(--font-mono); color: var(--text-tertiary); cursor: pointer; }
+  .v5-seg button.active { background: var(--primary-subtle); color: var(--primary); }
+  .v5-fontscale { display: inline-flex; align-items: center; gap: 4px; }
+  .v5-fontscale button { border: 1px solid var(--border); background: var(--bg-elevated); border-radius: var(--radius-sm); width: 24px; height: 22px; cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+  .v5-fontscale button.active { background: var(--primary-subtle); border-color: var(--border-active); color: var(--primary); }
+
+  /* --- Colorblind-safe status: shape + color, never color alone --- */
+  .v5-status-dot {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%;
+  }
+  .v5-status-dot.running { background: var(--primary); }
+  .v5-status-dot.running::after { content:''; width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:7px solid #fff; } /* play = running */
+  .v5-status-dot.done { background: var(--success); }
+  .v5-status-dot.done::after { content:'✓'; color:#fff; font-size:10px; font-weight:700; line-height:1; }
+  .v5-status-dot.blocked { background: var(--warning); }
+  .v5-status-dot.blocked::after { content:'!'; color:#fff; font-size:11px; font-weight:700; line-height:1; }
+  .v5-status-dot.idle { background: var(--bg-tertiary); border: 1.5px solid var(--text-muted); }
+
+  /* --- aria-live announcement region (visually subtle, screen-reader live) --- */
+  .v5-live {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+
+  /* --- focus-order helper badge (visible focus trail) --- */
+  .v5-focusable:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+  /* --- reduced motion: respect even when user hasn't set OS pref --- */
+  [data-motion="reduced"] *, [data-motion="reduced"] *::before, [data-motion="reduced"] *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  @media (max-width: 768px) {
+    .v5-persbar { gap: var(--s-2); padding: 5px var(--s-2); }
+    .v5-field label { display: none; }
+  }
+</style>
+</head>
+<body>
+  <header class="app-header">
+    <button class="sidebar-toggle v5-focusable" id="sidebar-toggle" aria-label="Toggle sidebar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+    <h1 class="app-title">Nanocode</h1>
+    <div class="header-pills">
+      <span class="connection-status connected">Bash: connected</span>
+      <button type="button" class="theme-toggle v5-focusable" id="theme-toggle" aria-label="Toggle dark mode"><span class="theme-icon theme-icon-dark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span></button>
+      <button type="button" class="settings-toggle-btn v5-focusable" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+      <button class="agent-drawer-toggle v5-focusable" id="agent-drawer-toggle" aria-label="Agent manager"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></button>
+    </div>
+  </header>
+
+  <!-- V5: personalization bar -->
+  <div class="v5-persbar" role="toolbar" aria-label="Personalization">
+    <div class="v5-field">
+      <label for="v5-density">Density</label>
+      <span class="v5-seg" id="v5-density">
+        <button data-d="compact">Compact</button><button data-d="comfortable" class="active">Comfortable</button><button data-d="spacious">Spacious</button>
+      </span>
+    </div>
+    <div class="v5-field">
+      <label>Text size</label>
+      <span class="v5-fontscale" id="v5-fontscale">
+        <button data-s="md" class="active">A</button><button data-s="lg">A</button><button data-s="xl">A</button>
+      </span>
+    </div>
+    <div class="v5-field">
+      <label>Contrast</label>
+      <span class="v5-seg" id="v5-contrast">
+        <button data-c="normal" class="active">Normal</button><button data-c="high">High</button>
+      </span>
+    </div>
+    <div class="v5-field">
+      <label>Motion</label>
+      <span class="v5-seg" id="v5-motion">
+        <button data-m="full" class="active">Full</button><button data-m="reduced">Reduced</button>
+      </span>
+    </div>
+    <div class="v5-field" style="margin-left:auto" title="Status uses shape + color (colorblind-safe)">
+      <span class="v5-status-dot running" aria-label="running"></span>
+      <span class="v5-status-dot done" aria-label="done"></span>
+      <span class="v5-status-dot blocked" aria-label="blocked"></span>
+      <span class="v5-status-dot idle" aria-label="idle"></span>
+    </div>
+  </div>
+
+  <!-- V5: screen-reader live region -->
+  <div class="v5-live" aria-live="polite" id="v5-live">Personalization loaded.</div>
+
+  <main class="app-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header"><span class="sidebar-title">Projects</span><button type="button" class="btn-icon v5-focusable">+</button></div>
+      <div class="sidebar-projects">
+        <button class="sidebar-project active v5-focusable"><span class="sidebar-project-name">nanocode2</span></button>
+        <button class="sidebar-project v5-focusable"><span class="sidebar-project-name">meshy-dcc-pipeline</span><span class="sidebar-project-ssh">ssh</span></button>
+        <button class="sidebar-project v5-focusable"><span class="sidebar-project-name">muse-webapp</span></button>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <div class="main-content">
+      <div class="terminal-layout">
+        <div class="split-container" id="split-container" style="--split:55%">
+          <div class="pane pane-left">
+            <div class="terminal-tab-strip" id="terminal-tab-strip">
+              <button class="tab-chip tab-chip-claude active"><span class="tab-chip-label">claude</span></button>
+              <button class="tab-chip tab-chip-codex"><span class="tab-chip-label">codex</span></button>
+              <button class="tab-chip-add">+</button>
+            </div>
+            <div class="terminal-stack" id="terminal-stack">
+              <div class="cbr-container"><div class="cbr-scroll">
+                <div class="cbr-block cbr-block-prompt cbr-user-prompt"><p class="cbr-prompt-text">&gt; make the UI adjustable for different vision and motion needs</p></div>
+                <div class="cbr-block cbr-block-text"><div class="cbr-text"><p>You can now pick a density, scale text up, switch to high-contrast borders, and reduce motion — all from the bar above. Status indicators always pair color with a shape so they read without color.</p><p>Tab through the interface: focus order follows the visual layout, and every change is announced to screen readers.</p></div></div>
+                <div class="cbr-block cbr-block-tool" data-fold="header"><div class="cbr-tool-card"><div class="cbr-tool-header"><span class="cbr-tool-icon-wrap"><svg class="cbr-tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span><span class="cbr-tool-name">Edit</span><span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)">public/style.css</span></div></div></div>
+              </div></div>
+            </div>
+          </div>
+          <div class="split-divider" id="split-divider"></div>
+          <div class="pane pane-right">
+            <div class="explorer-root" id="explorer-root" style="padding:var(--s-2);font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);overflow:auto">
+              <div style="color:var(--text-tertiary);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Explorer</div>
+              <div>📁 public/</div><div style="padding-left:14px">📄 index.html</div><div style="padding-left:14px">📄 style.css</div><div style="padding-left:14px">📁 js/</div><div style="padding-left:28px">📄 app.js</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mobile-pane-switch" id="mobile-pane-switch">
+          <button type="button" class="mobile-pane-btn active v5-focusable" data-pane="left">Terminal</button>
+          <button type="button" class="mobile-pane-btn v5-focusable" data-pane="right">Explorer</button>
+        </div>
+
+        <div class="chat-input-bar" id="chat-input-bar">
+          <div class="touch-toolbar" id="touch-toolbar"><button class="touch-btn">Ctrl+C</button><button class="touch-btn">Clear</button><button class="touch-btn">&uarr;</button><button class="touch-btn">Tab</button><button class="touch-btn">Esc</button></div>
+          <div class="input-row">
+            <div class="input-wrap"><textarea id="chat-input" class="chat-textarea v5-focusable" placeholder="Message claude…" rows="1" autocomplete="off" spellcheck="false"></textarea></div>
+            <button class="send-btn v5-focusable" id="send-btn" aria-label="Send"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const $=s=>document.querySelector(s), root=document.documentElement;
+    const live=$('#v5-live'); const announce=m=>{live.textContent=m;};
+    const seg=(id,attr,labels)=>{ document.querySelectorAll('#'+id+' button').forEach(b=>b.addEventListener('click',()=>{ document.querySelectorAll('#'+id+' button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); root.setAttribute(attr,b.dataset[id.replace('v5-','').slice(0,1)]||b.dataset[b.dataset?'':'']); })); };
+    // density
+    document.querySelectorAll('#v5-density button').forEach(b=>b.addEventListener('click',()=>{ document.querySelectorAll('#v5-density button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); root.setAttribute('data-density',b.dataset.d); announce('Density set to '+b.dataset.d); }));
+    // fontscale
+    document.querySelectorAll('#v5-fontscale button').forEach(b=>b.addEventListener('click',()=>{ document.querySelectorAll('#v5-fontscale button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); root.setAttribute('data-fontscale',b.dataset.s); announce('Text size '+b.dataset.s); }));
+    // contrast
+    document.querySelectorAll('#v5-contrast button').forEach(b=>b.addEventListener('click',()=>{ document.querySelectorAll('#v5-contrast button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); root.setAttribute('data-contrast',b.dataset.c); announce('Contrast '+b.dataset.c); }));
+    // motion
+    document.querySelectorAll('#v5-motion button').forEach(b=>b.addEventListener('click',()=>{ document.querySelectorAll('#v5-motion button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); root.setAttribute('data-motion',b.dataset.m); announce('Motion '+b.dataset.m); }));
+    // honor OS reduced-motion on load
+    if(matchMedia('(prefers-reduced-motion: reduce)').matches){ root.setAttribute('data-motion','reduced'); document.querySelectorAll('#v5-motion button').forEach(x=>x.classList.toggle('active',x.dataset.m==='reduced')); }
+    // sidebar + theme + mobile panes
+    $('#sidebar-toggle').addEventListener('click',()=>{ if(matchMedia('(max-width:768px)').matches){$('#sidebar').classList.toggle('open');$('#sidebar-backdrop').classList.toggle('open');}else{document.body.classList.toggle('sidebar-collapsed');} });
+    $('#sidebar-backdrop').addEventListener('click',()=>{ $('#sidebar').classList.remove('open');$('#sidebar-backdrop').classList.remove('open'); });
+    $('#theme-toggle').addEventListener('click',()=>{ const c=root.getAttribute('data-theme');root.setAttribute('data-theme',c==='dark'?'light':'dark'); announce('Theme '+(c==='dark'?'light':'dark')); });
+    document.querySelectorAll('.mobile-pane-btn').forEach(b=>b.addEventListener('click',()=>{ document.querySelectorAll('.mobile-pane-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.body.classList.remove('mobile-pane-left','mobile-pane-right');document.body.classList.add('mobile-pane-'+b.dataset.pane); }));
+  </script>
+</body>
+</html>

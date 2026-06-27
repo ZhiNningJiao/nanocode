@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nanocode · Enhanced V3 — Visual Polish</title>
+<link rel="stylesheet" href="../style.css" />
+<style>
+  /* ═══ Enhanced V3 — Visual / Micro-interaction Polish ═══
+     Reuses all style.css. Adds: skeleton loaders, empty states,
+     toast system, layered block entrance, typing indicator, focus ring. */
+
+  /* --- Layered block entrance (stagger) --- */
+  .v3-stagger .cbr-block { animation: v3-rise 360ms var(--ease-standard) both; }
+  .v3-stagger .cbr-block:nth-child(1){animation-delay:0ms}
+  .v3-stagger .cbr-block:nth-child(2){animation-delay:70ms}
+  .v3-stagger .cbr-block:nth-child(3){animation-delay:140ms}
+  .v3-stagger .cbr-block:nth-child(4){animation-delay:210ms}
+  @keyframes v3-rise { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
+
+  /* --- Skeleton shimmer loader --- */
+  .v3-skel { border-radius: var(--radius-md); overflow: hidden; }
+  .v3-skel-line {
+    height: 12px; margin: 8px 0; border-radius: 4px;
+    background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--bg-hover) 50%, var(--bg-tertiary) 75%);
+    background-size: 200% 100%; animation: v3-shimmer 1.4s ease-in-out infinite;
+  }
+  .v3-skel-line.short { width: 45%; }
+  .v3-skel-line.med { width: 72%; }
+  @keyframes v3-shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  .v3-skel-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    padding: var(--s-3) var(--s-4); border-radius: var(--radius-md);
+  }
+  .v3-skel-bar { width: 60px; height: 14px; border-radius: 4px; background: var(--bg-tertiary); margin-bottom: 10px; animation: v3-shimmer 1.4s ease-in-out infinite; }
+
+  /* --- Empty state --- */
+  .v3-empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: var(--s-8) var(--s-4); color: var(--text-tertiary);
+  }
+  .v3-empty-art { width: 64px; height: 64px; margin-bottom: var(--s-4); opacity: .5; color: var(--primary); }
+  .v3-empty h3 { font-size: 15px; color: var(--text-secondary); margin: 0 0 4px; font-weight: 600; }
+  .v3-empty p { font-size: 13px; margin: 0 0 var(--s-4); max-width: 280px; line-height: 1.5; }
+  .v3-empty .btn { font-family: var(--font-sans); font-size: 13px; }
+
+  /* --- Typing indicator --- */
+  .v3-typing { display: inline-flex; align-items: center; gap: 4px; padding: var(--s-2) var(--s-3); }
+  .v3-typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); animation: v3-bounce 1.2s ease-in-out infinite; }
+  .v3-typing span:nth-child(2){animation-delay:.15s}
+  .v3-typing span:nth-child(3){animation-delay:.3s}
+  @keyframes v3-bounce { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
+
+  /* --- Toast notifications --- */
+  .v3-toasts {
+    position: fixed; z-index: 90; right: 16px; bottom: 80px;
+    display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+  }
+  .v3-toast {
+    display: flex; align-items: center; gap: var(--s-2);
+    background: var(--bg-elevated); border: 1px solid var(--border-hover);
+    border-left: 3px solid var(--success);
+    border-radius: var(--radius-md); padding: var(--s-2) var(--s-3);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18); font-size: 13px; color: var(--text);
+    max-width: 320px; pointer-events: auto;
+    animation: v3-toast-in 280ms var(--ease-standard) both;
+  }
+  .v3-toast.info { border-left-color: var(--info); }
+  .v3-toast.warn { border-left-color: var(--warning); }
+  .v3-toast .ic { color: var(--success); flex-shrink: 0; }
+  .v3-toast.info .ic { color: var(--info); }
+  .v3-toast.warn .ic { color: var(--warning); }
+  .v3-toast .x { margin-left: auto; cursor: pointer; color: var(--text-muted); }
+  @keyframes v3-toast-in { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+
+  /* --- Enhanced focus ring (clearer, on the textarea) --- */
+  .v3-focus .chat-textarea:focus { box-shadow: 0 0 0 3px var(--primary-glow), 0 0 0 1px var(--primary); }
+
+  /* --- Send button micro-interaction --- */
+  .v3-focus .send-btn { transition: background var(--duration-fast), transform var(--duration-fast); }
+  .v3-focus .send-btn:active { transform: scale(.9) translateY(1px); }
+  .v3-focus .send-btn.sent { animation: v3-send-pop 420ms var(--ease-standard); }
+  @keyframes v3-send-pop { 0%{transform:scale(1)} 30%{transform:scale(.85) rotate(-8deg)} 60%{transform:scale(1.08) rotate(4deg)} 100%{transform:none} }
+
+  @media (max-width: 768px) {
+    .v3-toasts { right: 8px; left: 8px; bottom: 70px; }
+    .v3-toast { max-width: none; }
+  }
+</style>
+</head>
+<body class="v3-focus">
+  <header class="app-header">
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+    <h1 class="app-title">Nanocode</h1>
+    <div class="header-pills">
+      <span class="connection-status connected">Bash: connected</span>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode"><span class="theme-icon theme-icon-dark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span></button>
+      <button type="button" class="settings-toggle-btn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+      <button class="agent-drawer-toggle" id="agent-drawer-toggle" aria-label="Agent manager"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></button>
+    </div>
+  </header>
+
+  <main class="app-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header"><span class="sidebar-title">Projects</span><button type="button" class="btn-icon">+</button></div>
+      <div class="sidebar-projects">
+        <button class="sidebar-project active"><span class="sidebar-project-name">nanocode2</span></button>
+        <button class="sidebar-project"><span class="sidebar-project-name">meshy-dcc-pipeline</span><span class="sidebar-project-ssh">ssh</span></button>
+        <button class="sidebar-project"><span class="sidebar-project-name">muse-webapp</span></button>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <div class="main-content">
+      <div class="terminal-layout">
+        <div class="split-container" id="split-container" style="--split:58%">
+          <div class="pane pane-left">
+            <div class="terminal-tab-strip" id="terminal-tab-strip">
+              <button class="tab-chip tab-chip-claude active"><span class="tab-chip-label">claude</span></button>
+              <button class="tab-chip tab-chip-codex"><span class="tab-chip-label">codex</span></button>
+              <button class="tab-chip-add">+</button>
+            </div>
+            <div class="terminal-stack" id="terminal-stack">
+              <div class="cbr-container"><div class="cbr-scroll v3-stagger">
+                <div class="cbr-block cbr-block-prompt cbr-user-prompt"><p class="cbr-prompt-text">&gt; add toast notifications when a turn finishes</p></div>
+                <div class="cbr-block cbr-block-text"><div class="cbr-text"><p>Good call. I'll add a toast system and fire it on turn-complete. Blocks now fade in with a stagger so long turns read naturally.</p></div></div>
+                <div class="cbr-block cbr-block-tool" data-fold="header"><div class="cbr-tool-card"><div class="cbr-tool-header"><span class="cbr-tool-icon-wrap"><svg class="cbr-tool-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span><span class="cbr-tool-name">Edit</span><span style="margin-left:auto;font-size:11px;color:var(--text-tertiary)">public/js/app.js</span></div></div></div>
+                <!-- V3: typing indicator (turn in progress) -->
+                <div class="cbr-block cbr-block-text"><div class="v3-typing"><span></span><span></span><span></span></div></div>
+              </div></div>
+            </div>
+          </div>
+          <div class="split-divider" id="split-divider"></div>
+          <div class="pane pane-right">
+            <!-- V3: skeleton loading state for explorer -->
+            <div class="explorer-root" id="explorer-root" style="padding:var(--s-3);overflow:auto">
+              <div style="color:var(--text-tertiary);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Loading files…</div>
+              <div class="v3-skel-card" style="margin-bottom:8px"><div class="v3-skel-bar"></div><div class="v3-skel-line med"></div><div class="v3-skel-line short"></div></div>
+              <div class="v3-skel-card" style="margin-bottom:8px"><div class="v3-skel-bar" style="width:80px"></div><div class="v3-skel-line med"></div><div class="v3-skel-line short"></div></div>
+              <div class="v3-skel-card"><div class="v3-skel-bar" style="width:50px"></div><div class="v3-skel-line short"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- V3: empty state demo (shown when no tabs) — here as an inline reference panel -->
+        <div class="mobile-pane-switch" id="mobile-pane-switch">
+          <button type="button" class="mobile-pane-btn active" data-pane="left">Terminal</button>
+          <button type="button" class="mobile-pane-btn" data-pane="right">Explorer</button>
+        </div>
+
+        <div class="chat-input-bar" id="chat-input-bar">
+          <div class="touch-toolbar" id="touch-toolbar">
+            <button class="touch-btn">Ctrl+C</button><button class="touch-btn">Clear</button><button class="touch-btn">&uarr;</button><button class="touch-btn">Tab</button><button class="touch-btn">Esc</button>
+          </div>
+          <div class="input-row">
+            <div class="input-wrap">
+              <textarea id="chat-input" class="chat-textarea" placeholder="Message claude…" rows="1" autocomplete="off" spellcheck="false"></textarea>
+            </div>
+            <button class="send-btn" id="send-btn" aria-label="Send"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- V3: empty state (also reachable) — rendered here as a floating preview card -->
+  <div class="v3-empty" id="v3-empty-preview" hidden style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:50;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:0 20px 60px rgba(0,0,0,.4);max-width:340px">
+    <svg class="v3-empty-art" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    <h3>No conversation yet</h3>
+    <p>Start by asking claude to do something — your message and the response will appear here.</p>
+    <button class="btn btn-primary" style="font-family:var(--font-sans)" id="v3-empty-start">Start a chat</button>
+  </div>
+
+  <!-- V3: toast stack -->
+  <div class="v3-toasts" id="v3-toasts">
+    <div class="v3-toast"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span>Turn complete · 12.4s<button class="x" onclick="this.parentElement.remove()">✕</button></div>
+    <div class="v3-toast info"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>Compact context: 8 turns merged<button class="x" onclick="this.parentElement.remove()">✕</button></div>
+  </div>
+
+  <script>
+    const $ = s => document.querySelector(s);
+    $('#sidebar-toggle').addEventListener('click',()=>{ if(matchMedia('(max-width:768px)').matches){$('#sidebar').classList.toggle('open');$('#sidebar-backdrop').classList.toggle('open');}else{document.body.classList.toggle('sidebar-collapsed');} });
+    $('#sidebar-backdrop').addEventListener('click',()=>{ $('#sidebar').classList.remove('open');$('#sidebar-backdrop').classList.remove('open'); });
+    $('#theme-toggle').addEventListener('click',()=>{ const c=document.documentElement.getAttribute('data-theme');document.documentElement.setAttribute('data-theme',c==='dark'?'light':'dark'); });
+    document.querySelectorAll('.mobile-pane-btn').forEach(b=>b.addEventListener('click',()=>{ document.querySelectorAll('.mobile-pane-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.body.classList.remove('mobile-pane-left','mobile-pane-right');document.body.classList.add('mobile-pane-'+b.dataset.pane); }));
+    // send micro-interaction: pop + spawn a toast
+    $('#send-btn').addEventListener('click',()=>{
+      const t=$('#chat-input'); if(!t.value.trim())return;
+      t.value=''; const b=$('#send-btn'); b.classList.add('sent'); setTimeout(()=>b.classList.remove('sent'),420);
+      const wrap=$('#v3-toasts'); const el=document.createElement('div'); el.className='v3-toast';
+      el.innerHTML='<span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span>Message sent<button class="x">✕</button>';
+      el.querySelector('.x').onclick=()=>el.remove(); wrap.appendChild(el);
+      setTimeout(()=>el.remove(),4000);
+    });
+    $('#chat-input').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('#send-btn').click();} });
+    $('#v3-empty-start').addEventListener('click',()=>{ $('#v3-empty-preview').hidden=true; $('#chat-input').focus(); });
+  </script>
+</body>
+</html>
