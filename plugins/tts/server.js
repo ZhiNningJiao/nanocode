@@ -70,6 +70,17 @@ export function register(host) {
     debounceTimer = setTimeout(flushBuffer, TTS_DEBOUNCE_MS)
   })
 
+  // Clear the debounce timer on shutdown so a pending flush doesn't fire
+  // after the server has begun closing connections.
+  host.registerLifecycle({
+    onStop() {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = null
+    },
+  })
+
+  host.reportStatus('ok', 'TTS plugin ready')
+
   // ── GPT-SoVITS proxy routes (unchanged behavior from pre-plugin Core) ───────
 
   // P3: TTS circuit breaker — fast-reject when GPT-SoVITS is known-down.

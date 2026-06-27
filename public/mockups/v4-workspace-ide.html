@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoCode UI — V4 Workspace IDE</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--fg:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--accent2:#a371f7;--ok:#3fb950;--warn:#d29922;--err:#f85149;--bd:#30363d;--add:#3fb950;--del:#f85149}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--fg);font:13px/1.5 -apple-system,sans-serif;overflow:hidden;display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--bd);background:var(--bg2)}
+  header b{font-size:13px}
+  header .sp{flex:1}
+  header .agent{font-size:12px;color:var(--muted);background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:3px 8px}
+  .body{flex:1;display:flex;min-height:0}
+  /* file tree */
+  .tree{width:240px;flex:none;border-right:1px solid var(--bd);background:var(--bg2);overflow:auto;padding:6px 0}
+  .tree .dir{font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:8px 14px 4px}
+  .ti{display:flex;align-items:center;gap:6px;padding:3px 14px;cursor:pointer;font-size:13px;color:var(--fg)}
+  .ti:hover{background:var(--bg3)}
+  .ti.active{background:rgba(47,129,247,.15);color:var(--accent)}
+  .ti .ic{font-size:13px;width:14px}
+  .ti .pend{margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--warn)}
+  .ti .pend.acc{background:var(--ok)}
+  /* center: diff + review */
+  .center{flex:1;display:flex;flex-direction:column;min-width:0}
+  .tabs{display:flex;border-bottom:1px solid var(--bd);background:var(--bg2)}
+  .tab{padding:8px 14px;font-size:12px;color:var(--muted);cursor:pointer;border-right:1px solid var(--bd);display:flex;gap:6px;align-items:center}
+  .tab.active{color:var(--fg);background:var(--bg);border-bottom:2px solid var(--accent)}
+  .tab .dot{width:8px;height:8px;border-radius:50%;background:var(--warn)}
+  .tab .dot.ok{background:var(--ok)}
+  .editor{flex:1;overflow:auto;background:var(--bg);font-family:ui-monospace,monospace;font-size:12px}
+  .eln{display:flex;min-height:18px}
+  .eln .no{color:var(--muted);width:44px;text-align:right;padding-right:12px;user-select:none;flex:none;opacity:.6}
+  .eln.add{background:rgba(63,185,80,.1)}
+  .eln.add .code{color:var(--add)}
+  .eln.del{background:rgba(248,81,73,.08)}
+  .eln.del .code{color:var(--del);text-decoration:line-through;opacity:.75}
+  .eln.ctx .code{color:var(--fg)}
+  .review{border-top:1px solid var(--bd);background:var(--bg2);padding:10px 14px;display:flex;align-items:center;gap:10px}
+  .review .info{flex:1;font-size:12px;color:var(--muted)}
+  .review .info b{color:var(--fg)}
+  .btn{border:0;border-radius:7px;padding:7px 16px;cursor:pointer;font:inherit;font-weight:600;font-size:12px}
+  .btn.accept{background:var(--ok);color:#0d1117}
+  .btn.reject{background:var(--bg3);color:var(--fg);border:1px solid var(--bd)}
+  .btn.reject:hover{border-color:var(--err);color:var(--err)}
+  .queue{font-size:11px;color:var(--muted)}
+  .queue b{color:var(--warn)}
+  /* terminal panel */
+  .term-panel{height:200px;flex:none;border-top:1px solid var(--bd);background:#000;display:flex;flex-direction:column}
+  .term-head{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--bd);background:var(--bg2)}
+  .term-head b{font-size:12px}
+  .term-head .st{flex:1}
+  .term-badge{font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(210,153,34,.2);color:var(--warn)}
+  .term-body{flex:1;overflow:auto;padding:8px 12px;font-family:ui-monospace,monospace;font-size:12px;color:var(--ok)}
+  .term-body .y{color:var(--accent2)}
+  .term-body .t{color:var(--accent)}
+  .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--bd);border-radius:8px;padding:8px 14px;font-size:12px;opacity:0;transition:.2s;z-index:60}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <b>🛠 Workspace IDE</b>
+  <span style="font-size:12px;color:var(--muted)">nanocode2 · feat/auth · team1</span>
+  <div class="sp"></div>
+  <span class="agent">🤖 Claude (Opus) · busy</span>
+</header>
+<div class="body">
+  <div class="tree">
+    <div class="dir">server</div>
+    <div class="ti"><span class="ic">📄</span>index.js</div>
+    <div class="ti"><span class="ic">📄</span>store.js</div>
+    <div class="ti active"><span class="ic">📄</span>auth/session.js <span class="pend acc"></span></div>
+    <div class="ti"><span class="ic">📄</span>router-mode.js <span class="pend"></span></div>
+    <div class="dir">terminal</div>
+    <div class="ti"><span class="ic">📄</span>routes.js</div>
+    <div class="ti"><span class="ic">📄</span>claude-tmux-driver.js</div>
+    <div class="dir">tests</div>
+    <div class="ti"><span class="ic">📄</span>session.test.js <span class="pend"></span></div>
+  </div>
+  <div class="center">
+    <div class="tabs">
+      <div class="tab active"><span class="dot ok"></span>session.js · refresh (+18 −3)</div>
+      <div class="tab"><span class="dot"></span>router-mode.js (+24 −6)</div>
+      <div class="tab"><span class="dot"></span>session.test.js (+12)</div>
+    </div>
+    <div class="editor" id="editor"></div>
+    <div class="review">
+      <div class="info">Proposed change to <b>server/auth/session.js</b> — add <code>rotateSession()</code> + cookie refresh</div>
+      <span class="queue"><b>3</b> pending diffs</span>
+      <button class="btn reject" onclick="toast('rejected — noted in transcript')">Reject</button>
+      <button class="btn accept" onclick="acceptDiff()">Accept & apply</button>
+    </div>
+  </div>
+</div>
+<div class="term-panel">
+  <div class="term-head"><b>Terminal</b> · feat/auth<span class="st"></span><span class="term-badge">BUSY</span></div>
+  <div class="term-body">
+    <div class="y">▸ implement JWT refresh + wire into router-mode</div>
+    <div class="t">↳ read server/auth/session.js (142 lines)</div>
+    <div class="t">↳ edit server/auth/session.js (+18 −3)</div>
+    <div class="t">↳ edit server/router-mode.js (+24 −6)</div>
+    <div class="t">↳ edit tests/session.test.js (+12)</div>
+    <div>streaming ▋</div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const DIFF=[
+  {n:36,c:'ctx',code:'  return persist(sess);'},
+  {n:37,c:'ctx',code:'}'},
+  {n:38,c:'ctx',code:''},
+  {n:39,c:'add',code:'function rotateSession(sess) {'},
+  {n:40,c:'add',code:'  const now = Date.now();'},
+  {n:41,c:'add',code:'  sess.expiresAt = now + SESSION_TTL_MS;'},
+  {n:42,c:'add',code:'  sess.rotatedAt = now;'},
+  {n:43,c:'add',code:'  res.cookie("nc_sess", sess.id, { ...cookieOpts, maxAge: SESSION_TTL_MS });'},
+  {n:44,c:'add',code:'  return persist(sess);'},
+  {n:45,c:'add',code:'}'},
+  {n:46,c:'ctx',code:''},
+  {n:47,c:'del',code:'// TODO: refresh endpoint — not yet implemented'},
+];
+const editor=document.getElementById('editor');
+editor.innerHTML=DIFF.map(l=>`<div class="eln ${l.c}"><span class="no">${l.n}</span><span class="code">${l.code.replace(/ /g,'&nbsp;')}</span></div>`).join('');
+let pending=3;
+function acceptDiff(){toast('✓ applied — session.js updated');pending--;document.querySelector('.queue b').textContent=pending;if(pending===0)toast('✓ all diffs applied — turn complete')}
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active')});
+document.querySelectorAll('.ti').forEach(t=>t.onclick=()=>{document.querySelectorAll('.ti').forEach(x=>x.classList.remove('active'));t.classList.add('active')});
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1800)}
+</script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoCode UI — V3 Chat-First / Canvas</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--fg:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--accent2:#a371f7;--ok:#3fb950;--warn:#d29922;--err:#f85149;--bd:#30363d;--add:#3fb950;--del:#f85149}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,sans-serif;overflow:hidden;display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:12px;padding:9px 16px;border-bottom:1px solid var(--bd);background:var(--bg2)}
+  header b{font-size:14px}
+  header .sp{flex:1}
+  .toggle{font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center}
+  .toggle kbd{background:var(--bg3);border:1px solid var(--bd);border-radius:4px;padding:1px 6px;font-family:inherit}
+  .body{flex:1;display:flex;min-height:0}
+  /* transcript */
+  .transcript{flex:1;overflow-y:auto;padding:20px 28px 8px;min-width:0}
+  .msg{margin-bottom:18px;max-width:820px}
+  .msg .who{font-size:12px;font-weight:600;margin-bottom:4px}
+  .msg .who.you{color:var(--accent2)}
+  .msg .who.bot{color:var(--accent)}
+  .bubble{background:var(--bg2);border:1px solid var(--bd);border-radius:12px;padding:12px 14px}
+  .bubble.you{background:rgba(163,113,247,.08);border-color:rgba(163,113,247,.3)}
+  .block{background:var(--bg3);border:1px solid var(--bd);border-radius:10px;margin:8px 0;overflow:hidden}
+  .block .bh{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--bd);cursor:pointer}
+  .block .bh:hover{color:var(--fg)}
+  .block .bh .ic{font-size:14px}
+  .block .bh .st{flex:1}
+  .block .bh .open{color:var(--accent);font-size:11px}
+  .diff{font-family:ui-monospace,monospace;font-size:12px;padding:6px 0}
+  .diff .add{color:var(--add);background:rgba(63,185,80,.08)}
+  .diff .del{color:var(--del);background:rgba(248,81,73,.08);text-decoration:line-through;opacity:.7}
+  .diff .ctx{color:var(--muted)}
+  .streaming{color:var(--muted)}
+  .cursor{animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:0}}
+  /* canvas */
+  .canvas{width:42%;min-width:340px;border-left:1px solid var(--bd);background:var(--bg2);display:flex;flex-direction:column}
+  .ctabs{display:flex;border-bottom:1px solid var(--bd);overflow-x:auto}
+  .ctab{padding:9px 14px;font-size:12px;color:var(--muted);cursor:pointer;border-right:1px solid var(--bd);white-space:nowrap;display:flex;gap:6px;align-items:center}
+  .ctab.active{color:var(--fg);background:var(--bg);border-bottom:2px solid var(--accent)}
+  .ctab .x{opacity:.5}
+  .ctab .x:hover{opacity:1}
+  .cview{flex:1;overflow:auto;padding:0}
+  .cview .empty{display:grid;place-items:center;height:100%;color:var(--muted);font-size:13px;text-align:center;padding:20px}
+  .cfile{font-family:ui-monospace,monospace;font-size:12px}
+  .cfile .ln{display:flex}
+  .cfile .ln .no{color:var(--muted);width:40px;text-align:right;padding-right:12px;user-select:none;flex:none}
+  .viewer-img{width:100%;display:block}
+  .viewer-meta{padding:10px 14px;border-bottom:1px solid var(--bd);font-size:12px;color:var(--muted)}
+  .viewer-meta b{color:var(--fg)}
+  /* input anchored under transcript */
+  .composer{border-top:1px solid var(--bd);padding:12px 28px;background:var(--bg)}
+  .composer .row{display:flex;gap:10px;align-items:flex-end;max-width:820px}
+  .composer textarea{flex:1;background:var(--bg2);border:1px solid var(--bd);border-radius:12px;color:var(--fg);font:inherit;padding:10px 12px;outline:0;resize:none;max-height:120px}
+  .composer textarea:focus{border-color:var(--accent)}
+  .send{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:10px 16px;cursor:pointer;font:inherit;font-weight:600}
+  .raw-toggle{font-size:11px;color:var(--muted);margin-top:6px;cursor:pointer}
+  .raw-toggle:hover{color:var(--fg)}
+  .raw-drawer{height:0;overflow:hidden;border-top:0 solid var(--bd);background:#000;transition:.2s;font-family:ui-monospace,monospace;font-size:12px;color:var(--ok);padding:0 16px}
+  .raw-drawer.open{height:120px;border-top:1px solid var(--bd);padding:10px 16px;overflow:auto}
+</style>
+</head>
+<body>
+<header>
+  <b>💬 Chat-First / Canvas</b>
+  <span style="font-size:12px;color:var(--muted)">nanocode2 · feat/auth · team1</span>
+  <div class="sp"></div>
+  <span class="toggle">raw terminal <kbd>`</kbd></span>
+</header>
+<div class="body">
+  <div class="transcript" id="transcript">
+    <div class="msg"><div class="who you">You</div><div class="bubble you">implement the JWT refresh endpoint and wire it into router-mode</div></div>
+    <div class="msg"><div class="who bot">Claude</div><div class="bubble">I'll add a POST /api/auth/refresh route and wire it into the router-mode auth middleware. Let me check the existing session module first.<div class="block" data-art="session"><div class="bh"><span class="ic">📄</span><span class="st">read server/auth/session.js</span><span>142 lines</span></div></div><div class="block" data-art="diff1"><div class="bh"><span class="ic">✏️</span><span class="st">edit server/auth/session.js</span><span class="open">+18 −3 · open diff →</span></div><div class="diff"><div class="ctx">  function rotateSession(sess) {</div><div class="add">+   const now = Date.now();</div><div class="add">+   sess.expiresAt = now + SESSION_TTL_MS;</div><div class="add">+   sess.rotatedAt = now;</div><div class="ctx">    return persist(sess);</div><div class="ctx">  }</div></div></div><div class="block" data-art="diff2"><div class="bh"><span class="ic">✏️</span><span class="st">edit server/router-mode.js</span><span class="open">+24 −6 · open diff →</span></div></div>Done. The refresh endpoint rotates the session cookie and extends expiry. Tests pass.</div></div>
+    <div class="msg"><div class="who you">You</div><div class="bubble you">show me the viewer link for the retarget output too</div></div>
+    <div class="msg"><div class="who bot">Claude</div><div class="bubble">Here's the published viewer link for the latest GLB:<div class="block" data-art="viewer"><div class="bh"><span class="ic">🌐</span><span class="st">viewer · case12 bind+retarget</span><span class="open">open in canvas →</span></div></div></div></div>
+    <div class="msg"><div class="who bot">Claude</div><div class="bubble streaming">Looking at router-mode.js to add the refresh route…<span class="cursor">▋</span></div></div>
+  </div>
+
+  <div class="canvas">
+    <div class="ctabs" id="ctabs"></div>
+    <div class="cview" id="cview"><div class="empty">Click an artifact block<br>(📄 ✏️ 🌐) in the transcript<br>to open it here</div></div>
+  </div>
+</div>
+<div class="raw-drawer" id="raw">$ claude --resume ses_01HX…<br>  [streaming] result: text<br>  ✓ turn complete</div>
+<div class="composer">
+  <div class="row"><textarea id="msg" rows="1" placeholder="Send a message…"></textarea><button class="send" onclick="toast('sent')">Send</button></div>
+  <div class="raw-toggle" onclick="document.getElementById('raw').classList.toggle('open')">▾ raw terminal (xterm)</div>
+</div>
+<div class="toast" id="toast" style="position:fixed;bottom:64px;right:24px;background:var(--bg3);border:1px solid var(--bd);border-radius:8px;padding:8px 12px;font-size:12px;opacity:0;transition:.2s;z-index:60"></div>
+
+<script>
+const ARTS={
+  diff1:{title:'session.js (+18 −3)',type:'file',body:`<div class="viewer-meta">server/auth/session.js · +18 −3</div><div class="cfile"><div class="ln"><span class="no">38</span><span class="ctx">function rotateSession(sess) {</span></div><div class="ln"><span class="no">39</span><span class="add">  const now = Date.now();</span></div><div class="ln"><span class="no">40</span><span class="add">  sess.expiresAt = now + SESSION_TTL_MS;</span></div><div class="ln"><span class="no">41</span><span class="add">  sess.rotatedAt = now;</span></div><div class="ln"><span class="no">42</span><span class="add">  res.cookie('nc_sess', sess.id, {..., maxAge: SESSION_TTL_MS});</span></div><div class="ln"><span class="no">43</span><span class="ctx">  return persist(sess);</span></div><div class="ln"><span class="no">44</span><span class="ctx">}</span></div>`},
+  diff2:{title:'router-mode.js (+24 −6)',type:'file',body:`<div class="viewer-meta">server/router-mode.js · +24 −6</div><div class="cfile"><div class="ln"><span class="no">88</span><span class="add">app.post('/api/auth/refresh', authMid, (req,res) => {</span></div><div class="ln"><span class="no">89</span><span class="add">  const sess = rotateSession(req.session);</span></div><div class="ln"><span class="no">90</span><span class="add">  res.json({ ok: true, expiresAt: sess.expiresAt });</span></div><div class="ln"><span class="no">91</span><span class="add">});</span></div>`},
+  session:{title:'session.js (read)',type:'file',body:`<div class="viewer-meta">server/auth/session.js · 142 lines · read-only</div><div class="cfile"><div class="ln"><span class="no">1</span><span class="ctx">import { randomUUID } from 'node:crypto'</span></div><div class="ln"><span class="no">2</span><span class="ctx">const SESSION_TTL_MS = 1000*60*60*24*7</span></div><div class="ln"><span class="no">3</span><span class="ctx">function createSession(){ … }</span></div>`},
+  viewer:{title:'case12.glb',type:'viewer',body:`<div class="viewer-meta"><b>case12 bind+retarget</b> · http://localhost:8770/g/c864c5b0</div><div style="padding:20px;text-align:center;color:var(--muted)">🌐 3D viewer placeholder<br>(GLB render would appear here)</div>`},
+};
+const ctabs=document.getElementById('ctabs'),cview=document.getElementById('cview');
+let openArts=[];
+function openArt(id){if(!ARTS[id])return;if(!openArts.includes(id))openArts.push(id);renderTabs(id);renderView(id)}
+function closeArt(id,e){e.stopPropagation();openArts=openArts.filter(a=>a!==id);if(openArts.length)renderTabs(openArts[openArts.length-1]);else{renderTabs(null);cview.innerHTML='<div class="empty">No artifacts open</div>'}}
+function renderTabs(active){ctabs.innerHTML='';if(!openArts.length){ctabs.style.display='none';return}ctabs.style.display='flex';openArts.forEach(id=>{const a=ARTS[id];const t=document.createElement('div');t.className='ctab'+(id===active?' active':'');t.innerHTML=`<span>${a.type==='viewer'?'🌐':a.type==='file'?'📄':'✏️'}</span>${a.title}<span class="x">✕</span>`;t.onclick=()=>renderView(id);t.querySelector('.x').onclick=(e)=>closeArt(id,e);ctabs.appendChild(t)})}
+function renderView(id){const a=ARTS[id];renderTabs(id);cview.innerHTML=a.body}
+document.querySelectorAll('.block').forEach(b=>{b.style.cursor='pointer';b.querySelector('.bh').onclick=()=>openArt(b.dataset.art)});
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1500)}
+document.getElementById('msg').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();toast('sent')}});
+document.addEventListener('keydown',e=>{if(e.key==='`'){e.preventDefault();document.getElementById('raw').classList.toggle('open')}});
+</script>
+</body>
+</html>

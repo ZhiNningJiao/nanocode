@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoCode UI — V1 Focus Mode</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--fg:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--accent2:#a371f7;--ok:#3fb950;--warn:#d29922;--err:#f85149;--bd:#30363d}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden}
+  /* Focus mode: terminal owns the screen. No persistent sidebar/tabs. */
+  .stage{display:flex;flex-direction:column;height:100vh;width:100vw}
+  .pill{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:30;display:flex;gap:8px;align-items:center;
+    background:var(--bg2);border:1px solid var(--bd);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--muted);
+    box-shadow:0 1px 8px rgba(0,0,0,.4)}
+  .pill b{color:var(--fg)}
+  .pill .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+  .pill .dot.busy{background:var(--warn);animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.4}}
+  .term{flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:48px 32px 0;overflow:hidden}
+  .scroll{flex:1;overflow-y:auto;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;color:var(--muted)}
+  .scroll .you{color:var(--accent2)}
+  .scroll .bot{color:var(--fg)}
+  .scroll .tool{color:var(--accent)}
+  .input-dock{position:sticky;bottom:0;background:linear-gradient(var(--bg),transparent 60%);padding:16px 32px 20px}
+  .input{display:flex;gap:10px;align-items:flex-end;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:10px 12px}
+  .input textarea{flex:1;background:transparent;border:0;outline:0;color:var(--fg);font:inherit;resize:none;max-height:140px}
+  .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:8px}
+  .hint kbd{background:var(--bg3);border:1px solid var(--bd);border-radius:5px;padding:1px 6px;font-family:inherit}
+  /* Switcher overlay */
+  .overlay{position:fixed;inset:0;background:rgba(1,4,9,.7);backdrop-filter:blur(4px);display:none;align-items:flex-start;justify-content:center;padding-top:18vh;z-index:50}
+  .overlay.show{display:flex}
+  .switcher{width:min(560px,92vw);background:var(--bg2);border:1px solid var(--bd);border-radius:16px;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.6)}
+  .switcher input{width:100%;background:transparent;border:0;outline:0;color:var(--fg);font:inherit;font-size:16px;padding:16px 18px;border-bottom:1px solid var(--bd)}
+  .switcher .list{max-height:52vh;overflow:auto}
+  .row{display:flex;align-items:center;gap:12px;padding:11px 18px;cursor:pointer}
+  .row:hover,.row.sel{background:var(--bg3)}
+  .row .ic{width:28px;height:28px;border-radius:8px;background:var(--bg3);display:grid;place-items:center;font-size:14px;flex:none}
+  .row .t{flex:1}
+  .row .t b{display:block;font-weight:600}
+  .row .t small{color:var(--muted)}
+  .row .tag{font-size:11px;color:var(--muted);background:var(--bg);border:1px solid var(--bd);border-radius:6px;padding:2px 7px}
+  .foot{display:flex;justify-content:space-between;padding:10px 18px;border-top:1px solid var(--bd);font-size:11px;color:var(--muted)}
+  .foot kbd{background:var(--bg3);border:1px solid var(--bd);border-radius:4px;padding:0 5px}
+  .toast{position:fixed;bottom:24px;right:24px;background:var(--bg3);border:1px solid var(--bd);border-radius:10px;padding:10px 14px;font-size:13px;opacity:0;transition:.2s;z-index:60}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="pill" id="pill"><span class="dot busy" id="dot"></span><b>nanocode2</b> · tab <b>feat/auth</b> · <span id="team">team1</span></div>
+  <div class="term">
+    <div class="scroll" id="scroll">
+      <div class="you">▸ implement the JWT refresh endpoint</div>
+      <div class="bot">I'll add a POST /api/auth/refresh route. Let me check the existing session module first.</div>
+      <div class="tool">↳ read server/auth/session.js (142 lines)</div>
+      <div class="tool">↳ edit server/auth/session.js (+18 -3)</div>
+      <div class="bot">Done. The refresh endpoint rotates the session cookie and extends expiry. Tests pass.</div>
+      <div class="you">▸ now wire it into router-mode</div>
+      <div class="bot" id="streaming">Looking at router-mode.js…<span class="cursor">▋</span></div>
+    </div>
+    <div class="input-dock">
+      <div class="input"><textarea id="msg" rows="1" placeholder="Send a message  (agent is thinking…)"></textarea></div>
+      <div class="hint">Press <kbd>⌘K</kbd> to switch project / tab / agent · <kbd>Esc</kbd> to interrupt</div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="ov">
+  <div class="switcher">
+    <input id="q" placeholder="Switch to…  (project, tab, agent, plugin, setting)" autocomplete="off">
+    <div class="list" id="list"></div>
+    <div class="foot"><span><kbd>↑↓</kbd> navigate · <kbd>↵</kbd> select</span><span><kbd>Esc</kbd> dismiss</span></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const ITEMS=[
+  {ic:'📂',t:'nanocode2',s:'project',tag:'active'},
+  {ic:'📂',t:'qatool',s:'project'},
+  {ic:'🗂',t:'feat/auth',s:'tab · busy',tag:'team1'},
+  {ic:'🗂',t:'monitor-panel',s:'tab'},
+  {ic:'🤖',t:'Claude (Opus)',s:'agent · recent',tag:'team1'},
+  {ic:'🤖',t:'Codex',s:'agent'},
+  {ic:'🔌',t:'tts',s:'plugin · on'},
+  {ic:'🔌',t:'monitor',s:'plugin · on'},
+  {ic:'🔌',t:'fleet-term',s:'plugin · off'},
+  {ic:'⚙',t:'Settings',s:'open settings modal'},
+];
+const list=document.getElementById('list'),q=document.getElementById('q'),ov=document.getElementById('ov'),pill=document.getElementById('pill');
+let sel=0,filtered=ITEMS;
+function render(){list.innerHTML='';filtered.forEach((it,i)=>{const d=document.createElement('div');d.className='row'+(i===sel?' sel':'');d.innerHTML=`<div class="ic">${it.ic}</div><div class="t"><b>${it.t}</b><small>${it.s||''}</small></div>${it.tag?`<span class="tag">${it.tag}</span>`:''}`;d.onmousemove=()=>{sel=i;paint()};d.onclick=()=>pick(i);list.appendChild(d)});paint()}
+function paint(){[...list.children].forEach((c,i)=>c.classList.toggle('sel',i===sel))}
+function filter(){filtered=ITEMS.filter(it=>(it.t+' '+(it.s||'')).toLowerCase().includes(q.value.toLowerCase()));sel=0;render()}
+function open(){ov.classList.add('show');q.value='';filter();setTimeout(()=>q.focus(),30)}
+function close(){ov.classList.remove('show')}
+function pick(i){const it=filtered[i]||filtered[0];if(!it)return;close();toast(`→ ${it.t}`)}
+q.oninput=filter;
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();open();return}
+  if(ov.classList.contains('show')){
+    if(e.key==='Escape'){close();}
+    else if(e.key==='ArrowDown'){e.preventDefault();sel=(sel+1)%filtered.length;render()}
+    else if(e.key==='ArrowUp'){e.preventDefault();sel=(sel-1+filtered.length)%filtered.length;render()}
+    else if(e.key==='Enter'){e.preventDefault();pick(sel)}
+  } else if(e.key==='Escape'){toast('⏹ interrupt sent (soft — press again to force)')}
+});
+let busy=true;
+document.getElementById('msg').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();toast('queued — agent is busy, will flush when idle')}});
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2200)}
+render();
+</script>
+</body>
+</html>

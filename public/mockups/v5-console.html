@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoCode UI — V5 Command Console</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--fg:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--accent2:#a371f7;--ok:#3fb950;--warn:#d29922;--err:#f85149;--bd:#30363d}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,sans-serif;overflow:hidden;display:flex;flex-direction:column}
+  /* command bar always present at top */
+  .bar{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--bd);background:var(--bg2)}
+  .mode{font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;letter-spacing:.5px}
+  .mode.normal{background:rgba(47,129,247,.18);color:var(--accent)}
+  .mode.insert{background:rgba(163,113,247,.18);color:var(--accent2)}
+  .prompt{color:var(--accent);font-family:ui-monospace,monospace;font-weight:700}
+  .bar input{flex:1;background:transparent;border:0;outline:0;color:var(--fg);font:inherit;font-family:ui-monospace,monospace}
+  .bar .exec{color:var(--muted);font-size:12px}
+  /* status line */
+  .status{display:flex;align-items:center;gap:14px;padding:5px 16px;border-bottom:1px solid var(--bd);background:var(--bg2);font-size:12px;color:var(--muted)}
+  .status b{color:var(--fg)}
+  .status .sp{flex:1}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
+  .dot.busy{background:var(--warn);animation:pulse 1.2s infinite}
+  .dot.idle{background:var(--ok)}
+  @keyframes pulse{50%{opacity:.4}}
+  /* transient output pane */
+  .pane{flex:1;overflow:auto;padding:16px 20px;font-family:ui-monospace,monospace;font-size:13px;display:flex;flex-direction:column}
+  .pane.collapsed{height:0;padding:0;overflow:hidden;flex:0}
+  .out{margin-bottom:6px}
+  .out .y{color:var(--accent2)}
+  .out .b{color:var(--fg)}
+  .out .t{color:var(--accent)}
+  .out .ok{color:var(--ok)}
+  .out .err{color:var(--err)}
+  .cursor{animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:0}}
+  /* command suggestions dropdown */
+  .suggest{border-top:1px solid var(--bd);background:var(--bg2);max-height:200px;overflow:auto}
+  .sg{display:flex;align-items:center;gap:10px;padding:7px 20px;cursor:pointer;font-size:13px}
+  .sg.sel{background:var(--bg3)}
+  .sg .cmd{color:var(--accent);font-family:ui-monospace,monospace;font-weight:600;flex:none;width:180px}
+  .sg .desc{color:var(--muted)}
+  .sg .key{margin-left:auto;font-size:11px;color:var(--muted);background:var(--bg3);border:1px solid var(--bd);border-radius:4px;padding:1px 6px}
+  .help{position:fixed;bottom:14px;right:16px;font-size:11px;color:var(--muted);text-align:right;line-height:1.7}
+  .help kbd{background:var(--bg3);border:1px solid var(--bd);border-radius:4px;padding:1px 6px;font-family:ui-monospace,monospace}
+  .toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--bd);border-radius:8px;padding:8px 14px;font-size:12px;opacity:0;transition:.2s;z-index:60}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="mode normal" id="mode">NORMAL</span>
+  <span class="prompt">❯</span>
+  <input id="cmd" autocomplete="off" spellcheck="false" placeholder="type a command, or press i to insert a message…">
+  <span class="exec" id="exec"></span>
+</div>
+<div class="status">
+  <span><span class="dot busy" id="dot"></span><b>feat/auth</b></span>
+  <span>agent: <b>Claude Opus</b></span>
+  <span>team: <b>team1</b></span>
+  <span>tab 1/3</span>
+  <div class="sp"></div>
+  <span id="queue">queue: 0</span>
+</div>
+<div class="pane" id="pane">
+  <div class="out"><span class="y">▸ implement JWT refresh + wire into router-mode</span></div>
+  <div class="out"><span class="t">↳ read server/auth/session.js (142 lines)</span></div>
+  <div class="out"><span class="t">↳ edit session.js (+18 −3) · edit router-mode.js (+24 −6)</span></div>
+  <div class="out"><span class="b">Done. Refresh endpoint rotates cookie + extends expiry. Tests pass.</span></div>
+  <div class="out"><span class="ok">✓ turn complete · 196 tests pass</span></div>
+  <div class="out"><span class="b">streaming ▋</span></div>
+</div>
+<div class="suggest" id="suggest" style="display:none"></div>
+<div class="help">
+  <kbd>i</kbd> insert message &nbsp; <kbd>Esc</kbd> normal &nbsp; <kbd>↵</kbd> run<br>
+  <kbd>↑↓</kbd> navigate &nbsp; <kbd>?</kbd> all commands &nbsp; <kbd>Tab</kbd> complete
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const CMDS=[
+  {c:'project <name>',d:'switch project',k:'p'},
+  {c:'tab new',d:'open a new terminal tab',k:'t'},
+  {c:'tab <n>',d:'switch to tab N',k:'t'},
+  {c:'agent claude',d:'start/switch to Claude agent',k:'a'},
+  {c:'agent codex',d:'start/switch to Codex agent',k:'a'},
+  {c:'send <msg>',d:'send message to active agent',k:'s'},
+  {c:'interrupt',d:'soft-interrupt active turn',k:'Esc'},
+  {c:'force',d:'force-stop active turn',k:'Esc Esc'},
+  {c:'background',d:'release UI, keep turn running',k:'b'},
+  {c:'plugin toggle <name>',d:'enable/disable a plugin',k:''},
+  {c:'plugin status',d:'show plugin health',k:''},
+  {c:'team switch <t>',d:'switch active claude team',k:''},
+  {c:'settings',d:'open settings modal',k:''},
+  {c:'lane new',d:'create a parallel lane',k:''},
+  {c:'raw',d:'toggle raw xterm pane',k:'`'},
+  {c:'help',d:'show all commands',k:'?'},
+];
+const cmd=document.getElementById('cmd'),mode=document.getElementById('mode'),pane=document.getElementById('pane'),suggest=document.getElementById('suggest'),dot=document.getElementById('dot'),queue=document.getElementById('queue');
+let insertMode=false,sel=0,filtered=CMDS;
+function paint(){[...suggest.children].forEach((c,i)=>c.classList.toggle('sel',i===sel))}
+function filter(){const v=cmd.value.trim().toLowerCase();filtered=CMDS.filter(c=>c.c.includes(v)||c.d.toLowerCase().includes(v));sel=0;render()}
+function render(){if(!filtered.length){suggest.style.display='none';return}suggest.style.display='block';suggest.innerHTML=filtered.map((c,i)=>`<div class="sg${i===sel?' sel':''}"><span class="cmd">${c.c}</span><span class="desc">${c.d}</span>${c.k?`<span class="key">${c.k}</span>`:''}</div>`).join('');paint()}
+function enterInsert(){insertMode=true;mode.textContent='INSERT';mode.className='mode insert';cmd.placeholder='message to feat/auth (Claude Opus)…';cmd.value='';suggest.style.display='none';document.getElementById('exec').textContent=''}
+function exitInsert(){insertMode=false;mode.textContent='NORMAL';mode.className='mode normal';cmd.placeholder='type a command, or press i to insert a message…';cmd.value='';filter();cmd.focus()}
+function run(){const v=cmd.value.trim();if(!v)return;if(insertMode){pushOut(`<span class="y">▸ ${v}</span>`);toast('sent to feat/auth');cmd.value='';return}pushOut(`<span class="t">❯ ${v}</span>`);toast('executed: '+v);if(v.startsWith('interrupt'))toast('⏹ soft interrupt (press again to force)');cmd.value='';filter()}
+function pushOut(html){const d=document.createElement('div');d.className='out';d.innerHTML=html;pane.appendChild(d);pane.scrollTop=pane.scrollHeight}
+cmd.oninput=()=>{if(!insertMode)filter()};
+suggest.addEventListener('mousemove',e=>{const s=e.target.closest('.sg');if(s){sel=[...suggest.children].indexOf(s);paint()}});
+suggest.addEventListener('click',e=>{const s=e.target.closest('.sg');if(s){sel=[...suggest.children].indexOf(s);cmd.value=filtered[sel].c;cmd.focus();filter()}});
+cmd.addEventListener('keydown',e=>{
+  if(insertMode){
+    if(e.key==='Escape'){e.preventDefault();exitInsert()}
+    else if(e.key==='Enter'){e.preventDefault();run()}
+    else if(e.key==='Tab'){e.preventDefault();toast('queued — agent busy');queue.textContent='queue: 1'}
+    return;
+  }
+  if(e.key==='i'&&!cmd.value){e.preventDefault();enterInsert();return}
+  if(e.key==='Enter'){e.preventDefault();run();return}
+  if(e.key==='ArrowDown'){e.preventDefault();sel=(sel+1)%filtered.length;render()}
+  else if(e.key==='ArrowUp'){e.preventDefault();sel=(sel-1+filtered.length)%filtered.length;render()}
+  else if(e.key==='Tab'&&filtered[sel]){e.preventDefault();cmd.value=filtered[sel].c+' ';filter()}
+  else if(e.key==='Escape'){if(pane.classList.contains('collapsed')){pane.classList.remove('collapsed')}else{toast('⏹ interrupt (soft)')}}
+});
+document.addEventListener('keydown',e=>{if(e.target===cmd)return;if(e.key==='i'&&!insertMode){enterInsert();cmd.focus()}else if(e.key==='Escape'&&insertMode){exitInsert()}else if(e.key==='/'&&e.target!==cmd){e.preventDefault();cmd.focus()}});
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1500)}
+filter();
+</script>
+</body>
+</html>

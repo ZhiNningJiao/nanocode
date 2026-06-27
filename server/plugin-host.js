@@ -10,9 +10,16 @@
  *   - Settings:  host.registerSetting(def) / host.getSetting(key) / host.setSetting(key, value)
  *   - Routes:    host.registerRoute(method, path, handler)
  *   - Notify:    host.broadcastNotify(payload)
+ *   - Lifecycle: host.registerLifecycle({ onStop })  — cleanup on shutdown/unload
+ *   - Status:    host.reportStatus(level, message, { detail, plugin })
  *
  * Plugins declare their client-side needs in plugin.json; Core's browser host
  * exposes matching ui.* extension points (see public/js/plugin-host.js).
+ *
+ * Shutdown: Core calls host.shutdownPlugins() on SIGINT/SIGTERM (and future
+ * hot-unload). onStop handlers run in reverse load order; each is awaited and
+ * errors are collected without aborting the rest. Mirrors VS Code's
+ * Disposable/subscriptions contract and Fastify's onClose hook.
  */
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
@@ -45,6 +52,22 @@ export function createPluginHost({ app, store, broadcastNotify }) {
 
   /** @type {Map<string, function>} WebSocket handlers registered by plugins. */
   const wsHandlers = new Map()
+
+  /**
+   * Lifecycle cleanup handlers, in registration order. Each entry is
+   * { plugin, onStop }. shutdownPlugins() runs them in REVERSE order so the
+   * last-loaded plugin tears down first (mirrors stack/RAII unwinding and
+   * Fastify onClose registration order).
+   */
+  const lifecycle = []
+
+  /**
+   * Latest reported status per plugin: { level, message, detail, time }.
+   * level is one of 'ok' | 'warn' | 'error' | 'info'.
+   */
+  const status = new Map()
+
+  let currentPlugin = null
 
   function getSetting(key) {
     return store.getSetting(key)
@@ -111,19 +134,70 @@ export function createPluginHost({ app, store, broadcastNotify }) {
     return null
   }
 
+  /**
+   * Register a lifecycle hook for the plugin currently being loaded (or, if
+   * called outside load, the most recently loaded plugin). Currently only
+   * onStop is supported: an async or sync function called with no args during
+   * shutdownPlugins(). Returning a rejected promise / throwing is caught and
+   * logged but does not abort the shutdown of remaining plugins.
+   *
+   * This is the server-side Disposable equivalent: plugins should clear
+   * timers, close PTYs/sockets, and release file handles here.
+   */
+  function registerLifecycle({ onStop } = {}) {
+    const plugin = currentPlugin || host._currentPlugin || '<anonymous>'
+    if (typeof onStop !== 'function') {
+      console.warn(`[plugin-host] ${plugin}: registerLifecycle called without onStop`)
+      return
+    }
+    lifecycle.push({ plugin, onStop })
+  }
+
+  /**
+   * Report plugin health. Core surfaces this to the UI so operators can see
+   * whether a loaded plugin is healthy, degraded, or failing without grepping
+   * server logs. The latest report per plugin wins.
+   *
+   * @param {'ok'|'warn'|'error'|'info'} level
+   * @param {string} message
+   * @param {object} [extra]  { detail, plugin }  plugin defaults to currentPlugin
+   */
+  function reportStatus(level, message, extra = {}) {
+    const valid = ['ok', 'warn', 'error', 'info']
+    const lvl = valid.includes(level) ? level : 'info'
+    const plugin = extra.plugin || currentPlugin || host._currentPlugin || '<anonymous>'
+    status.set(plugin, {
+      level: lvl,
+      message: String(message),
+      detail: extra.detail != null ? extra.detail : null,
+      time: Date.now(),
+    })
+    // Emit so live UIs (health panel) can refresh without polling.
+    emitter.emit('plugin:status', { plugin, level: lvl, message, detail: extra.detail })
+  }
+
+  function getStatus() {
+    return Array.from(status.entries()).map(([plugin, s]) => ({ plugin, ...s }))
+  }
+
   const host = {
     on,
     emit,
     registerSetting,
     registerRoute,
     registerWebSocket,
+    registerLifecycle,
+    reportStatus,
     getSetting,
     setSetting,
     broadcastNotify,
     getAllSettingDefs: () => Array.from(settingDefs.values()),
     getWebSocketHandler,
+    getStatus,
     _loaded: loaded,
     _wsHandlers: wsHandlers,
+    _lifecycle: lifecycle,
+    _status: status,
   }
 
   return host
@@ -151,6 +225,9 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
     .filter((d) => d.isDirectory())
     .map((d) => d.name)
 
+  // First pass: read manifests + resolve enabled state, so dependency
+  // ordering can be validated before any plugin is imported.
+  const candidates = []
   for (const name of names) {
     const manifestPath = join(pluginsDir, name, 'plugin.json')
     const serverPath = join(pluginsDir, name, 'server.js')
@@ -176,8 +253,32 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
       console.log(`[plugin-host] plugin ${name} (${manifest.version || '?'}) disabled`)
       continue
     }
+    candidates.push({ name, manifest, serverPath })
+  }
 
+  // Dependency validation: a plugin may declare `dependencies` (array of
+  // plugin names) in its manifest. If a dependency is not in the enabled
+  // candidate set (disabled or missing), the dependent plugin is skipped with
+  // a warning rather than crashing at import time. Matches Fastify/VS Code
+  // soft-fail behavior for missing deps.
+  const enabledNames = new Set(candidates.map((c) => c.name))
+  const skipDeps = new Set()
+  for (const { name, manifest } of candidates) {
+    const deps = manifest.dependencies
+    if (!Array.isArray(deps) || deps.length === 0) continue
+    const missing = deps.filter((d) => !enabledNames.has(d))
+    if (missing.length > 0) {
+      console.warn(
+        `[plugin-host] ${name} skipped: missing dependency ${missing.join(', ')}`,
+      )
+      skipDeps.add(name)
+    }
+  }
+  const loadList = candidates.filter((c) => !skipDeps.has(c.name))
+
+  for (const { name, manifest, serverPath } of loadList) {
     try {
+      host._currentPlugin = name
       const mod = await import(serverPath)
       if (typeof mod.register === 'function') {
         await mod.register(host)
@@ -188,10 +289,43 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
       }
     } catch (err) {
       console.warn(`[plugin-host] failed to load ${name}:`, err?.message)
+      host.reportStatus?.('error', `failed to load: ${err?.message || err}`, { plugin: name })
+    } finally {
+      host._currentPlugin = null
     }
   }
 
   return Array.from(host._loaded)
+}
+
+/**
+ * Run every registered onStop lifecycle hook, in REVERSE registration order
+ * (last-loaded plugin tears down first). Each hook is awaited individually;
+ * if one rejects, the error is logged but shutdown continues so a single
+ * misbehaving plugin cannot block process exit or leak the others' resources.
+ *
+ * Also emits a 'shutdown' event on the host bus before tearing down, so legacy
+ * plugins that listen for it (rather than registerLifecycle) still get a
+ * chance to clean up. Returns the list of plugins that errored.
+ *
+ * @param {object} host
+ * @returns {Promise<string[]>} names of plugins whose onStop threw
+ */
+export async function shutdownPlugins(host) {
+  const errored = []
+  host.emit('shutdown')
+
+  const hooks = (host._lifecycle || []).slice().reverse()
+  for (const { plugin, onStop } of hooks) {
+    try {
+      await onStop()
+    } catch (err) {
+      errored.push(plugin)
+      console.warn(`[plugin-host] ${plugin} onStop error:`, err?.message || err)
+    }
+  }
+  host._lifecycle.length = 0
+  return errored
 }
 
 /**
