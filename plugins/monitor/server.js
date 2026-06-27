@@ -742,4 +742,9 @@ export function register(host) {
   activeTimers.push(setInterval(refreshLocal, LOCAL_POLL_MS))
 
   console.log(`[monitor] watching ${lanes.length} lanes + ${TEAMS.length} teams`)
+
+  // Wire the existing module-level stop() into the lifecycle API so the
+  // plugin host can clear timers and close the fs watcher on shutdown.
+  host.registerLifecycle({ onStop: stop })
+  host.reportStatus('ok', `monitoring ${lanes.length} lanes + ${TEAMS.length} teams`)
 }

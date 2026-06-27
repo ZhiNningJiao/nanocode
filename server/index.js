@@ -15,7 +15,7 @@ import { createTerminalRoutes } from '../terminal/routes.js'
 import { createFileRoutes } from '../terminal/files.js'
 import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete } from './qa-watcher.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
-import { createPluginHost, loadPlugins, discoverPlugins } from './plugin-host.js'
+import { createPluginHost, loadPlugins, discoverPlugins, shutdownPlugins } from './plugin-host.js'
 import { registerTeamRoutes, handleTeamLoginWs, isTeamLoginRequest } from './team-manager.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
@@ -245,6 +245,12 @@ app.post('/api/plugins/toggle', (req, res) => {
   const key = `plugin_${name}_enabled`
   store.setSetting(key, !!enabled)
   res.json({ ok: true, name, enabled: !!enabled, needsReload: true })
+})
+
+// Plugin health/status — surfaces reportStatus() calls from loaded plugins so
+// the UI can show whether each plugin is healthy, degraded, or failing.
+app.get('/api/plugins/status', (_req, res) => {
+  res.json({ statuses: pluginHost.getStatus() })
 })
 
 // ─── Dual-team management (MES-13273) ──────────────────────────────────────
@@ -570,5 +576,30 @@ app.use((err, req, res, _next) => {
 server.listen(PORT, HOST, () => {
   console.log(`Nanocode running on http://${HOST}:${PORT}`)
 })
+
+// ── Graceful shutdown ────────────────────────────────────────────────────────
+// On SIGINT/SIGTERM, give every plugin a chance to clean up (clear timers,
+// close PTYs/sockets, flush buffers) via its registered onStop lifecycle hook
+// BEFORE closing the HTTP server. Without this, plugins like monitor (which
+// owns a subprocess) and tts (debounce timer) would leak resources on every
+// Ctrl-C. shutdownPlugins() runs onStop hooks in reverse load order and
+// never throws — one failing hook cannot block the rest.
+let shuttingDown = false
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`\n[shutdown] ${signal} received, stopping plugins…`)
+  try {
+    const errored = await shutdownPlugins(pluginHost)
+    if (errored.length) console.warn(`[shutdown] plugins errored on stop: ${errored.join(', ')}`)
+  } catch (err) {
+    console.warn('[shutdown] shutdownPlugins error:', err?.message || err)
+  }
+  server.close(() => process.exit(0))
+  // Hard exit after 5s if server.close hangs (lingering keep-alive conns).
+  setTimeout(() => process.exit(1), 5000).unref()
+}
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
 
 } // end startSingleUserMode

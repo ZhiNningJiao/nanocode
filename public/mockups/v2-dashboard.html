@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoCode UI — V2 Multi-Lane Dashboard</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--fg:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--ok:#3fb950;--warn:#d29922;--err:#f85149;--bd:#30363d}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,sans-serif;overflow:hidden}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--bd);background:var(--bg2)}
+  header h1{font-size:14px;font-weight:600}
+  header .sp{flex:1}
+  header .team{font-size:12px;color:var(--muted)}
+  .add{background:var(--bg3);border:1px dashed var(--bd);color:var(--muted);border-radius:8px;padding:5px 12px;cursor:pointer;font:inherit}
+  .add:hover{color:var(--accent);border-color:var(--accent)}
+  /* mosaic */
+  .mosaic{display:grid;grid-template-columns:repeat(3,1fr);grid-auto-rows:1fr;gap:10px;padding:10px;height:calc(100vh - 47px)}
+  .lane{background:var(--bg2);border:1px solid var(--bd);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;cursor:pointer;transition:.18s;min-height:0}
+  .lane:hover{border-color:var(--accent)}
+  .lane.expanded{grid-column:1/-1;grid-row:1/-1;cursor:default}
+  .lane-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--bd);background:var(--bg3)}
+  .lane-head b{font-size:13px}
+  .lane-head .st{flex:1}
+  .badge{font-size:10px;padding:2px 6px;border-radius:5px;font-weight:600;letter-spacing:.3px}
+  .b-busy{background:rgba(210,153,34,.2);color:var(--warn)}
+  .b-bg{background:rgba(163,113,247,.18);color:var(--accent2)}
+  .b-idle{background:rgba(139,148,158,.15);color:var(--muted)}
+  .b-err{background:rgba(248,81,73,.18);color:var(--err)}
+  .b-ok{background:rgba(63,185,80,.18);color:var(--ok)}
+  .team-tag{font-size:10px;color:var(--muted);border:1px solid var(--bd);border-radius:5px;padding:1px 5px}
+  .lane-body{flex:1;overflow:auto;padding:10px 12px;font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);line-height:1.45}
+  .lane-body .last{color:var(--fg)}
+  .lane-foot{padding:6px 12px;border-top:1px solid var(--bd);font-size:11px;color:var(--muted);display:flex;justify-content:space-between}
+  .rail{display:none}
+  .lane.expanded .rail{display:flex;flex-direction:column;gap:6px;padding:10px;border-left:1px solid var(--bd);width:200px;flex:none;overflow:auto}
+  .rail .mini{background:var(--bg3);border-radius:8px;padding:6px 8px;font-size:11px;cursor:pointer;border:1px solid transparent}
+  .rail .mini:hover{border-color:var(--accent)}
+  .rail .mini b{display:block;font-size:12px}
+  .expanded-layout{flex:1;display:flex;min-height:0}
+  .expanded-main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .expanded-input{padding:10px 12px;border-top:1px solid var(--bd);display:flex;gap:8px}
+  .expanded-input input{flex:1;background:var(--bg3);border:1px solid var(--bd);border-radius:8px;color:var(--fg);font:inherit;padding:8px 10px;outline:0}
+  .btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;cursor:pointer;font:inherit}
+  .btn.ghost{background:var(--bg3);color:var(--fg)}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--bd);border-radius:10px;padding:10px 16px;font-size:13px;opacity:0;transition:.2s;z-index:60}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>📡 Multi-Lane Dashboard</h1>
+  <span class="team" id="health">all lanes healthy</span>
+  <div class="sp"></div>
+  <span class="team">team1 · team2</span>
+  <button class="add" onclick="toast('New lane → pick project')">+ Lane</button>
+</header>
+<div class="mosaic" id="grid"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const LANES=[
+  {id:1,name:'feat/auth',state:'busy',team:'team1',last:'Looking at router-mode.js…',tail:['▸ wire refresh into router-mode','↳ read server/router-mode.js','↳ edit +24 -6','streaming ▋']},
+  {id:2,name:'retarget-fix',state:'bg',team:'team2',last:'Turn running in background',tail:['▸ fix neck head chain','↳ run pytest','12 passed · 0 failed','· bg turn (released UI)']},
+  {id:3,name:'monitor',state:'idle',team:'team1',last:'idle — waiting for input',tail:['plugin panel · watching 4 lanes','last update 2s ago']},
+  {id:4,name:'case-sweep',state:'err',team:'team2',last:'failcount 3 — loop dead',tail:['▸ run 4-path sweep','↳ case 12 bind','✗ GLB missing armature','failcount 3 / threshold 3']},
+  {id:5,name:'docs',state:'ok',team:'team1',last:'PR opened · waiting review',tail:['▸ update README','↳ git commit','↳ gh pr create','PR #104 created ✓']},
+  {id:6,name:'tts-test',state:'idle',team:'team1',last:'idle',tail:['circuit closed · service up','last enqueue 4m ago']},
+];
+const grid=document.getElementById('grid');
+let expanded=null;
+function badge(s){const m={busy:['b-busy','BUSY'],bg:['b-bg','BG'],idle:['b-idle','IDLE'],err:['b-err','STUCK'],ok:['b-ok','DONE']};return m[s]||m.idle}
+function render(){
+  grid.innerHTML='';
+  LANES.forEach(l=>{
+    const [bc,bl]=badge(l.state);
+    const d=document.createElement('div');
+    d.className='lane'+(expanded===l.id?' expanded':'');
+    d.innerHTML= expanded===l.id ? expandedHTML(l) : tileHTML(l,bc,bl);
+    d.onclick=()=>{if(expanded!==l.id){expanded=l.id;render()}};
+    grid.appendChild(d);
+  });
+}
+function tileHTML(l,bc,bl){
+  return `<div class="lane-head"><b>${l.name}</b><div class="st"></div><span class="team-tag">${l.team}</span><span class="badge ${bc}">${bl}</span></div>
+    <div class="lane-body">${l.tail.map((t,i)=>`<div${i===l.tail.length-1?' class="last"':''}>${t}</div>`).join('')}</div>
+    <div class="lane-foot"><span>${l.last}</span><span>click to expand</span></div>`;
+}
+function expandedHTML(l){
+  const [bc,bl]=badge(l.state);
+  return `<div class="lane-head"><b>${l.name}</b><div class="st"></div><span class="team-tag">${l.team}</span><span class="badge ${bc}">${bl}</span><button class="add" onclick="event.stopPropagation();expanded=null;render()">⤢ collapse</button></div>
+    <div class="expanded-layout">
+      <div class="expanded-main">
+        <div class="lane-body" style="font-size:13px">${l.tail.map((t,i)=>`<div${i===l.tail.length-1?' class="last"':''}>${t}</div>`).join('')}</div>
+        <div class="expanded-input"><input placeholder="Send to ${l.name}…" onkeydown="if(event.key==='Enter')toast('sent to ${l.name}')"><button class="btn ghost" onclick="toast('⏹ interrupt (soft)')">Stop</button><button class="btn" onclick="toast('sent')">Send</button></div>
+      </div>
+      <div class="rail">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">OTHER LANES</div>
+        ${LANES.filter(x=>x.id!==l.id).map(x=>{const[c2,l2]=badge(x.state);return `<div class="mini" onclick="event.stopPropagation();expanded=${x.id};render()"><b>${x.name}</b><span class="badge ${c2}" style="font-size:9px">${l2}</span> · ${x.team}</div>`}).join('')}
+      </div>
+    </div>`;
+}
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1800)}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&expanded){expanded=null;render()}});
+render();
+</script>
+</body>
+</html>

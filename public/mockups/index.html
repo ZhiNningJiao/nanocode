@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoCode UI Mockups</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--fg:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--bd:#30363d}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,sans-serif;padding:40px 20px}
+  h1{font-size:22px;margin-bottom:6px}
+  p.sub{color:var(--muted);margin-bottom:28px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;max-width:1000px}
+  a.card{display:block;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:18px;text-decoration:none;color:var(--fg);transition:.15s}
+  a.card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .card .n{font-size:12px;color:var(--accent);font-weight:700;letter-spacing:.5px}
+  .card .t{font-size:17px;font-weight:600;margin:4px 0}
+  .card .d{font-size:13px;color:var(--muted)}
+  .card .tag{display:inline-block;margin-top:10px;font-size:11px;color:var(--muted);background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:2px 8px}
+  .nav{margin-top:30px;color:var(--muted);font-size:13px}
+  .nav a{color:var(--accent)}
+</style>
+</head>
+<body>
+<h1>NanoCode UI — 5 Interaction Paradigms</h1>
+<p class="sub">Static prototypes. Each differs at the interaction-logic level, not just visual skin. See <code>NANOCODE_UI.md</code>.</p>
+<div class="grid">
+  <a class="card" href="v1-focus.html"><div class="n">V1</div><div class="t">Focus Mode</div><div class="d">Single conversation owns the screen; chrome summoned via ⌘K overlay.</div><span class="tag">single-task · mobile-friendly</span></a>
+  <a class="card" href="v2-dashboard.html"><div class="n">V2</div><div class="t">Multi-Lane Dashboard</div><div class="d">Parallel agent terminals in a mosaic; expand one to act.</div><span class="tag">multi-agent · patrol</span></a>
+  <a class="card" href="v3-chat-canvas.html"><div class="n">V3</div><div class="t">Chat-First / Canvas</div><div class="d">Message-centric transcript + artifact canvas (diffs, viewers).</div><span class="tag">review · reading</span></a>
+  <a class="card" href="v4-workspace-ide.html"><div class="n">V4</div><div class="t">Workspace IDE</div><div class="d">File-tree + terminal + diff triad; accept/reject agent edits.</div><span class="tag">code editing · review gates</span></a>
+  <a class="card" href="v5-console.html"><div class="n">V5</div><div class="t">Command Console</div><div class="d">Keyboard-driven command bar (Vim/Raycast-like); transient panes.</div><span class="tag">power-user · keyboard</span></a>
+</div>
+<p class="nav">← back to <a href="../">NanoCode</a> · architecture: <a href="../../NANOCODE_ARCH.md">NANOCODE_ARCH.md</a> · UI: <a href="../../NANOCODE_UI.md">NANOCODE_UI.md</a></p>
+</body>
+</html>
