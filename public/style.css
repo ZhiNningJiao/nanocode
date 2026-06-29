@@ -2110,7 +2110,8 @@ body.workspace-active .landing-overlay { display: none; }
   }
   .theme-toggle,
   .settings-toggle-btn,
-  .agent-drawer-toggle {
+  .agent-drawer-toggle,
+  .header-entry-btn {
     flex-shrink: 0;
   }
 
@@ -3176,6 +3177,37 @@ body.workspace-active .landing-overlay { display: none; }
 }
 .agent-drawer-toggle:hover { background: rgba(255,255,255,0.08); color: var(--fg, #fff); }
 .agent-drawer-toggle.active { color: var(--primary, #8cc63f); }
+
+/* P5a: plugin-contributed header entry slot area. Holds buttons that
+   plugins register via ui.registerHeaderEntry(). Inline-flex so it collapses
+   to zero width when empty (no visible gap leftover). */
+.plugin-header-slots {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.plugin-header-slots:empty { display: none; }
+.header-entry-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm, 6px);
+  color: var(--fg-3, rgba(255,255,255,0.4));
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.header-entry-btn:hover { background: rgba(255,255,255,0.08); color: var(--fg, #fff); }
+.header-entry-btn.active { color: var(--primary, #8cc63f); }
+.header-entry-btn svg { width: 18px; height: 18px; }
+[data-theme="light"] .header-entry-btn { color: var(--text-secondary); }
+[data-theme="light"] .header-entry-btn:hover { background: var(--bg-hover); color: var(--text); }
 
 .agent-drawer-backdrop {
   display: none;

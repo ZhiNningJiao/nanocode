@@ -125,6 +125,31 @@ ui.onMessage((msg) => {
 Plugins may also use `ui.on(event, cb) / ui.emit(event, payload)` for local
 browser events such as `nanocode:terminal-output`.
 
+### 7. Client header entry — `ui.registerHeaderEntry({ id, icon, label, onClick|panel, order })`
+
+Plugins can contribute a button to the top-right header slot area
+(`#plugin-header-slots`). This is how the header becomes a plugin contribution
+zone rather than a hardcoded Core element. Buttons are icon-only (the label is
+used as the tooltip/aria-label) and sorted by `order` ascending (default 0),
+ties broken by insertion order.
+
+```js
+export function register(ui) {
+  ui.registerHeaderEntry({
+    id: 'my-plugin',
+    icon: '<svg ...></svg>',          // HTML string rendered inside the button
+    label: 'My Plugin',
+    onClick: (btn, event) => { /* open a panel, popover, etc. */ },
+    order: 10,                          // lower comes first
+  })
+}
+```
+
+Instead of `onClick`, pass `panel: '<registered-panel-id>'` to activate that
+panel on click. Entries are removed automatically when the plugin is unloaded.
+A plugin may also register `ui.registerLifecycle({ onStop })` for custom
+cleanup (e.g. removing DOM it created outside the entry button).
+
 ## Enabling a plugin
 
 Add to `data/nanocode.json` settings (or via the settings UI once the plugin
