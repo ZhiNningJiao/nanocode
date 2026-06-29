@@ -421,6 +421,7 @@ const agentHealthMonitor = createAgentHealthMonitor({ store })
 // declared).
 agentHealthMonitor.setNotifier((payload) => {
   try { broadcastNotify(payload) } catch {}
+  try { pluginHost?.emit('agent:health', payload) } catch {}
 })
 
 // Register the monitor with the session controller so claude/codex events flow

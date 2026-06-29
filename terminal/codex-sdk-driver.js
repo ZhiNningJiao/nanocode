@@ -80,6 +80,8 @@ export function createCodexSdkDriver({
   codexBroadcastStreamText = () => {},
   rerunTurn,
   CodexImpl = DefaultCodex,
+  onTurnStart = null,
+  onTurnEnd = null,
 }) {
   async function runCodexTurn(cs, prompt, sessionKey, cwd) {
     const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : ''
@@ -95,6 +97,7 @@ export function createCodexSdkDriver({
     cs.busy = true
     cs.currentProc = null
     cs.turnCount = (cs.turnCount || 0) + 1
+    if (onTurnStart) try { onTurnStart(cs, sessionKey) } catch {}
 
     const codexModel = store.getSetting('codex_model') || ''
     const codexEffort = store.getSetting('codex_effort') || ''
@@ -212,6 +215,7 @@ export function createCodexSdkDriver({
     } finally {
       cs.busy = false
       cs.currentProc = null
+      if (onTurnEnd) try { onTurnEnd(cs, sessionKey) } catch {}
 
       if (!cs.codexThreadId && lastThreadId) {
         cs.codexThreadId = lastThreadId

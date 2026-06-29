@@ -403,6 +403,7 @@ export function getOrCreate(sessionKey, command, args, cols, rows, cwd, scrollba
   if (!session) {
     session = new Session(sessionKey, command, args, cols, rows, cwd, scrollbackPath)
     sessions.set(sessionKey, session)
+    if (_pluginHost) try { _pluginHost.emit('session:create', { sessionKey, cwd }) } catch {}
   }
   return session
 }
@@ -440,6 +441,7 @@ export function destroySession(sessionKey) {
   if (session) {
     session.destroy()
     sessions.delete(sessionKey)
+    if (_pluginHost) try { _pluginHost.emit('session:destroy', { sessionKey }) } catch {}
     return true
   }
   return false
@@ -461,6 +463,7 @@ export function destroySessions(projectId) {
     if (session) {
       session.destroy()
       sessions.delete(key)
+      if (_pluginHost) try { _pluginHost.emit('session:destroy', { sessionKey: key }) } catch {}
     }
   }
 }

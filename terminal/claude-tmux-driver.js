@@ -301,7 +301,7 @@ function buildOptions(cs, cwd, store) {
   }
 }
 
-export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
+export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn, onTurnStart = null, onTurnEnd = null }) {
   async function runTmuxTurn(cs, userText, sessionKey, cwd) {
     const quietQueue = cs._quietQueueOnce === true
     cs._quietQueueOnce = false
@@ -321,6 +321,7 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
     cs.busy = true
     cs.currentProc = null
     cs.turnCount += 1
+    if (onTurnStart) try { onTurnStart(cs, sessionKey) } catch {}
 
     const opts = buildOptions(cs, cwd, store)
     const client = getBridgeClient(sessionKey, opts)
@@ -411,6 +412,7 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
     } finally {
       cs.busy = false
       cs.currentProc = null
+      if (onTurnEnd) try { onTurnEnd(cs, sessionKey) } catch {}
 
       // Mirror SDK behavior: auto-flush queued messages as a new turn.
       const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'

@@ -73,6 +73,7 @@ export function createTerminalRoutes(store, { pluginHost } = {}) {
     }
     const ssh = ssh_host ? { host: ssh_host, user: ssh_user, port: ssh_port, key: ssh_key } : {}
     const project = store.createProject(name, cwd, null, ssh)
+    if (pluginHost) try { pluginHost.emit('project:create', { id: project.id, name, cwd }) } catch {}
     res.status(201).json(project)
   })
 
@@ -83,6 +84,7 @@ export function createTerminalRoutes(store, { pluginHost } = {}) {
     }
     sessions.destroySessions(req.params.id)
     store.removeProject(req.params.id)
+    if (pluginHost) try { pluginHost.emit('project:remove', { id: req.params.id }) } catch {}
     res.status(204).send()
   })
 
