@@ -1,0 +1,10 @@
+{
+  "name": "core-renderers",
+  "version": "1.0.0",
+  "apiVersion": "0.9",
+  "description": "Core default renderers: registers the Claude block renderer, Codex block renderer, and Terminal pane with the renderer registry. This is the 'default plugin' layer — disabling it removes all session renderers.",
+  "enabledByDefault": true,
+  "extensionPoints": [
+    "ui.registerRenderer"
+  ]
+}

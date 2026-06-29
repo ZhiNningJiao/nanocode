@@ -847,6 +847,32 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   padding: var(--s-1) 0;
   background: var(--bg-elevated);
 }
+
+/* P4d: explorer context menu (plugin-registered actions) */
+.explorer-context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 160px;
+  padding: var(--s-1) 0;
+  background: var(--bg-elevated, #1e1e1e);
+  border: 1px solid var(--border, #333);
+  border-radius: var(--radius-sm, 4px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.explorer-context-item {
+  display: block;
+  width: 100%;
+  padding: var(--s-1) var(--s-3);
+  background: none;
+  border: none;
+  color: var(--text, #ddd);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.explorer-context-item:hover {
+  background: var(--bg-hover, #2a2d2e);
+}
 .explorer-tree-empty,
 .tree-loading {
   padding: var(--s-2) var(--s-3);
