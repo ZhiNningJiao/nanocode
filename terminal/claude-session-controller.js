@@ -156,6 +156,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     for (const client of cs.clients) {
       if (client.readyState === 1) try { client.send(msg) } catch {}
     }
+    if (pluginHost && cs.sessionKey) try { pluginHost.emit('agent:message', { sessionKey: cs.sessionKey, event }) } catch {}
     // Feed event into health monitor if registered
     if (_agentHealthMonitor && cs.sessionKey) {
       try {
@@ -219,6 +220,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     for (const client of cs.clients) {
       if (client.readyState === 1) try { client.send(msg) } catch {}
     }
+    if (pluginHost && cs.sessionKey) try { pluginHost.emit('agent:message', { sessionKey: cs.sessionKey, event }) } catch {}
     // Feed event into health monitor if registered
     if (_agentHealthMonitor && cs.sessionKey) {
       try {
@@ -249,6 +251,22 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
   }
 
   let dispatchClaudeTurn = null
+
+  function _emitAgentStart(cs, sessionKey) {
+    if (!pluginHost) return
+    try {
+      const [projectId, type, tabId] = sessionKey.split(':')
+      pluginHost.emit('agent:start', { sessionKey, projectId, tabId, provider: type })
+    } catch {}
+  }
+  function _emitAgentStop(cs, sessionKey, info = {}) {
+    if (!pluginHost) return
+    try {
+      const [projectId, type, tabId] = sessionKey.split(':')
+      pluginHost.emit('agent:stop', { sessionKey, projectId, tabId, provider: type, ...info })
+    } catch {}
+  }
+
   const sdkDriver = createClaudeSdkDriver({
     store,
     claudeBroadcast,
@@ -261,11 +279,15 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
         } catch {}
       }
     },
+    onTurnStart: _emitAgentStart,
+    onTurnEnd: _emitAgentStop,
   })
   const tmuxDriver = createClaudeTmuxDriver({
     store,
     claudeBroadcast,
     rerunTurn: (...args) => dispatchClaudeTurn(...args),
+    onTurnStart: _emitAgentStart,
+    onTurnEnd: _emitAgentStop,
   })
   let dispatchCodexTurn = null
   const codexSdkDriver = createCodexSdkDriver({
@@ -274,6 +296,8 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     codexBroadcastEvent,
     codexBroadcastStreamText,
     rerunTurn: (...args) => dispatchCodexTurn(...args),
+    onTurnStart: _emitAgentStart,
+    onTurnEnd: _emitAgentStop,
   })
 
   let _lastGcMs = 0
@@ -323,6 +347,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
   function _runClaudeCliContinueFallback(cs, userText, sessionKey, cwd) {
     cs.busy = true
     cs.currentProc = null
+    _emitAgentStart(cs, sessionKey)
 
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
@@ -413,6 +438,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     proc.on('exit', (code, signal) => {
       cs.busy = false
       cs.currentProc = null
+      _emitAgentStop(cs, sessionKey, { subtype: code === 0 ? 'success' : 'error' })
 
       if (_continueAlsoFailed) {
         // Layer 3: open new session
@@ -463,6 +489,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     proc.on('error', (err) => {
       cs.busy = false
       cs.currentProc = null
+      _emitAgentStop(cs, sessionKey, { subtype: 'error' })
       claudeBroadcast(cs, { type: 'result', subtype: 'error' })
       claudeBroadcast(cs, { type: 'system', subtype: 'spawn_error', text: err.message })
     })
@@ -485,6 +512,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     }
     cs.busy = true
     cs.currentProc = null
+    _emitAgentStart(cs, sessionKey)
 
     const isFirstTurn = cs.turnCount === 0
     if (isFirstTurn) gcClaudeSessions()
@@ -603,6 +631,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     proc.on('exit', (code, signal) => {
       cs.busy = false
       cs.currentProc = null
+      _emitAgentStop(cs, sessionKey, { subtype: code === 0 ? 'success' : 'error' })
 
       if (_sessionConflict) {
         const attempt = (cs._conflictRetries || 0) + 1
@@ -691,6 +720,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     proc.on('error', (err) => {
       cs.busy = false
       cs.currentProc = null
+      _emitAgentStop(cs, sessionKey, { subtype: 'error' })
       const doneEvent = { type: 'result', subtype: 'error' }
       claudeBroadcast(cs, doneEvent)
       const event = { type: 'system', subtype: 'spawn_error', text: err.message }
@@ -1130,6 +1160,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
       const newSessionId = randomUUID()
       const discarded = (cs.queue || []).length
       cs.busy = false
+      _emitAgentStop(cs, sessionKey, { subtype: 'reset' })
       cs.queue = []
       cs._conflictRetries = 0
       cs._forceFlushQueue = false
@@ -1164,6 +1195,7 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
 
     const discarded = (cs.queue || []).length
     cs.busy = false
+    _emitAgentStop(cs, sessionKey, { subtype: 'reset' })
     cs.queue = []
     cs._conflictRetries = 0
     cs._forceFlushQueue = false

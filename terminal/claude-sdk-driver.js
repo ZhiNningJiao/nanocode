@@ -316,6 +316,9 @@ export function createClaudeSdkDriver({
   forceStreaming = false,
   // Watchdog window for force interrupts (ms). Overridable for fast tests.
   forceUnlockMs = FORCE_UNLOCK_MS,
+  // P2: Called when a turn starts (cs.busy true) and ends (cs.busy false).
+  onTurnStart = null,
+  onTurnEnd = null,
 }) {
   // Whether to use streaming mode (single persistent query per session).
   // Falls back to per-turn mode when queryImpl is overridden (test mocks),
@@ -343,6 +346,7 @@ export function createClaudeSdkDriver({
 
     cs.busy = true
     cs.currentProc = null
+    if (onTurnStart) try { onTurnStart(cs, sessionKey) } catch {}
 
     const isFirstTurn = cs.turnCount === 0
     cs.turnCount += 1
@@ -476,6 +480,7 @@ export function createClaudeSdkDriver({
         cs.busy = false
         cs.currentProc = null
         cs.turnCount -= 1
+        if (onTurnEnd) try { onTurnEnd(cs, sessionKey, { subtype: 'cli_fallback' }) } catch {}
         setImmediate(() => runCliFallback(cs, userText, sessionKey, cwd))
         return
       }
@@ -483,6 +488,7 @@ export function createClaudeSdkDriver({
       const wasInterrupted = cs.currentProc?._nanocodeInterrupted === true
       cs.busy = false
       cs.currentProc = null
+      if (onTurnEnd) try { onTurnEnd(cs, sessionKey, { subtype: finalSubtype }) } catch {}
 
       if (!sawInit && lastSessionId && lastSessionId !== cs.claudeSessionId) {
         cs.claudeSessionId = lastSessionId
@@ -627,6 +633,7 @@ export function createClaudeSdkDriver({
 
     cs.busy = true
     cs.currentProc = null
+    if (onTurnStart) try { onTurnStart(cs, sessionKey) } catch {}
 
     const isFirstTurn = cs.turnCount === 0
     cs.turnCount += 1
@@ -740,6 +747,7 @@ export function createClaudeSdkDriver({
         cs.busy = false
         cs.currentProc = null
         cs.turnCount -= 1
+        if (onTurnEnd) try { onTurnEnd(cs, sessionKey, { subtype: 'cli_fallback' }) } catch {}
         setImmediate(() => runCliFallback(cs, userText, sessionKey, cwd))
         return
       }
@@ -747,6 +755,7 @@ export function createClaudeSdkDriver({
       const wasInterrupted = cs.currentProc?._nanocodeInterrupted === true
       cs.busy = false
       cs.currentProc = null
+      if (onTurnEnd) try { onTurnEnd(cs, sessionKey, { subtype: finalSubtype }) } catch {}
 
       if (!sawResult) {
         claudeBroadcast(cs, makeResultEvent(wasInterrupted ? 'error_during_execution' : finalSubtype, cs.claudeSessionId))
