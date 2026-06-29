@@ -1,8 +1,6 @@
-import { updateAgentHealth, seedFromServer, setNavigateHandler, refreshChipDots } from './agent-health.js'
 import { state } from './state.js'
 import { fetchProjects, fetchSettings, updateSetting } from './api.js'
 import { initSidebar, renderSidebar } from './sidebar.js'
-import { initAgentDrawer } from './agents.js'
 import {
   initTerminalView,
   switchTerminalProject,
@@ -209,7 +207,8 @@ function initNotifyWs() {
       } else if (msg.type === 'activity') {
         console.log('[activity]', msg.repo, msg.heading)
       } else if (msg.type === 'agent_health') {
-        updateAgentHealth(msg)
+        // P5c: route to the agent-monitor plugin via the ui bus.
+        pluginUiHost.emit('agent-health', msg)
       }
     } catch {}
   }
@@ -1286,12 +1285,14 @@ async function enterWorkspace(projectId) {
   // P1+P2 fix: close settings panel and agent drawer on every workspace entry
   // to prevent residual open state from previous session
   closeSettingsPanel()
+  // P5c: the agent drawer is now owned by the agent-monitor plugin. Close it
+  // via class removal + state event so the plugin's header entry syncs.
   const agentDrawer = document.getElementById('agent-drawer')
-  const agentDrawerBackdrop = document.getElementById('agent-drawer-backdrop')
-  const agentDrawerToggle = document.getElementById('agent-drawer-toggle')
-  agentDrawer?.classList.remove('open')
-  agentDrawerBackdrop?.classList.remove('open')
-  agentDrawerToggle?.classList.remove('active')
+  if (agentDrawer) {
+    agentDrawer.classList.remove('open')
+    document.getElementById('agent-drawer-backdrop')?.classList.remove('open')
+    document.dispatchEvent(new CustomEvent('agent-drawer:state', { detail: { open: false } }))
+  }
   renderSidebar()
   if (!workspaceReady) {
     workspaceReady = true
@@ -1337,9 +1338,7 @@ async function init() {
 
   initThemeToggle()
   initNotifyWs()
-  initAgentDrawer()
-  // Seed agent-health state from server snapshot on startup
-  seedFromServer()
+  // P5c: agent drawer + health seeding now handled by the agent-monitor plugin.
   initSettingsSectionToggles()
   try { state.projects = await fetchProjects() } catch { state.projects = [] }
   initSidebar(onProjectSwitch)
