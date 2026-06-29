@@ -513,6 +513,15 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
   for (const { name, manifest, serverPath } of loadList) {
     try {
       host._currentPlugin = name
+      // Client-only plugin (no server.js): nothing to load server-side — its
+      // ui.* extension points are handled entirely by the browser plugin host
+      // (e.g. agent-monitor: header entry + drawer + health, all client-side).
+      // Skip the dynamic import instead of crashing with "Cannot find module".
+      if (!existsSync(serverPath)) {
+        host._loaded.add(name)
+        console.log(`[plugin-host] loaded plugin ${name} v${manifest.version || '?'} api${manifest.apiVersion || '?'} (client-only, no server.js; points: ${(manifest.extensionPoints || []).join(', ') || 'none'})`)
+        continue
+      }
       const mod = await import(serverPath)
       if (typeof mod.register === 'function') {
         await mod.register(host)
