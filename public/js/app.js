@@ -1317,6 +1317,13 @@ async function init() {
     if (pluginManagerContainer) await pluginUiHost.renderPluginManager(pluginManagerContainer)
     const pluginSettingsContainer = document.getElementById('plugin-settings-slots')
     if (pluginSettingsContainer) pluginUiHost.renderSettings(pluginSettingsContainer)
+    // P5a: mount the header entry slot area so plugin-contributed header
+    // buttons render. setHeaderSlots must be called before renderHeaderEntries.
+    const headerSlots = document.getElementById('plugin-header-slots')
+    if (headerSlots) {
+      pluginUiHost.setHeaderSlots(headerSlots)
+      pluginUiHost.renderHeaderEntries()
+    }
     // Mount any full panels registered by client plugins. Keep the mobile
     // bottom switcher in sync: Terminal maps to the left (terminal) pane and
     // any plugin panel maps to the Fleet pane.

@@ -12,6 +12,9 @@
  *     - Full panel:   ui.registerPanel(id, { title, render(container) })
  *     - Renderer:      ui.registerRenderer(sessionType, { name, factory, gate, priority })
  *     - Server msgs:   ui.onMessage(cb) — receives notify-WS payloads (type "plugin:*")
+ *     - Header entry:  ui.registerHeaderEntry({ id, icon, label, onClick|panel, order })
+ *                       — contribute a button to the top-right header slot area
+ *     - Lifecycle:    ui.registerLifecycle({ onStop }) — cleanup on plugin unload
  *
  *   Tier 2 — Flexible Extension API (may evolve, versioned):
  *     - Settings UI:  ui.registerSetting({ id, render(container) })
@@ -26,6 +29,7 @@ import { rendererRegistry } from './renderer-registry.js'
 import { renderBlockRegistry } from './render-block-registry.js'
 import { createInputInterceptor } from './input-interceptor.js'
 import { explorerActionRegistry } from './explorer-action-registry.js'
+import { headerEntryRegistry } from './header-entry-registry.js'
 
 /**
  * Host API version this browser build implements. Pre-1.0 means "not yet
@@ -47,6 +51,8 @@ const CLIENT_HOST_POINTS = new Set([
   'ui.registerPanel',
   'ui.registerRenderer',
   'ui.registerBlockRenderer',
+  'ui.registerHeaderEntry',
+  'ui.registerLifecycle',
   'ui.onMessage',
   'ui.beforeInput',
   'ui.registerExplorerAction',
@@ -126,19 +132,22 @@ export function createPluginUiHost({ notifyWs } = {}) {
   const panels = new Map()
   let _notifyWs = notifyWs
 
-  /** @type {Map<string, { panels: Set<string>, settings: Set<string>, messages: Set<Function>, renderers: Set<{sessionType:string,name:string}> }>} */
+  /** @type {Map<string, { panels: Set<string>, settings: Set<string>, messages: Set<Function>, renderers: Set<{sessionType:string,name:string}>, headerEntries: Set<string>, listeners: Set<Function>, lifecycle: Set<Function> }>} */
   const pluginRegistry = new Map()
 
   /** @type {Map<string, HTMLElement>} id -> panel element */
   const panelEls = new Map()
   /** @type {Map<string, HTMLElement>} id -> tab button */
   const tabEls = new Map()
+  /** @type {Map<string, HTMLElement>} header-entry id -> button element */
+  const headerEntryEls = new Map()
   let _tabStrip = null
   let _panelContainer = null
   let _terminalLayout = null
   let _renderPanelsOpts = {}
   let _activePanelId = '_terminal'
   let _showPanel = null
+  let _headerSlots = null
 
   function on(event, cb) {
     const handler = (e) => cb(e.detail)
@@ -288,6 +297,48 @@ export function createPluginUiHost({ notifyWs } = {}) {
     return renderBlockRegistry.register(blockType, def)
   }
 
+  /**
+   * P5a: Register a header entry — a button contributed to the top-right
+   * header slot area (#plugin-header-slots). Either `onClick(btn, event)`
+   * or `panel` (a registered panel id activated on click) is required.
+   * Delegates bookkeeping to the pure header-entry registry; the DOM button
+   * is created lazily by renderHeaderEntries() into _headerSlots.
+   * Returns the entry id; tracked per-plugin for unload cleanup.
+   */
+  function registerHeaderEntry(def) {
+    const id = headerEntryRegistry.register(def)
+    renderHeaderEntries()
+    return id
+  }
+
+  /**
+   * P5a: Render the current set of header entries into _headerSlots.
+   * Idempotent: rebuilds the slot container from the registry snapshot each
+   * call (entries are small in number). Buttons are icon-only with the label
+   * as title/aria-label, sorted by `order` asc then insertion order.
+   */
+  function renderHeaderEntries() {
+    if (!_headerSlots) return
+    _headerSlots.replaceChildren()
+    headerEntryEls.clear()
+    for (const entry of headerEntryRegistry.list()) {
+      const btn = document.createElement('button')
+      btn.className = 'header-entry-btn'
+      btn.type = 'button'
+      btn.title = entry.label
+      btn.setAttribute('aria-label', entry.label)
+      if (entry.icon) btn.innerHTML = entry.icon
+      else btn.textContent = entry.label.slice(0, 2)
+      if (entry.onClick) {
+        btn.addEventListener('click', (ev) => entry.onClick(btn, ev))
+      } else if (entry.panel) {
+        btn.addEventListener('click', () => _setActivePanel(entry.panel))
+      }
+      _headerSlots.appendChild(btn)
+      headerEntryEls.set(entry.id, btn)
+    }
+  }
+
   function _setActivePanel(id) {
     _activePanelId = id
     if (_showPanel) _showPanel(id)
@@ -399,7 +450,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
    * reloading the page.
    */
   function _uiForPlugin(name) {
-    const registry = { panels: new Set(), settings: new Set(), messages: new Set(), renderers: new Set(), inputInterceptors: new Set(), explorerActions: new Set() }
+    const registry = { panels: new Set(), settings: new Set(), messages: new Set(), renderers: new Set(), inputInterceptors: new Set(), explorerActions: new Set(), headerEntries: new Set(), listeners: new Set(), lifecycle: new Set() }
     pluginRegistry.set(name, registry)
 
     const wrapOnMessage = (cb) => {
@@ -434,17 +485,33 @@ export function createPluginUiHost({ notifyWs } = {}) {
       registry.explorerActions.add(id)
       return id
     }
+    const wrapRegisterHeaderEntry = (def) => {
+      const id = registerHeaderEntry(def)
+      registry.headerEntries.add(id)
+      return id
+    }
+    const wrapOn = (event, cb) => {
+      const off = on(event, cb)
+      registry.listeners.add(off)
+      return off
+    }
+    const wrapRegisterLifecycle = (def) => {
+      registry.lifecycle.add(def)
+      return def
+    }
 
     return {
-      on,
+      on: wrapOn,
       emit,
       onMessage: wrapOnMessage,
       registerSetting: wrapRegisterSetting,
       registerPanel: wrapRegisterPanel,
       registerRenderer: wrapRegisterRenderer,
       registerBlockRenderer: wrapRegisterBlockRenderer,
+      registerHeaderEntry: wrapRegisterHeaderEntry,
       beforeInput: wrapBeforeInput,
       registerExplorerAction: wrapRegisterExplorerAction,
+      registerLifecycle: wrapRegisterLifecycle,
       attachNotifyWs,
       fetchSettings,
       updateSetting,
@@ -511,6 +578,24 @@ export function createPluginUiHost({ notifyWs } = {}) {
     }
     // Unregister any explorer context-menu actions the plugin added.
     for (const id of registry.explorerActions) explorerActionRegistry.unregister(id)
+    // P5a: Unregister any header entries the plugin contributed and re-render
+    // the header slot area so the buttons disappear immediately.
+    for (const id of registry.headerEntries) {
+      headerEntryRegistry.unregister(id)
+      const el = headerEntryEls.get(id)
+      if (el) el.remove()
+    }
+    if (registry.headerEntries.size > 0) renderHeaderEntries()
+    // P5a: Remove any ui.on listeners the plugin registered.
+    for (const off of registry.listeners) {
+      try { off() } catch { /* already removed */ }
+    }
+    // P5a: Call the plugin's onStop lifecycle hook if it registered one.
+    for (const def of registry.lifecycle) {
+      if (typeof def.onStop === 'function') {
+        try { def.onStop() } catch (e) { console.warn(`[plugin-ui] onStop failed for ${name}:`, e) }
+      }
+    }
     pluginRegistry.delete(name)
 
     // Re-render so any remaining plugin settings stay in place and the tab
@@ -908,9 +993,13 @@ export function createPluginUiHost({ notifyWs } = {}) {
     registerPanel,
     registerRenderer,
     registerBlockRenderer,
+    registerHeaderEntry,
+    renderHeaderEntries,
+    setHeaderSlots: (el) => { _headerSlots = el },
     beforeInput,
     runBeforeInput,
     explorerActionRegistry,
+    headerEntryRegistry,
     renderPanels,
     showPanel,
     hasPanel,

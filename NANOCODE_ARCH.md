@@ -145,6 +145,8 @@ Created by `createPluginUiHost({ notifyWs })`. Exposed via `register(ui)`:
 | `on` / `emit` | `(event[, payload])` | Local `EventTarget` bus (browser-side only) |
 | `registerSetting` | `({ id, render })` | Render a settings slot into the settings panel |
 | `registerPanel` | `(id, { title, render })` | Add a top-level tab panel (Core owns the tab strip) |
+| `registerHeaderEntry` | `({ id, icon, label, onClick\|panel, order })` | Contribute a button to the top-right header slot area (`#plugin-header-slots`) |
+| `registerLifecycle` | `({ onStop })` | Register a cleanup hook called on plugin unload |
 | `onMessage` | `(cb)` | Receive notify-WS payloads whose `type` starts with `plugin:` |
 | `fetchSettings` / `updateSetting` | `([key, value])` | REST settings round-trip |
 | `loadClientPlugin` / `unloadClientPlugin` | `(name)` | **Live** load/unload without reload (per-plugin registry tracks ownership) |
@@ -152,9 +154,10 @@ Created by `createPluginUiHost({ notifyWs })`. Exposed via `register(ui)`:
 | `renderPanels` / `renderSettings` | `(…)` | Incremental re-render preserving DOM state |
 
 The `_uiForPlugin(name)` proxy (line 227) wraps `registerPanel`/`registerSetting`/
-`onMessage` so each registration is attributed to a plugin, enabling clean
-unload. `renderPanels` is incremental (line 131): it adds/removes only changed
-panels, preserving mounted DOM. This is the strongest part of the current design.
+`registerHeaderEntry`/`on`/`onMessage` so each registration is attributed to a
+plugin, enabling clean unload. `renderPanels` is incremental (line 131): it
+adds/removes only changed panels, preserving mounted DOM. This is the strongest
+part of the current design.
 
 ### 3.3 Manifest — `plugins/<name>/plugin.json`
 
