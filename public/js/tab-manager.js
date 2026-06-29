@@ -450,6 +450,10 @@ export class TabManager {
 
   _renderStrip() {
     this.stripEl.innerHTML = ''
+    // Collapse the strip entirely when there are no tabs so it doesn't
+    // reserve its min-height (38px) of vertical space on the terminal
+    // pane. CSS `.terminal-tab-strip.is-empty { display: none }` hides it.
+    this.stripEl.classList.toggle('is-empty', this.tabs.length === 0)
     for (const tab of this.tabs) {
       const btn = document.createElement('button')
       btn.type = 'button'
