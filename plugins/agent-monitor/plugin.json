@@ -1,0 +1,13 @@
+{
+  "name": "agent-monitor",
+  "version": "1.0.0",
+  "apiVersion": "0.9",
+  "description": "Agent monitor: agent drawer (list/recent/subagents) + health banners. Registers a header entry to toggle the agent drawer; subscribes to agent-health events via the ui bus.",
+  "enabledByDefault": true,
+  "extensionPoints": [
+    "ui.registerHeaderEntry",
+    "ui.on",
+    "ui.registerLifecycle",
+    "ui.fetchSettings"
+  ]
+}

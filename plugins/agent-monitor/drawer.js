@@ -2,16 +2,25 @@
  * Agent manager right-side drawer.
  * Loads from /api/agents, persists via PUT /api/agents.
  * Also shows recent Claude sessions from /api/recent-agents for quick resume.
+ *
+ * Extracted from public/js/agents.js into the agent-monitor plugin (P5c).
+ * initAgentDrawer() now returns { open, close } so the plugin's header entry
+ * can toggle the drawer without depending on a hardcoded #agent-drawer-toggle
+ * button in the header.
  */
 
 let _agents = []
 
+/** Dispatch a state event so the plugin's header entry can sync its active class. */
+function _emitDrawerState(open) {
+  document.dispatchEvent(new CustomEvent('agent-drawer:state', { detail: { open } }))
+}
+
 export function initAgentDrawer() {
   const drawer = document.getElementById('agent-drawer')
-  if (!drawer) return
+  if (!drawer) return null
 
   const backdrop = document.getElementById('agent-drawer-backdrop')
-  const toggleBtn = document.getElementById('agent-drawer-toggle')
   const closeBtn = document.getElementById('agent-drawer-close')
   const discoverBtn = document.getElementById('agent-discover-btn')
   const addForm = document.getElementById('agent-add-form')
@@ -19,7 +28,7 @@ export function initAgentDrawer() {
   function open() {
     drawer.classList.add('open')
     backdrop?.classList.add('open')
-    toggleBtn?.classList.add('active')
+    _emitDrawerState(true)
     _loadAgents()
     _loadRecentAgents()
     _loadSubagents()
@@ -27,10 +36,9 @@ export function initAgentDrawer() {
   function close() {
     drawer.classList.remove('open')
     backdrop?.classList.remove('open')
-    toggleBtn?.classList.remove('active')
+    _emitDrawerState(false)
   }
 
-  toggleBtn?.addEventListener('click', () => drawer.classList.contains('open') ? close() : open())
   closeBtn?.addEventListener('click', close)
   backdrop?.addEventListener('click', close)
   // 【保留·暂隐藏】按钮在 index.html 已注释掉，discoverBtn 为 null，?. 保证此绑定安全跳过，功能代码(_discover)完整保留
@@ -48,6 +56,8 @@ export function initAgentDrawer() {
     if (document.getElementById('agent-add-name')) document.getElementById('agent-add-name').value = ''
     if (document.getElementById('agent-add-tmux')) document.getElementById('agent-add-tmux').value = ''
   })
+
+  return { open, close }
 }
 
 async function _loadAgents() {
@@ -244,7 +254,7 @@ async function _resumeSession(entry) {
   // Close the drawer
   document.getElementById('agent-drawer')?.classList.remove('open')
   document.getElementById('agent-drawer-backdrop')?.classList.remove('open')
-  document.getElementById('agent-drawer-toggle')?.classList.remove('active')
+  _emitDrawerState(false)
 
   // Signal terminal-view to resume this session after navigation
   // The sessionId is stored so the tab-manager can pick it up
@@ -307,7 +317,7 @@ function _render() {
     item.querySelector('.agent-info').addEventListener('click', () => {
       document.getElementById('agent-drawer')?.classList.remove('open')
       document.getElementById('agent-drawer-backdrop')?.classList.remove('open')
-      document.getElementById('agent-drawer-toggle')?.classList.remove('active')
+      _emitDrawerState(false)
     })
 
     item.querySelector('.agent-del-btn').addEventListener('click', async (e) => {

@@ -146,7 +146,7 @@ function setupTabs(projectId) {
 
 // ── Session resume from agent-list ──────────────────────────────────────────
 //
-// When the user clicks a recent-agent entry, agents.js dispatches
+// When the user clicks a recent-agent entry, the agent-monitor plugin dispatches
 // 'nanocode:resume-session' with { projectId, sessionId }.
 // We ensure we're in the right workspace, then find or create the claude tab
 // that owns that sessionId and activate it. The tab-manager's history fetch
