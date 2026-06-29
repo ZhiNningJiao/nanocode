@@ -1123,11 +1123,16 @@ function setupChatInput() {
       return
     }
     chatInput.style.height = 'auto'
+    // Cap is driven by the CSS `max-height` rule (120px desktop,
+    // 200px mobile) so layout is the single source of truth; parseInt
+    // resolves "120px" / vh-derived px values. Fall back to 120 if unset.
+    const styleMax = parseInt(getComputedStyle(chatInput).maxHeight)
+    const maxH = styleMax > 0 ? styleMax : 120
     // Floor at 38 so even rounding-down scrollHeight values can't
     // make the textarea shorter than its siblings.
-    const next = Math.max(38, Math.min(chatInput.scrollHeight, 120))
+    const next = Math.max(38, Math.min(chatInput.scrollHeight, maxH))
     chatInput.style.height = next + 'px'
-    chatInput.style.overflowY = chatInput.scrollHeight > 120 ? 'auto' : 'hidden'
+    chatInput.style.overflowY = chatInput.scrollHeight > maxH ? 'auto' : 'hidden'
   }
 
   // ── Feature 1: Queue-choice dialog ───────────────────────────────────────

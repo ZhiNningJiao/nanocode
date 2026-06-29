@@ -596,6 +596,7 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   scrollbar-width: none;
 }
 .terminal-tab-strip::-webkit-scrollbar { display: none; }
+.terminal-tab-strip.is-empty { display: none; }
 
 .tab-chip {
   display: inline-flex;
@@ -2515,11 +2516,10 @@ body.workspace-active .landing-overlay { display: none; }
     overflow: hidden;
   }
 
-  /* 输入框移动端：确保 placeholder 不换行 */
+  /* 输入框移动端：placeholder 单行省略；输入文本自适应换行+增高
+     （autoResize JS 驱动，max-height 放宽到 200px 让长文看得见）。 */
   .chat-textarea {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    max-height: 200px;
   }
   .chat-textarea::placeholder {
     white-space: nowrap;
