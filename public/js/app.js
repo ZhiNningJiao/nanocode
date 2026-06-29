@@ -1193,6 +1193,49 @@ document.addEventListener('keydown', (e) => {
   }
 })
 
+// ─── P5b: Plugin manager modal (header puzzle button) ────────────────────────
+
+const pluginManagerBtn = document.getElementById('plugin-manager-btn')
+const pluginManagerModal = document.getElementById('plugin-manager-modal')
+const pluginManagerModalClose = document.getElementById('plugin-manager-modal-close')
+const pluginManagerModalBody = document.getElementById('plugin-manager-modal-body')
+let _pluginManagerModalRendered = false
+
+async function openPluginManagerModal() {
+  if (!pluginManagerModal) return
+  pluginManagerModal.hidden = false
+  // Render the plugin manager into the modal body (reuse the same renderer
+  // that the settings panel uses). Re-render only on first open so toggles
+  // made inside persist between opens without a refetch flash; subsequent
+  // opens reflect live state because toggles update the DOM in place.
+  if (pluginManagerModalBody && !_pluginManagerModalRendered) {
+    pluginManagerModalBody.innerHTML = ''
+    try {
+      await pluginUiHost.renderPluginManager(pluginManagerModalBody)
+      _pluginManagerModalRendered = true
+    } catch (err) {
+      console.warn('[app] plugin manager modal render failed:', err)
+    }
+  }
+}
+
+function closePluginManagerModal() {
+  if (!pluginManagerModal) return
+  pluginManagerModal.hidden = true
+}
+
+if (pluginManagerBtn) pluginManagerBtn.addEventListener('click', openPluginManagerModal)
+if (pluginManagerModalClose) pluginManagerModalClose.addEventListener('click', closePluginManagerModal)
+if (pluginManagerModal) pluginManagerModal.addEventListener('click', (e) => {
+  // Click on the overlay (not the dialog) closes the modal.
+  if (e.target === pluginManagerModal) closePluginManagerModal()
+})
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && pluginManagerModal && !pluginManagerModal.hidden) {
+    closePluginManagerModal()
+  }
+})
+
 // ─── Routing ──────────────────────────────────────────────────────────────────
 
 function resolveProject(host, proj) {

@@ -3178,6 +3178,50 @@ body.workspace-active .landing-overlay { display: none; }
 .agent-drawer-toggle:hover { background: rgba(255,255,255,0.08); color: var(--fg, #fff); }
 .agent-drawer-toggle.active { color: var(--primary, #8cc63f); }
 
+/* P5b: plugin-manager modal (opened from header puzzle button). Reuses the
+   renderPluginManager content that also renders inside the settings panel. */
+.plugin-manager-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+  padding: 24px;
+}
+.plugin-manager-modal-overlay[hidden] { display: none; }
+.plugin-manager-modal {
+  width: min(680px, 96vw);
+  max-height: min(80vh, 720px);
+  background: var(--bg-2, #1a1b1e);
+  border: 1px solid var(--glass-border, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+}
+.plugin-manager-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+  flex-shrink: 0;
+}
+.plugin-manager-modal-title { font-weight: 600; font-size: 15px; color: var(--fg, #fff); }
+.plugin-manager-modal-body {
+  overflow-y: auto;
+  padding: 18px;
+  flex: 1 1 auto;
+}
+[data-theme="light"] .plugin-manager-modal {
+  background: var(--bg-2, #fff);
+  border-color: var(--glass-border, rgba(0,0,0,0.1));
+}
+[data-theme="light"] .plugin-manager-modal-title { color: var(--text); }
+
 /* P5a: plugin-contributed header entry slot area. Holds buttons that
    plugins register via ui.registerHeaderEntry(). Inline-flex so it collapses
    to zero width when empty (no visible gap leftover). */
