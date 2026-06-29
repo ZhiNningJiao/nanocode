@@ -358,6 +358,9 @@ const STARTUP_NOISE_RE = /^(?:[\\|\/\-]{1,4}$|-?npm\s+(?:error|warn|notice|info)
 const SESSION_INFO_RE = /^[│]\s+(model|directory|permissions):\s+(.*?)\s*[│]?\s*$/
 
 // ── Main class ────────────────────────────────────────────────────────────────
+
+import { renderBlockRegistry } from './render-block-registry.js'
+
 export class CodexBlockRenderer {
   constructor(container, opts = {}) {
     this.container = container
@@ -1374,6 +1377,8 @@ export class CodexBlockRenderer {
   }
 
   _addPatchBlock(line) {
+    // P4a: render:block hook — let a plugin render this patch block first.
+    if (this._tryCustomBlockRenderer('patch', { line })) return
     const article = this._makeBlock('cbx-block-patch')
     article.setAttribute('data-fold', getFoldLevel())
     article.innerHTML =
@@ -1392,6 +1397,8 @@ export class CodexBlockRenderer {
   }
 
   _appendTextLine(line) {
+    // P4a: render:block hook — let a plugin render this text line first.
+    if (this._tryCustomBlockRenderer('text', { text: line })) return
     // Clear status banner since we got actual text
     if (this._statusBannerEl) {
       this._statusBannerEl.remove()
@@ -1459,6 +1466,27 @@ export class CodexBlockRenderer {
     const article = document.createElement('article')
     article.className = `cbx-block ${extraClasses}`.trim()
     return article
+  }
+
+  /**
+   * P4a: render:block hook consultation. Checks the render-block registry for
+   * a custom handler for `blockType`. If one exists and returns `true`
+   * (handled), the rendered article is appended and `true` is returned so the
+   * caller skips default rendering.
+   *
+   * @param {string} blockType  'text' | 'patch' | 'bash' | …
+   * @param {object|string} data  the block data (line text or structured part)
+   * @returns {boolean}  true if a custom handler rendered the block
+   */
+  _tryCustomBlockRenderer(blockType, data) {
+    const article = this._makeBlock('cbx-block-custom')
+    const handled = renderBlockRegistry.tryRender(blockType, data, article)
+    if (handled) {
+      this._scroll.appendChild(article)
+      this._scrollBottom()
+      return true
+    }
+    return false
   }
 
   _addSystemBlock(msg) {

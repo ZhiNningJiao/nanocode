@@ -36,6 +36,7 @@ import {
 } from './claude-block-renderer/dom-render.js'
 import { ReplayCache } from './claude-block-renderer/replay-cache.js'
 import { pairToolResult, stampToolUseIdentity } from './claude-block-renderer/tool-result-pair.js'
+import { renderBlockRegistry } from './render-block-registry.js'
 
 // ── WS constants ──────────────────────────────────────────────────────────────
 const WS_PATH = '/ws/terminal'
@@ -2062,6 +2063,10 @@ export class ClaudeBlockRenderer {
   }
 
   _renderToolUsePart(part, opts = {}) {
+    // P4a: render:block hook — let a plugin render this tool_use block first.
+    // If a registered handler returns true, skip the default rendering entirely.
+    if (this._tryCustomBlockRenderer('tool_use', part)) return null
+
     // ── Subagent prompt detection ─────────────────────────────────────────────
     // The Agent tool (and TaskCreate in some versions) represents dispatching a
     // subagent. Its input.prompt is the message we send to the subagent.
@@ -2173,6 +2178,9 @@ export class ClaudeBlockRenderer {
   }
 
   _renderToolResultPart(part, opts = {}) {
+    // P4a: render:block hook — let a plugin render this tool_result block first.
+    if (this._tryCustomBlockRenderer('tool_result', part)) return
+
     const isSubagentActivity = opts.subagentActivity === true
     const activityVisible = opts.visible
     const { resultHtml, isError } = buildToolResultHtml(part, { escHtml })
@@ -2204,6 +2212,28 @@ export class ClaudeBlockRenderer {
     const article = document.createElement('article')
     article.className = `cbr-block ${extraClasses}`.trim()
     return article
+  }
+
+  /**
+   * P4a: render:block hook consultation. Checks the render-block registry for
+   * a custom handler for `blockType`. If one exists and returns `true`
+   * (handled), the rendered article is appended and `true` is returned so the
+   * caller skips default rendering. If no handler or it returns falsy, returns
+   * `false` and the default rendering proceeds (augment mode).
+   *
+   * @param {string} blockType  'tool_use' | 'tool_result' | 'text' | …
+   * @param {object} part      the block data
+   * @returns {boolean}  true if a custom handler rendered the block
+   */
+  _tryCustomBlockRenderer(blockType, part) {
+    const article = this._makeBlock('cbr-block-custom')
+    const handled = renderBlockRegistry.tryRender(blockType, part, article)
+    if (handled) {
+      this._scroll.appendChild(article)
+      this._scrollBottom()
+      return true
+    }
+    return false
   }
 
   _addSystemBlock(msg) {

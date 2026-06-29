@@ -17,6 +17,7 @@ let tabManager = null
 let activePane = null
 let explorer = null
 let currentProjectId = null
+let _pluginUiHost = null
 
 const statusBash = document.getElementById('status-bash')
 
@@ -45,6 +46,7 @@ function setStatus(connected) {
 export async function initTerminalView(projectId, pluginUiHost = null) {
   if (!projectId) return
   currentProjectId = projectId
+  _pluginUiHost = pluginUiHost
 
   if (!initialized) {
     initialized = true
@@ -92,7 +94,7 @@ function setupSplitPane() {
 function setupExplorer(projectId) {
   const root = document.getElementById('explorer-root')
   if (!root) return
-  explorer = createExplorer(root, projectId)
+  explorer = createExplorer(root, projectId, _pluginUiHost)
 
   // Feature 2: listen for path-click events from chat bubble renderer
   // The event bubbles up from wherever in the DOM the clicked span lives.
@@ -1396,8 +1398,27 @@ function setupChatInput() {
   }
 
   function sendInput() {
-    const text = chatInput.value
+    let text = chatInput.value
     if (!text) return
+
+    // input:before interception — plugins may rewrite the text or cancel the
+    // send entirely (return false). Runs synchronously before any dispatch.
+    if (_pluginUiHost?.runBeforeInput) {
+      const result = _pluginUiHost.runBeforeInput({
+        text,
+        tabType: _activeTabType,
+        projectId: currentProjectId,
+      })
+      if (result.cancel) {
+        chatInput.value = ''
+        autoResize()
+        hideSuggestions()
+        hideSlashCommands()
+        chatInput.focus()
+        return
+      }
+      text = result.text
+    }
 
     // /model with no args (or bare /model) on a claude tab → show inline picker
     if (isClaudeTab && text.trim().match(/^\/model\s*$/)) {

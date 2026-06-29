@@ -23,6 +23,9 @@
 
 import { fetchSettings, updateSetting } from './api.js'
 import { rendererRegistry } from './renderer-registry.js'
+import { renderBlockRegistry } from './render-block-registry.js'
+import { createInputInterceptor } from './input-interceptor.js'
+import { explorerActionRegistry } from './explorer-action-registry.js'
 
 /**
  * Host API version this browser build implements. Pre-1.0 means "not yet
@@ -43,7 +46,10 @@ const CLIENT_HOST_POINTS = new Set([
   'ui.registerSetting',
   'ui.registerPanel',
   'ui.registerRenderer',
+  'ui.registerBlockRenderer',
   'ui.onMessage',
+  'ui.beforeInput',
+  'ui.registerExplorerAction',
   'ui.fetchSettings',
   'ui.updateSetting',
 ])
@@ -143,6 +149,13 @@ export function createPluginUiHost({ notifyWs } = {}) {
   function emit(event, payload) {
     localEmitter.dispatchEvent(new CustomEvent(event, { detail: payload }))
   }
+
+  // ── input:before interception ────────────────────────────────────────────
+  // Synchronous tap chain: handlers may rewrite the text (return a string) or
+  // cancel the send (return false). See input-interceptor.js for semantics.
+  const _inputInterceptor = createInputInterceptor()
+  const beforeInput = _inputInterceptor.beforeInput
+  const runBeforeInput = _inputInterceptor.runBeforeInput
 
   function onMessage(cb) {
     messageCallbacks.add(cb)
@@ -264,6 +277,17 @@ export function createPluginUiHost({ notifyWs } = {}) {
     return rendererRegistry.register(sessionType, def)
   }
 
+  /**
+   * P4a: Register a custom block renderer for a specific block type
+   * (text, tool_use, tool_result, patch, …). Delegates to the render-block
+   * registry. A plugin can override the default block rendering by registering
+   * with a higher priority. Removed on unload so defaults are restored.
+   * Returns the registered name (for bookkeeping / unregister).
+   */
+  function registerBlockRenderer(blockType, def) {
+    return renderBlockRegistry.register(blockType, def)
+  }
+
   function _setActivePanel(id) {
     _activePanelId = id
     if (_showPanel) _showPanel(id)
@@ -375,12 +399,17 @@ export function createPluginUiHost({ notifyWs } = {}) {
    * reloading the page.
    */
   function _uiForPlugin(name) {
-    const registry = { panels: new Set(), settings: new Set(), messages: new Set(), renderers: new Set() }
+    const registry = { panels: new Set(), settings: new Set(), messages: new Set(), renderers: new Set(), inputInterceptors: new Set(), explorerActions: new Set() }
     pluginRegistry.set(name, registry)
 
     const wrapOnMessage = (cb) => {
       registry.messages.add(cb)
       return onMessage(cb)
+    }
+    const wrapBeforeInput = (handler) => {
+      const off = beforeInput(handler)
+      registry.inputInterceptors.add(off)
+      return off
     }
     const wrapRegisterPanel = (id, def) => {
       registry.panels.add(id)
@@ -395,6 +424,16 @@ export function createPluginUiHost({ notifyWs } = {}) {
       registry.renderers.add({ sessionType, name: rname })
       return rname
     }
+    const wrapRegisterBlockRenderer = (blockType, def) => {
+      const rname = registerBlockRenderer(blockType, def)
+      registry.renderers.add({ sessionType: `block:${blockType}`, name: rname })
+      return rname
+    }
+    const wrapRegisterExplorerAction = (def) => {
+      const id = explorerActionRegistry.register(def)
+      registry.explorerActions.add(id)
+      return id
+    }
 
     return {
       on,
@@ -403,6 +442,9 @@ export function createPluginUiHost({ notifyWs } = {}) {
       registerSetting: wrapRegisterSetting,
       registerPanel: wrapRegisterPanel,
       registerRenderer: wrapRegisterRenderer,
+      registerBlockRenderer: wrapRegisterBlockRenderer,
+      beforeInput: wrapBeforeInput,
+      registerExplorerAction: wrapRegisterExplorerAction,
       attachNotifyWs,
       fetchSettings,
       updateSetting,
@@ -452,11 +494,23 @@ export function createPluginUiHost({ notifyWs } = {}) {
       }
     }
     for (const cb of registry.messages) messageCallbacks.delete(cb)
-    // Unregister any custom renderers the plugin added so the default renderer
-    // is restored for the affected session types.
-    for (const { sessionType, name: rname } of registry.renderers) {
-      rendererRegistry.unregister(sessionType, rname)
+    // Remove any input:before interceptors the plugin registered.
+    for (const off of registry.inputInterceptors) {
+      try { off() } catch { /* already removed */ }
     }
+    // Unregister any custom renderers the plugin added so the default renderer
+    // is restored for the affected session types. This includes both
+    // session-type renderers (via rendererRegistry) and block-type renderers
+    // (via renderBlockRegistry, stored as `block:<type>`).
+    for (const { sessionType, name: rname } of registry.renderers) {
+      if (sessionType.startsWith('block:')) {
+        renderBlockRegistry.unregister(sessionType.slice('block:'.length), rname)
+      } else {
+        rendererRegistry.unregister(sessionType, rname)
+      }
+    }
+    // Unregister any explorer context-menu actions the plugin added.
+    for (const id of registry.explorerActions) explorerActionRegistry.unregister(id)
     pluginRegistry.delete(name)
 
     // Re-render so any remaining plugin settings stay in place and the tab
@@ -853,6 +907,10 @@ export function createPluginUiHost({ notifyWs } = {}) {
     renderSettings,
     registerPanel,
     registerRenderer,
+    registerBlockRenderer,
+    beforeInput,
+    runBeforeInput,
+    explorerActionRegistry,
     renderPanels,
     showPanel,
     hasPanel,

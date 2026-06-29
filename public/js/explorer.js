@@ -95,7 +95,7 @@ function dirOf(p) {
  * Create an Explorer attached to a container.
  * @returns {{ destroy(): void, switchProject(projectId: string): void }}
  */
-export function createExplorer(container, projectId) {
+export function createExplorer(container, projectId, pluginUiHost = null) {
   let project = projectId
 
   // State
@@ -146,6 +146,57 @@ export function createExplorer(container, projectId) {
   const treeEl = document.createElement('div')
   treeEl.className = 'explorer-tree'
   bodyEl.appendChild(treeEl)
+
+  // --- Explorer context-menu extension (P4d) ---
+  // Right-clicking a tree row shows a menu populated by actions plugins
+  // registered via ui.registerExplorerAction(). When no actions are
+  // registered the browser's default context menu is left untouched.
+  let _activeMenu = null
+  function _closeContextMenu() {
+    if (_activeMenu) {
+      _activeMenu.remove()
+      _activeMenu = null
+    }
+  }
+  treeEl.addEventListener('contextmenu', (e) => {
+    if (!pluginUiHost?.explorerActionRegistry) return
+    const row = e.target.closest('.tree-row')
+    if (!row) return
+    const actions = pluginUiHost.explorerActionRegistry.list()
+    if (!actions.length) return
+    e.preventDefault()
+    _closeContextMenu()
+    const path = row.dataset.path || ''
+    const type = row.dataset.type || 'file'
+    const menu = document.createElement('div')
+    menu.className = 'explorer-context-menu'
+    for (const action of actions) {
+      const item = document.createElement('button')
+      item.type = 'button'
+      item.className = 'explorer-context-item'
+      item.textContent = action.label
+      item.addEventListener('click', () => {
+        _closeContextMenu()
+        try {
+          action.run({ path, type, projectId: project })
+        } catch (err) {
+          console.warn('[explorer] context action error:', err)
+        }
+      })
+      menu.appendChild(item)
+    }
+    document.body.appendChild(menu)
+    // Position — keep within viewport.
+    const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8)
+    const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8)
+    menu.style.left = `${Math.max(0, x)}px`
+    menu.style.top = `${Math.max(0, y)}px`
+    _activeMenu = menu
+  })
+  // Dismiss on any click outside the menu or on Escape.
+  document.addEventListener('click', _closeContextMenu, true)
+  document.addEventListener('contextmenu', _closeContextMenu, true)
+  window.addEventListener('blur', _closeContextMenu)
 
   const splitEl = document.createElement('div')
   splitEl.className = 'explorer-split'
@@ -228,6 +279,19 @@ export function createExplorer(container, projectId) {
     })
     if (!res.ok) throw new Error(`save failed: ${res.status}`)
     return res.json()
+  }
+
+  // --- Plugin host hooks (file:open / file:save) ---
+
+  /** Emit a file event to plugins if a host is attached. */
+  function _emitFile(event, info) {
+    if (pluginUiHost?.emit) {
+      try {
+        pluginUiHost.emit(event, { ...info, projectId: project })
+      } catch (err) {
+        console.warn('[explorer] plugin emit error:', err)
+      }
+    }
   }
 
   async function apiUpload(file, destPath) {
@@ -361,10 +425,12 @@ export function createExplorer(container, projectId) {
     const ext = extOf(filePath)
     if (IMAGE_EXTS.has(ext)) {
       renderPreview() // image renders without content fetch
+      _emitFile('file:open', { path: filePath, type: 'file' })
       return
     }
     if (GLB_EXTS.has(ext)) {
       renderPreview() // GLB renders via three.js using the raw URL
+      _emitFile('file:open', { path: filePath, type: 'file' })
       return
     }
 
@@ -379,6 +445,7 @@ export function createExplorer(container, projectId) {
         selectedSize = data.size ?? selectedSize
       }
       renderPreview()
+      _emitFile('file:open', { path: filePath, type: 'file' })
     } catch (err) {
       fileError = err.message
       renderPreview()
@@ -899,6 +966,7 @@ export function createExplorer(container, projectId) {
       editContent = ''
       saving = false
       renderPreview()
+      _emitFile('file:save', { path: selectedPath, type: 'file' })
       refreshAll().catch(() => {})
     } catch (err) {
       saving = false
