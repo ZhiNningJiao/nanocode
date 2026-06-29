@@ -5,20 +5,106 @@
  * calls `register(ui)`.  Plugins MUST only use the ui API below; they must not
  * reach into Core internals.
  *
- * Extension points:
- *   - Local events: ui.on(event, cb) / ui.emit(event, payload)
- *   - Settings UI:  ui.registerSetting({ id, render(container) })
- *   - Full panel:   ui.registerPanel(id, { title, render(container) })
- *   - Renderer:     ui.registerRenderer(sessionType, { name, factory, gate, priority })
- *     — register a custom terminal/agent output renderer (overrides defaults
- *     by priority). Cleaned up on plugin unload.
- *   - Server messages: ui.onMessage(cb) — receives notify-WS payloads whose
- *     type starts with "plugin:".
- *   - REST settings: ui.fetchSettings() / ui.updateSetting(key, value)
+ * Extension points (tiered stability, see NANOCODE_ARCH.md §3):
+ *
+ *   Tier 1 — Stable Core API (frozen, semver-guaranteed; pre-1.0 not yet frozen):
+ *     - Local events: ui.on(event, cb) / ui.emit(event, payload)
+ *     - Full panel:   ui.registerPanel(id, { title, render(container) })
+ *     - Renderer:      ui.registerRenderer(sessionType, { name, factory, gate, priority })
+ *     - Server msgs:   ui.onMessage(cb) — receives notify-WS payloads (type "plugin:*")
+ *
+ *   Tier 2 — Flexible Extension API (may evolve, versioned):
+ *     - Settings UI:  ui.registerSetting({ id, render(container) })
+ *     - REST settings: ui.fetchSettings() / ui.updateSetting(key, value)
+ *
+ *   Tier 3 — Internal API (not for plugin use):
+ *     - ui._uiForPlugin / pluginRegistry / settingSlots / panels / panelEls
  */
 
 import { fetchSettings, updateSetting } from './api.js'
 import { rendererRegistry } from './renderer-registry.js'
+
+/**
+ * Host API version this browser build implements. Pre-1.0 means "not yet
+ * frozen" — the contract is advisory: incompatible plugins are warned, not
+ * refused. Kept in sync with server/plugin-host.js HOST_API_VERSION.
+ */
+export const HOST_API_VERSION = '0.9'
+
+/**
+ * Browser-side extension points this host actually exposes (the `ui.*`
+ * namespace). Used to validate `plugin.json#extensionPoints` declarations so a
+ * plugin that claims a non-existent ui method is warned at load time. `host.*`
+ * points belong to the server host and are validated server-side.
+ */
+const CLIENT_HOST_POINTS = new Set([
+  'ui.on',
+  'ui.emit',
+  'ui.registerSetting',
+  'ui.registerPanel',
+  'ui.registerRenderer',
+  'ui.onMessage',
+  'ui.fetchSettings',
+  'ui.updateSetting',
+])
+
+/**
+ * Parse a loose semver string into {major,minor,patch}. Returns null for
+ * unversioned/legacy values. Mirrors server/plugin-host.js parseSemver.
+ */
+function parseSemver(v) {
+  if (!v || typeof v !== 'string') return null
+  const m = v.match(/^(\d+)\.(\d+)(?:\.(\d+))?/)
+  if (!m) return null
+  return { major: Number(m[1]), minor: Number(m[2]), patch: m[3] ? Number(m[3]) : 0 }
+}
+
+/**
+ * Decide whether a plugin's declared apiVersion is compatible with the host's
+ * HOST_API_VERSION (mirrors the server-side check). Returns
+ * { compatible: boolean, reason: string }.
+ */
+function isApiCompatible(pluginVersion, hostVersion) {
+  const p = parseSemver(pluginVersion)
+  const h = parseSemver(hostVersion)
+  if (!p) return { compatible: false, reason: 'unversioned/legacy manifest (no apiVersion)' }
+  if (!h) return { compatible: true, reason: '' }
+  if (p.major !== h.major) {
+    return { compatible: false, reason: `major mismatch (plugin ${pluginVersion} vs host ${hostVersion})` }
+  }
+  if (h.major === 0 && p.minor !== h.minor) {
+    return { compatible: false, reason: `pre-1.0 minor mismatch (plugin ${pluginVersion} vs host ${hostVersion})` }
+  }
+  return { compatible: true, reason: '' }
+}
+
+/**
+ * Validate a plugin manifest against this browser host: apiVersion compatibility
+ * and ui.* extensionPoints declarations vs the host's actual exposed methods.
+ * Advisory only (pre-1.0) — warns, never refuses the load. Returns void.
+ */
+function validateClientManifest(name, manifest) {
+  const apiVersion = manifest && manifest.apiVersion
+  const { compatible, reason } = isApiCompatible(apiVersion, HOST_API_VERSION)
+  if (!compatible) {
+    console.warn(
+      `[plugin-ui] ${name}: API version incompatibility — ${reason}. ` +
+        `Host is ${HOST_API_VERSION}. Loading anyway (pre-1.0 advisory).`,
+    )
+  }
+  const points = Array.isArray(manifest && manifest.extensionPoints) ? manifest.extensionPoints : []
+  for (const point of points) {
+    if (typeof point !== 'string') continue
+    if (point.startsWith('ui.')) {
+      if (!CLIENT_HOST_POINTS.has(point)) {
+        console.warn(
+          `[plugin-ui] ${name}: declares unknown extension point "${point}" ` +
+            `(not exposed by browser host). Known: ${[...CLIENT_HOST_POINTS].join(', ')}`,
+        )
+      }
+    }
+  }
+}
 
 /**
  * Create the client plugin host.
@@ -87,10 +173,32 @@ export function createPluginUiHost({ notifyWs } = {}) {
    * Incremental: new slots are created, removed slots are cleaned up, existing
    * slots are left in place so plugins don't lose state on re-render.
    */
+  /**
+   * Whether the plugin manager has taken ownership of rendering plugin-owned
+   * setting slots (into per-plugin cards). When true, renderSettings() skips
+   * plugin-owned slots so they render exactly once (in the cards, not in the
+   * flat #plugin-settings-slots bucket). Set to false on manager fetch failure
+   * so settings fall back to the flat bucket (no setting is ever lost).
+   */
+  let _pluginManagerOwnsSettings = false
+
+  /** @returns {Set<string>} setting ids owned by any tracked (loaded) plugin */
+  function _pluginOwnedSettingIds() {
+    const ids = new Set()
+    for (const reg of pluginRegistry.values()) {
+      for (const id of reg.settings) ids.add(id)
+    }
+    return ids
+  }
+
   function renderSettings(panel) {
     if (!panel) return
+    const owned = _pluginManagerOwnsSettings ? _pluginOwnedSettingIds() : new Set()
     const wantedIds = new Set()
     for (const def of settingSlots) {
+      // Plugin-owned slots are rendered by the plugin manager (per-plugin cards)
+      // when it is active; skip them here to avoid duplicate element IDs.
+      if (owned.has(def.id)) continue
       wantedIds.add(def.id)
       let container = panel.querySelector(`[data-plugin-setting="${def.id}"]`)
       if (!container) {
@@ -102,6 +210,33 @@ export function createPluginUiHost({ notifyWs } = {}) {
     }
     // Remove containers for slots that no longer exist (unloaded plugin).
     panel.querySelectorAll('[data-plugin-setting]').forEach((el) => {
+      if (!wantedIds.has(el.dataset.pluginSetting)) el.remove()
+    })
+  }
+
+  /**
+   * Render ONLY the settings registered by a single plugin into `container`.
+   * Used by the plugin manager to show each plugin's ui.registerSetting slots
+   * inside that plugin's card. Incremental: re-renders existing, removes stale.
+   */
+  function _renderPluginSettings(name, container) {
+    if (!container) return
+    const reg = pluginRegistry.get(name)
+    const ownedIds = reg ? reg.settings : new Set()
+    const wantedIds = new Set()
+    for (const def of settingSlots) {
+      if (!ownedIds.has(def.id)) continue
+      wantedIds.add(def.id)
+      let sub = container.querySelector(`[data-plugin-setting="${def.id}"]`)
+      if (!sub) {
+        sub = document.createElement('div')
+        sub.dataset.pluginSetting = def.id
+        sub.className = 'plugin-card-setting'
+        container.appendChild(sub)
+      }
+      try { def.render(sub) } catch (err) { console.warn(`[plugin-ui] ${name} setting render error:`, err) }
+    }
+    container.querySelectorAll('[data-plugin-setting]').forEach((el) => {
       if (!wantedIds.has(el.dataset.pluginSetting)) el.remove()
     })
   }
@@ -356,6 +491,20 @@ export function createPluginUiHost({ notifyWs } = {}) {
    * Render a plugin management UI into `container`.
    * Expects container to be a DOM element.
    */
+  /**
+   * Render a health badge for a plugin from its reportStatus() snapshot.
+   * Returns an HTML string. status shape: { level, message, detail, time }.
+   */
+  function _healthBadge(status) {
+    if (!status || !status.level) {
+      return '<span class="plugin-health plugin-health-unknown" title="No status reported">●</span>'
+    }
+    const lvl = escapeHtml(status.level)
+    const msg = escapeHtml(status.message || '')
+    const tip = msg ? ` title="${msg}"` : ''
+    return `<span class="plugin-health plugin-health-${lvl}"${tip}>${lvl}</span>`
+  }
+
   async function renderPluginManager(container) {
     container.innerHTML = '<div class="plugin-manager-loading">Loading plugins…</div>'
 
@@ -366,9 +515,15 @@ export function createPluginUiHost({ notifyWs } = {}) {
       const data = await res.json()
       plugins = data.plugins || []
     } catch (err) {
+      // Fall back to the flat settings bucket so no plugin setting is lost.
+      _pluginManagerOwnsSettings = false
       container.innerHTML = `<div class="plugin-manager-error">Failed to load plugins: ${escapeHtml(String(err?.message || err))}</div>`
       return
     }
+
+    // Plugin manager owns per-plugin setting rendering now; renderSettings()
+    // will skip plugin-owned slots so each setting renders exactly once (here).
+    _pluginManagerOwnsSettings = true
 
     const list = document.createElement('div')
     list.className = 'plugin-manager-list'
@@ -376,17 +531,32 @@ export function createPluginUiHost({ notifyWs } = {}) {
     plugins.forEach((plugin) => {
       const row = document.createElement('div')
       row.className = 'plugin-manager-row'
+      row.dataset.plugin = plugin.name
+      const apiBadge = plugin.apiVersion
+        ? `<span class="plugin-api-version" title="Plugin API version">api ${escapeHtml(plugin.apiVersion)}</span>`
+        : ''
+      const health = _healthBadge(plugin.status)
+      const settingsCount = (plugin.extensionPoints || []).filter((p) => p === 'ui.registerSetting').length
       row.innerHTML = `
         <div class="plugin-info">
-          <div class="plugin-name">${escapeHtml(plugin.name)} <span class="plugin-version">${escapeHtml(plugin.version)}</span></div>
+          <div class="plugin-name">
+            ${escapeHtml(plugin.name)}
+            <span class="plugin-version">v${escapeHtml(plugin.version)}</span>
+            ${apiBadge}
+            ${health}
+          </div>
           <div class="plugin-description">${escapeHtml(plugin.description || 'No description')}</div>
         </div>
         <label class="plugin-toggle">
           <input type="checkbox" data-plugin="${escapeHtml(plugin.name)}" ${plugin.enabled ? 'checked' : ''}>
           <span>${plugin.enabled ? 'On' : 'Off'}</span>
         </label>
+        <div class="plugin-card-settings" data-plugin-settings="${escapeHtml(plugin.name)}"></div>
       `
       list.appendChild(row)
+      // Render this plugin's own ui.registerSetting slots into its card.
+      const settingsEl = row.querySelector('.plugin-card-settings')
+      if (settingsEl) _renderPluginSettings(plugin.name, settingsEl)
     })
 
     container.innerHTML = `
@@ -394,6 +564,7 @@ export function createPluginUiHost({ notifyWs } = {}) {
       <p class="plugin-manager-hint">
         Toggle plugins on or off. UI panels and settings update immediately.
         Server-side routes take effect after the server restarts.
+        Health badges reflect the latest <code>reportStatus()</code> snapshot.
       </p>
     `
     container.appendChild(list)
@@ -419,7 +590,15 @@ export function createPluginUiHost({ notifyWs } = {}) {
           unloadClientPlugin(name)
         }
 
-        // Re-render settings/panels so the new state is reflected immediately.
+        // Re-render the toggled plugin's card settings + orphan slots + panels.
+        const row = list.querySelector(`.plugin-manager-row[data-plugin="${cssEscape(name)}"]`)
+        if (row) {
+          const settingsEl = row.querySelector('.plugin-card-settings')
+          if (settingsEl) {
+            if (enabled) _renderPluginSettings(name, settingsEl)
+            else settingsEl.innerHTML = ''
+          }
+        }
         const settingsContainer = document.getElementById('plugin-settings-slots')
         if (settingsContainer) renderSettings(settingsContainer)
         if (_tabStrip && _panelContainer) {
@@ -647,6 +826,12 @@ export function createPluginUiHost({ notifyWs } = {}) {
       .replace(/"/g, '&quot;')
   }
 
+  /** Escape a string for safe use inside a CSS attribute selector. */
+  function cssEscape(s) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(s)
+    return String(s).replace(/["\\]/g, '\\$&')
+  }
+
   function showToast(message) {
     // Prefer the host app's toast if available.
     if (typeof window.showToast === 'function') {
@@ -698,7 +883,26 @@ export async function loadClientPlugins(ui) {
     .filter(([k, v]) => k.startsWith('plugin_') && k.endsWith('_enabled') && v)
     .map(([k]) => k.slice('plugin_'.length, -'_enabled'.length))
 
+  // Fetch manifests (apiVersion + extensionPoints) from the server so we can
+  // run the same advisory version/manifest validation the server host does.
+  // Fetch failure is non-fatal: we just skip validation and still load.
+  let manifestByName = new Map()
+  try {
+    const res = await fetch('/api/plugins')
+    if (res.ok) {
+      const data = await res.json()
+      for (const p of data.plugins || []) manifestByName.set(p.name, p)
+    }
+  } catch { /* network error — skip validation */ }
+
   for (const name of enabled) {
+    const manifest = manifestByName.get(name)
+    if (manifest) {
+      validateClientManifest(name, {
+        apiVersion: manifest.apiVersion,
+        extensionPoints: manifest.extensionPoints,
+      })
+    }
     try {
       await ui.loadClientPlugin(name)
       loaded.push(name)

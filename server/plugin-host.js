@@ -5,13 +5,23 @@
  * ONLY surface plugins should touch; Core internals (routes, store direct use,
  * WebSocket broadcast loops) remain private.
  *
- * Extension points:
- *   - Event bus: host.on(event, cb) / host.emit(event, payload)
- *   - Settings:  host.registerSetting(def) / host.getSetting(key) / host.setSetting(key, value)
- *   - Routes:    host.registerRoute(method, path, handler)
- *   - Notify:    host.broadcastNotify(payload)
- *   - Lifecycle: host.registerLifecycle({ onStop })  — cleanup on shutdown/unload
- *   - Status:    host.reportStatus(level, message, { detail, plugin })
+ * Extension points (tiered stability, see NANOCODE_ARCH.md §3):
+ *
+ *   Tier 1 — Stable Core API (frozen, semver-guaranteed; pre-1.0 not yet frozen):
+ *     - Event bus:  host.on(event, cb) / host.emit(event, payload)
+ *     - Settings:   host.getSetting(key) / host.setSetting(key, value)
+ *     - Lifecycle:  host.registerLifecycle({ onStop })  — cleanup on shutdown/unload
+ *     - Status:     host.reportStatus(level, message, { detail, plugin })
+ *
+ *   Tier 2 — Flexible Extension API (may evolve, versioned):
+ *     - Settings def: host.registerSetting(def)
+ *     - Routes:       host.registerRoute(method, path, handler)
+ *     - Notify:       host.broadcastNotify(payload)
+ *     - WebSocket:    host.registerWebSocket(path, handler)  — own a WS upgrade path
+ *
+ *   Tier 3 — Internal API (not for plugin use):
+ *     - host._loaded / host._lifecycle / host._status / host._wsHandlers
+ *     - host.getAllSettingDefs / host.getWebSocketHandler / host.getStatus
  *
  * Plugins declare their client-side needs in plugin.json; Core's browser host
  * exposes matching ui.* extension points (see public/js/plugin-host.js).
@@ -29,6 +39,102 @@ import { EventEmitter } from 'node:events'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PLUGINS_DIR = join(__dirname, '..', 'plugins')
+
+/**
+ * Host API version this build implements. Pre-1.0 means "not yet frozen" — the
+ * contract is advisory: incompatible plugins are warned, not refused (see
+ * isApiCompatible below). Bump per semver: major=breaking, minor=new points
+ * (pre-1.0: minor is the breaking boundary), patch=bugfix. Kept in sync with
+ * public/js/plugin-host.js HOST_API_VERSION.
+ */
+export const HOST_API_VERSION = '0.9'
+
+/**
+ * Server-side extension points this host actually exposes (the `host.*`
+ * namespace). Used to validate `plugin.json#extensionPoints` declarations so a
+ * plugin that claims a non-existent method is warned at load time instead of
+ * failing silently. `ui.*` points belong to the browser host and are validated
+ * client-side (see public/js/plugin-host.js CLIENT_HOST_POINTS).
+ */
+const SERVER_HOST_POINTS = new Set([
+  'host.on',
+  'host.emit',
+  'host.registerSetting',
+  'host.getSetting',
+  'host.setSetting',
+  'host.registerRoute',
+  'host.registerWebSocket',
+  'host.registerLifecycle',
+  'host.reportStatus',
+  'host.broadcastNotify',
+])
+
+/**
+ * Parse a loose semver string ("0.9", "0.9.1", "1.0") into parts. Returns null
+ * for unversioned/legacy (missing or non-numeric) values.
+ */
+export function parseSemver(v) {
+  if (!v || typeof v !== 'string') return null
+  const m = v.match(/^(\d+)\.(\d+)(?:\.(\d+))?/)
+  if (!m) return null
+  return { major: Number(m[1]), minor: Number(m[2]), patch: m[3] ? Number(m[3]) : 0 }
+}
+
+/**
+ * Decide whether a plugin's declared apiVersion is compatible with the host's
+ * HOST_API_VERSION, per the semver rules in NANOCODE_ARCH.md §5.3:
+ *   - major mismatch  => incompatible (breaking change)
+ *   - pre-1.0 (0.x)   => minor mismatch is incompatible (0.minor is breaking)
+ *   - 1.x+            => minor/patch differences are compatible (additive)
+ *   - missing/invalid => incompatible (unversioned/legacy)
+ *
+ * Returns { compatible: boolean, reason: string }.
+ */
+export function isApiCompatible(pluginVersion, hostVersion) {
+  const p = parseSemver(pluginVersion)
+  const h = parseSemver(hostVersion)
+  if (!p) return { compatible: false, reason: 'unversioned/legacy manifest (no apiVersion)' }
+  if (!h) return { compatible: true, reason: '' }
+  if (p.major !== h.major) {
+    return { compatible: false, reason: `major mismatch (plugin ${pluginVersion} vs host ${hostVersion})` }
+  }
+  if (h.major === 0 && p.minor !== h.minor) {
+    return { compatible: false, reason: `pre-1.0 minor mismatch (plugin ${pluginVersion} vs host ${hostVersion})` }
+  }
+  return { compatible: true, reason: '' }
+}
+
+/**
+ * Validate a plugin manifest against this host: apiVersion compatibility and
+ * extensionPoints declarations vs the host's actual exposed methods. This
+ * version is advisory only (pre-1.0, internal) — mismatches produce a
+ * console.warn, never a load refusal. Returns void.
+ */
+export function validatePluginManifest(name, manifest) {
+  const apiVersion = manifest && manifest.apiVersion
+  const { compatible, reason } = isApiCompatible(apiVersion, HOST_API_VERSION)
+  if (!compatible) {
+    console.warn(
+      `[plugin-host] ${name}: API version incompatibility — ${reason}. ` +
+        `Host is ${HOST_API_VERSION}. Loading anyway (pre-1.0 advisory).`,
+    )
+  }
+
+  const points = Array.isArray(manifest && manifest.extensionPoints) ? manifest.extensionPoints : []
+  for (const point of points) {
+    if (typeof point !== 'string') continue
+    // Only validate the host.* namespace (server-side). ui.* points belong to
+    // the browser host and are validated client-side.
+    if (point.startsWith('host.')) {
+      if (!SERVER_HOST_POINTS.has(point)) {
+        console.warn(
+          `[plugin-host] ${name}: declares unknown extension point "${point}" ` +
+            `(not exposed by server host). Known: ${[...SERVER_HOST_POINTS].join(', ')}`,
+        )
+      }
+    }
+  }
+}
 
 /**
  * Create a plugin host backed by the given Express app and settings store.
@@ -253,6 +359,9 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
       console.log(`[plugin-host] plugin ${name} (${manifest.version || '?'}) disabled`)
       continue
     }
+    // Advisory manifest validation (pre-1.0): warn on apiVersion mismatch and
+    // phantom extensionPoint declarations. Does not refuse the load.
+    validatePluginManifest(name, manifest)
     candidates.push({ name, manifest, serverPath })
   }
 
@@ -283,7 +392,7 @@ export async function loadPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
       if (typeof mod.register === 'function') {
         await mod.register(host)
         host._loaded.add(name)
-        console.log(`[plugin-host] loaded plugin ${name} v${manifest.version || '?'} (points: ${(manifest.extensionPoints || []).join(', ') || 'none'})`)
+        console.log(`[plugin-host] loaded plugin ${name} v${manifest.version || '?'} api${manifest.apiVersion || '?'} (points: ${(manifest.extensionPoints || []).join(', ') || 'none'})`)
       } else {
         console.warn(`[plugin-host] ${name}/server.js has no register() export`)
       }
@@ -332,16 +441,26 @@ export async function shutdownPlugins(host) {
  * Discover all plugins under `plugins/<name>/plugin.json` without loading them.
  *
  * Returns metadata plus the current enabled state from settings (or the
- * manifest's enabledByDefault when the setting has never been persisted).
+ * manifest's enabledByDefault when the setting has never been persisted), the
+ * declared apiVersion + extensionPoints (for the management UI), and the latest
+ * health status (from reportStatus) when the host exposes getStatus().
  *
  * @param {object} host
  * @param {object} opts
  * @param {string} [opts.pluginsDir]
- * @returns {Promise<Array<{name:string, version:string, description:string, enabledByDefault:boolean, enabled:boolean}>>}
+ * @returns {Promise<Array<{name:string, version:string, apiVersion:string, description:string, enabledByDefault:boolean, enabled:boolean, extensionPoints:string[], status:object|null}>>}
  */
 export async function discoverPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
   const result = []
   if (!existsSync(pluginsDir)) return result
+
+  // Latest reported health per plugin name, for the management UI.
+  let statusByName = new Map()
+  try {
+    if (typeof host.getStatus === 'function') {
+      for (const s of host.getStatus()) statusByName.set(s.plugin, s)
+    }
+  } catch { /* getStatus is optional */ }
 
   const names = readdirSync(pluginsDir, { withFileTypes: true })
     .filter((d) => d.isDirectory())
@@ -368,9 +487,12 @@ export async function discoverPlugins(host, { pluginsDir = PLUGINS_DIR } = {}) {
     result.push({
       name,
       version: manifest.version || '?',
+      apiVersion: manifest.apiVersion || '',
       description: manifest.description || '',
       enabledByDefault: !!manifest.enabledByDefault,
       enabled: !!enabled,
+      extensionPoints: Array.isArray(manifest.extensionPoints) ? manifest.extensionPoints : [],
+      status: statusByName.get(name) || null,
     })
   }
 

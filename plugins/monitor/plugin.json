@@ -1,6 +1,7 @@
 {
   "name": "monitor",
   "version": "1.1.0",
+  "apiVersion": "0.9",
   "description": "Fleet monitor: one card per Linear issue + its worktree health. Reads plugins/monitor/lanes.json and pushes plugin:monitor:update events.",
   "enabledByDefault": true,
   "extensionPoints": [

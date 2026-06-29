@@ -1,6 +1,7 @@
 {
   "name": "fleet-term",
   "version": "1.0.0",
+  "apiVersion": "0.9",
   "description": "Attach to live tmux sessions from the fleet panel.",
   "enabledByDefault": true,
   "entry": "server.js",
