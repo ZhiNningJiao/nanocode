@@ -5,7 +5,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
-import { createPluginHost, loadPlugins, shutdownPlugins } from '../plugin-host.js'
+import { createPluginHost, loadPlugins, shutdownPlugins, discoverPlugins, HOST_API_VERSION, isApiCompatible, validatePluginManifest } from '../plugin-host.js'
 import { createStore } from '../store.js'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -233,4 +233,162 @@ describe('plugin-host', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // ── API versioning (P1) ─────────────────────────────────────────────────
+
+  it('exposes HOST_API_VERSION as a pre-1.0 string', () => {
+    assert.equal(typeof HOST_API_VERSION, 'string')
+    assert.equal(HOST_API_VERSION.startsWith('0.'), true, 'pre-1.0 (not yet frozen)')
+  })
+
+  it('isApiCompatible: exact match is compatible', () => {
+    assert.deepEqual(isApiCompatible('0.9', '0.9'), { compatible: true, reason: '' })
+  })
+
+  it('isApiCompatible: patch difference is compatible (pre-1.0)', () => {
+    assert.equal(isApiCompatible('0.9.1', '0.9').compatible, true)
+    assert.equal(isApiCompatible('0.9', '0.9.3').compatible, true)
+  })
+
+  it('isApiCompatible: pre-1.0 minor mismatch is incompatible', () => {
+    const r = isApiCompatible('0.8', '0.9')
+    assert.equal(r.compatible, false)
+    assert.match(r.reason, /minor mismatch/)
+  })
+
+  it('isApiCompatible: major mismatch is incompatible', () => {
+    const r = isApiCompatible('1.0', '0.9')
+    assert.equal(r.compatible, false)
+    assert.match(r.reason, /major mismatch/)
+  })
+
+  it('isApiCompatible: 1.x minor differences are compatible (additive)', () => {
+    assert.equal(isApiCompatible('1.2', '1.0').compatible, true)
+    assert.equal(isApiCompatible('1.0', '1.5').compatible, true)
+  })
+
+  it('isApiCompatible: missing/invalid version is incompatible (legacy)', () => {
+    const r = isApiCompatible(undefined, '0.9')
+    assert.equal(r.compatible, false)
+    assert.match(r.reason, /unversioned/)
+  })
+
+  // ── Manifest validation (P1) ─────────────────────────────────────────────
+
+  it('validatePluginManifest warns on incompatible apiVersion', () => {
+    const warns = captureWarns(() => validatePluginManifest('demo', { apiVersion: '0.8' }))
+    assert.ok(warns.some((w) => /API version incompatibility/.test(w)))
+    assert.ok(warns.some((w) => /demo/.test(w)))
+  })
+
+  it('validatePluginManifest does not warn for a compatible manifest', () => {
+    const warns = captureWarns(() =>
+      validatePluginManifest('demo', { apiVersion: '0.9', extensionPoints: ['host.on', 'host.emit'] }),
+    )
+    assert.equal(warns.length, 0)
+  })
+
+  it('validatePluginManifest warns on a phantom host extension point', () => {
+    const warns = captureWarns(() =>
+      validatePluginManifest('demo', { apiVersion: '0.9', extensionPoints: ['host.totallyMadeUp'] }),
+    )
+    assert.ok(warns.some((w) => /unknown extension point "host.totallyMadeUp"/.test(w)))
+  })
+
+  it('validatePluginManifest accepts host.registerWebSocket (real, not phantom)', () => {
+    const warns = captureWarns(() =>
+      validatePluginManifest('fleet-term', { apiVersion: '0.9', extensionPoints: ['host.registerWebSocket'] }),
+    )
+    assert.equal(warns.length, 0)
+  })
+
+  it('validatePluginManifest does not warn on ui.* points (validated client-side)', () => {
+    const warns = captureWarns(() =>
+      validatePluginManifest('demo', { apiVersion: '0.9', extensionPoints: ['ui.registerPanel', 'ui.registerSetting'] }),
+    )
+    assert.equal(warns.length, 0)
+  })
+
+  it('loadPlugins still loads a plugin whose apiVersion is incompatible (advisory)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nc-ver-'))
+    try {
+      mkdirSync(join(dir, 'badver'))
+      writeFileSync(join(dir, 'badver', 'plugin.json'), JSON.stringify({
+        name: 'badver', version: '1.0.0', apiVersion: '2.0', enabledByDefault: true,
+        extensionPoints: ['host.on'],
+      }))
+      writeFileSync(join(dir, 'badver', 'server.js'),
+        'export function register(host) { host._badVerLoaded = true }')
+      const loaded = await loadPlugins(host, { pluginsDir: dir })
+      assert.ok(loaded.includes('badver'))
+      assert.equal(host._badVerLoaded, true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('loadPlugins warns on a phantom extension point during load', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nc-phantom-'))
+    try {
+      mkdirSync(join(dir, 'phantom'))
+      writeFileSync(join(dir, 'phantom', 'plugin.json'), JSON.stringify({
+        name: 'phantom', version: '1.0.0', apiVersion: '0.9', enabledByDefault: true,
+        extensionPoints: ['host.on', 'host.doesNotExist'],
+      }))
+      writeFileSync(join(dir, 'phantom', 'server.js'),
+        'export function register(host) {}')
+      const warns = await captureWarns(async () => { await loadPlugins(host, { pluginsDir: dir }) })
+      assert.ok(warns.some((w) => /unknown extension point "host.doesNotExist"/.test(w)))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // ── discoverPlugins metadata (P1) ─────────────────────────────────────────
+
+  it('discoverPlugins returns apiVersion, extensionPoints, and status', async () => {
+    host.reportStatus('ok', 'healthy', { plugin: 'tts' })
+    store.setSetting('plugin_tts_enabled', true)
+    const plugins = await discoverPlugins(host, { pluginsDir: new URL('../../plugins', import.meta.url).pathname })
+    const tts = plugins.find((p) => p.name === 'tts')
+    assert.ok(tts, 'tts discovered')
+    assert.equal(tts.apiVersion, '0.9')
+    assert.ok(Array.isArray(tts.extensionPoints))
+    assert.ok(tts.extensionPoints.includes('host.on'))
+    assert.ok(tts.status, 'status merged from reportStatus')
+    assert.equal(tts.status.level, 'ok')
+    assert.equal(tts.status.message, 'healthy')
+  })
+
+  it('discoverPlugins returns null status for a plugin that never reported', async () => {
+    const plugins = await discoverPlugins(host, { pluginsDir: new URL('../../plugins', import.meta.url).pathname })
+    const fleet = plugins.find((p) => p.name === 'fleet-term')
+    assert.ok(fleet)
+    assert.equal(fleet.status, null)
+  })
 })
+
+/**
+ * Run `fn` while capturing console.warn output into a string array. Works for
+ * both sync and async fn (awaits a returned promise). Restores console.warn in
+ * a finally so a throw cannot leak the spy.
+ */
+function captureWarns(fn) {
+  const captured = []
+  const original = console.warn
+  console.warn = (...args) => { captured.push(args.map(String).join(' ')) }
+  try {
+    const ret = fn()
+    if (ret && typeof ret.then === 'function') {
+      return (async () => {
+        try { await ret } finally { console.warn = original }
+        return captured
+      })()
+    }
+    console.warn = original
+    return captured
+  } catch (err) {
+    console.warn = original
+    throw err
+  }
+}

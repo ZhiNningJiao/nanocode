@@ -2743,6 +2743,7 @@ body.workspace-active .landing-overlay { display: none; }
 }
 .plugin-manager-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -2755,13 +2756,40 @@ body.workspace-active .landing-overlay { display: none; }
   font-size: 13px;
   font-weight: 600;
   color: var(--fg-2, rgba(255,255,255,0.75));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .plugin-version {
   font-size: 10px;
   color: var(--fg-3, rgba(255,255,255,0.38));
   font-weight: 400;
-  margin-left: 4px;
+  margin-left: 2px;
 }
+.plugin-api-version {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-3, rgba(255,255,255,0.5));
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.plugin-health {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  border-radius: 4px;
+  padding: 1px 5px;
+  cursor: help;
+}
+.plugin-health-ok { color: #4ade80; background: rgba(74,222,128,0.12); }
+.plugin-health-warn { color: #facc15; background: rgba(250,204,21,0.12); }
+.plugin-health-error { color: #f87171; background: rgba(248,113,113,0.14); }
+.plugin-health-info { color: #60a5fa; background: rgba(96,165,250,0.12); }
+.plugin-health-unknown { color: var(--fg-3, rgba(255,255,255,0.35)); }
 .plugin-description {
   font-size: 11px;
   color: var(--fg-3, rgba(255,255,255,0.4));
@@ -2776,6 +2804,15 @@ body.workspace-active .landing-overlay { display: none; }
   cursor: pointer;
   white-space: nowrap;
 }
+.plugin-card-settings {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 4px;
+  border-top: 1px dashed rgba(255,255,255,0.06);
+  padding-top: 6px;
+}
+.plugin-card-settings:empty { display: none; }
+.plugin-card-setting { width: 100%; }
 .plugin-manager-toast {
   position: fixed;
   bottom: 16px;

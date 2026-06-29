@@ -1314,7 +1314,7 @@ async function init() {
   try {
     await loadClientPlugins(pluginUiHost)
     const pluginManagerContainer = document.getElementById('plugin-manager-container')
-    if (pluginManagerContainer) pluginUiHost.renderPluginManager(pluginManagerContainer)
+    if (pluginManagerContainer) await pluginUiHost.renderPluginManager(pluginManagerContainer)
     const pluginSettingsContainer = document.getElementById('plugin-settings-slots')
     if (pluginSettingsContainer) pluginUiHost.renderSettings(pluginSettingsContainer)
     // Mount any full panels registered by client plugins. Keep the mobile
