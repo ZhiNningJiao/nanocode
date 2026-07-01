@@ -9,6 +9,7 @@ import * as sessions from './sessions.js'
 import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
+import { createGitCompareRoutes } from './git-compare.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -684,6 +685,9 @@ export function createTerminalRoutes(store) {
   router.post('/api/projects/:id/tabs/:tabId/reset', (req, res) => {
     sessionController.handleReset(req, res)
   })
+
+  // ── Branch compare (git diff) ──────────────────────────────────────────────
+  router.use(createGitCompareRoutes(store))
 
   return { router, handleTerminalWs: sessionController.handleTerminalWs, handleTabsWs }
 }
