@@ -80,6 +80,17 @@ export function renameFsPath(projectId, from, to) {
   })
 }
 
+// ─── Git compare (branch diff) ────────────────────────────────────────────
+
+export function fetchGitBranches(projectId) {
+  return request(`/projects/${projectId}/git/branches`)
+}
+
+export function fetchGitCompare(projectId, base, head) {
+  const q = new URLSearchParams({ base, head })
+  return request(`/projects/${projectId}/git/compare?${q}`)
+}
+
 // ─── Settings ─────────────────────────────────────────────────────────────
 
 export function fetchSettings() {

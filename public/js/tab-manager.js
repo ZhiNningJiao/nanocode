@@ -317,7 +317,17 @@ export class TabManager {
       // most-recently-active claude tab (by jsonl mtime) for cross-port resume.
       const remembered = loadActiveId(this.projectId)
       if (remembered && serverById.has(remembered)) {
-        this.setActive(remembered)
+        // Only honour the remembered tab when it is itself a claude tab — i.e.
+        // the user was on a conversation. If the remembered tab is a bash/other
+        // tab, opening the project should auto-replay the latest claude
+        // conversation in the directory (the "点进目录自动回放该目录最近一次对话"
+        // requirement) rather than land on a bare terminal.
+        const rememberedTab = serverById.get(remembered)
+        if (rememberedTab && rememberedTab.type === 'claude') {
+          this.setActive(remembered)
+        } else {
+          this._autoSelectMostRecentClaudeTab(serverById)
+        }
       } else {
         // No remembered tab for this device: auto-select the most recently active
         // claude tab by querying the server (jsonl mtime). Falls back to tabs[0].
