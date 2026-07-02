@@ -346,12 +346,20 @@ export function createPluginUiHost({ notifyWs } = {}) {
 
   /**
    * Render plugin panels into the tab strip + panel container.
-   * A "Terminal" tab is always present; plugin panels are appended after it.
-   * `terminalLayout` is hidden when a plugin panel is active, and the panel
-   * container is hidden when Terminal is active.
    *
-   * This is incremental: calling it again only adds/removes panels that changed,
-   * preserving the DOM for panels that are already mounted.
+   * The top strip is now a *plugin-panel-only* tab bar — it never shows a
+   * "Terminal" tab. Terminal lives solely in its own pane (terminal-stack on
+   * desktop, the bottom mobile-pane-switch on phones). The strip appears only
+   * when ≥1 plugin panel is registered; with zero panels it is hidden so no
+   * empty bar/tail is left above the terminal.
+   *
+   * `showPanel('_terminal')` remains a valid *command* (it hides the plugin
+   * panels and reveals the terminal layout) even though there is no Terminal
+   * tab button — the mobile bottom switcher and a toggle-off click on the
+   * active plugin tab both invoke it to return to the terminal.
+   *
+   * This is incremental: calling it again only adds/removes panels that
+   * changed, preserving the DOM for panels that are already mounted.
    */
   function renderPanels(tabStrip, panelContainer, terminalLayout, opts = {}) {
     if (!tabStrip || !panelContainer) return
@@ -359,17 +367,6 @@ export function createPluginUiHost({ notifyWs } = {}) {
     _panelContainer = panelContainer
     _terminalLayout = terminalLayout
     _renderPanelsOpts = opts
-
-    if (panels.size === 0 && tabEls.size === 0) {
-      tabStrip.hidden = true
-      panelContainer.hidden = true
-      if (terminalLayout) terminalLayout.hidden = false
-      _showPanel = null
-      return
-    }
-
-    tabStrip.hidden = false
-    panelContainer.hidden = false
 
     function showPanel(id) {
       if (terminalLayout) terminalLayout.hidden = (id !== '_terminal')
@@ -382,13 +379,6 @@ export function createPluginUiHost({ notifyWs } = {}) {
       _activePanelId = id
     }
     _showPanel = showPanel
-
-    // Ensure Terminal tab exists.
-    if (!tabEls.has('_terminal')) {
-      const btn = _makeTab('Terminal', '_terminal')
-      tabStrip.appendChild(btn)
-      tabEls.set('_terminal', btn)
-    }
 
     // Add or keep plugin tabs/panels.
     for (const [id, panelDef] of panels) {
@@ -409,7 +399,6 @@ export function createPluginUiHost({ notifyWs } = {}) {
 
     // Remove tabs/panels for plugins that are no longer registered.
     for (const id of tabEls.keys()) {
-      if (id === '_terminal') continue
       if (!panels.has(id)) {
         tabEls.get(id)?.remove()
         tabEls.delete(id)
@@ -418,7 +407,20 @@ export function createPluginUiHost({ notifyWs } = {}) {
       }
     }
 
-    // If the active panel was removed, fall back to Terminal.
+    // Empty state: no plugin panels at all → hide the strip entirely (no
+    // empty tail above the terminal) and reveal the terminal layout.
+    if (panels.size === 0) {
+      tabStrip.hidden = true
+      panelContainer.hidden = true
+      if (terminalLayout) terminalLayout.hidden = false
+      _activePanelId = '_terminal'
+      return
+    }
+
+    tabStrip.hidden = false
+    panelContainer.hidden = false
+
+    // If the active panel was removed, fall back to the terminal view.
     if (_activePanelId !== '_terminal' && !panels.has(_activePanelId)) {
       showPanel('_terminal')
     } else {
@@ -432,7 +434,13 @@ export function createPluginUiHost({ notifyWs } = {}) {
     btn.className = 'panel-tab'
     btn.textContent = label
     btn.dataset.panel = id
-    btn.addEventListener('click', () => _setActivePanel(id))
+    // Clicking the already-active plugin tab toggles back to the terminal
+    // (there is no Terminal tab in the strip, so this is the desktop return
+    // path; on mobile the bottom switcher's Terminal button is the other).
+    btn.addEventListener('click', () => {
+      if (_activePanelId === id) _setActivePanel('_terminal')
+      else _setActivePanel(id)
+    })
     return btn
   }
 

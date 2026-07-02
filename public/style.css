@@ -5791,6 +5791,10 @@ body.workspace-active .landing-overlay { display: none; }
   scrollbar-width: none;
 }
 .panel-tab-strip::-webkit-scrollbar { display: none; }
+/* Match the plugin-panels/terminal-layout hide rule: [hidden] must win over
+   the display:flex above so an empty plugin strip leaves no 34px tail above
+   the terminal. */
+.panel-tab-strip[hidden] { display: none !important; }
 
 .panel-tab {
   flex-shrink: 0;
