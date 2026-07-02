@@ -52,7 +52,15 @@ const sessionKey = args.sessionKey || 'unknown'
 const cwd = args.cwd || process.cwd()
 let sessionId = args.sessionId || randomUUID()
 let turnCount = Number.isFinite(args.turnCount) ? args.turnCount : (args.sessionId ? 1 : 0)
-const explicitSessionId = args.explicitSessionId || !!args.sessionId
+// explicitSessionId decides create ({sessionId}) vs resume ({resume}) on the
+// first turn. It must reflect ONLY the controller's real intent, passed via the
+// --explicit-session-id flag (set from cs.explicitSessionId = store-chosen or
+// disk-recovered). The controller ALWAYS passes --session-id (it is the session
+// to use, whether creating or resuming), so `|| !!args.sessionId` wrongly forced
+// every fresh tab into resume mode → the SDK resumed a brand-new UUID that has
+// no conversation → "No conversation found" → the whole tab dead-ended. Trust
+// the flag alone, mirroring the controller's own useResumeOnFirstTurn logic.
+const explicitSessionId = !!args.explicitSessionId
 
 function writeSessionIdFile() {
   try {

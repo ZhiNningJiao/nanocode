@@ -742,6 +742,19 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
         return tmuxDriver.run(cs, userText, sessionKey, cwd).catch((err) => {
           console.error(`[claude:tmux] ${sessionKey} failed, falling back to SDK:`, err?.message || err)
           cs.claudeDriver = 'sdk'
+          // ── WEDGE FIX ──────────────────────────────────────────────────────
+          // runTmuxTurn sets cs.busy=true and turnCount++ BEFORE its try/finally,
+          // but the failure that lands here (ensureConnected / tmux new-session)
+          // throws outside that try — so the finally that clears busy never runs.
+          // Without this reset the SDK fallback below sees cs.busy===true and
+          // QUEUES the message ("Message queued: position 1") into a dead session
+          // that never drains, while cs.currentProc stays null. That is the exact
+          // wedge: every message queues (busy stuck true) and /interrupt returns
+          // "not busy" (currentProc null) — the user can neither send nor stop.
+          // Reset the leaked bookkeeping so the fallback actually RUNS this turn.
+          cs.busy = false
+          cs.currentProc = null
+          if (cs.turnCount > 0) cs.turnCount -= 1
           return sdkDriver.runSdkTurn(cs, userText, sessionKey, cwd)
         })
       }
@@ -1118,13 +1131,38 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
     // setting, so the user's message is never silently dropped.
     const andFlush = req.query.flush === '1' || req.body?.andFlush === true
     if (andFlush) cs._forceFlushQueue = true
+    const force = req.query.force === '1' || req.body?.force === true
     if (!cs.busy || !cs.currentProc) {
+      // ── WEDGE FIX (defense in depth) ─────────────────────────────────────
+      // Normally there is nothing to interrupt here. BUT a wedge can leave
+      // cs.busy=true with cs.currentProc=null (a driver set busy=true then threw
+      // before wiring currentProc). A force interrupt must ALWAYS be able to
+      // break that wedge — the user must never be locked out. Forcibly clear
+      // busy, settle the turn locally (synthetic result so the UI leaves the
+      // thinking state and the send button returns), and drain any messages the
+      // wedge stranded in the queue as a fresh turn. We NEVER touch the claude
+      // process here, so detached sub-agents survive (red line).
+      if (force && cs.busy) {
+        console.warn(`[claude:interrupt] ${sessionKey}: force-unwedge (busy=true, currentProc=null); settling turn locally, process untouched`)
+        cs.busy = false
+        cs.currentProc = null
+        _emitAgentStop(cs, sessionKey, { subtype: 'error' })
+        claudeBroadcast(cs, { type: 'result', subtype: 'error_during_execution' })
+        if (!Array.isArray(cs.queue)) cs.queue = []
+        const drained = cs.queue.splice(0)
+        cs._forceFlushQueue = false
+        if (drained.length > 0) {
+          const combinedText = drained.join('\n\n')
+          console.log(`[claude:interrupt] ${sessionKey}: draining ${drained.length} stranded queued message(s) as a fresh turn`)
+          setImmediate(() => dispatchClaudeTurn(cs, combinedText, sessionKey, cs.cwd))
+        }
+        return res.json({ ok: true, force: true, unwedged: true, andFlush })
+      }
       // Nothing running to interrupt. If a flush was requested and something is
       // queued server-side, there is no turn whose exit will drain it — but the
       // normal not-busy dispatch path will pick it up, so this is a no-op here.
       return res.json({ ok: false, reason: 'not busy', andFlush })
     }
-    const force = req.query.force === '1' || req.body?.force === true
     try {
       if (cs.claudeDriver === 'tmux') {
         tmuxDriver.interrupt(cs, force).then(() => {

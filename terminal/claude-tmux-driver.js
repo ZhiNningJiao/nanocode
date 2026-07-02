@@ -14,6 +14,7 @@ import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { readActiveTeam, resolveTeamEnv } from './team-env.js'
 
 const TMUX_BIN = process.env.NANOCODE_TMUX_BIN || '/usr/bin/tmux'
 const SOCKET_DIR = `${process.env.HOME}/.nanocode/tmux-sessions`
@@ -102,9 +103,25 @@ function launchBridge(sessionKey, opts) {
   const args = [
     'new-session',
     '-d',
+    // ── Dual-team config dir ────────────────────────────────────────────────
+    // tmux runs new-session commands in the tmux SERVER's environment (frozen
+    // when that server first started), NOT the caller's — so the bridge would
+    // otherwise miss CLAUDE_CONFIG_DIR and resume/auth under the wrong team's
+    // dir ("No conversation found" for sessions that live under the active
+    // team). Pin it explicitly with -e so the bridge matches the SDK path's
+    // wrapSpawnWithTeamEnv exactly. (This applies the EXISTING team resolution;
+    // it does not change dual-team behaviour.)
+    ...(opts.configDir ? ['-e', `CLAUDE_CONFIG_DIR=${opts.configDir}`] : []),
     '-s', name,
     '-n', 'nanocode-claude',
-    'exec', 'node', BRIDGE_SCRIPT,
+    // NOTE: no bare 'exec' here. tmux runs the trailing argv directly with
+    // execvp (there is NO shell to interpret builtins), so a literal 'exec'
+    // element made tmux look for a program named "exec" → ENOENT → the bridge
+    // session died instantly → the socket never appeared → EVERY turn silently
+    // fell back to the SDK path (where the interrupt/queue wedge lived). Running
+    // `node` as the session's leading process already gives us what `exec`
+    // intended: the bridge is the tmux pane's main process.
+    'node', BRIDGE_SCRIPT,
     ...formatArg('--socket', socketPath),
     ...formatArg('--session-key', sessionKey),
     ...formatArg('--session-id', opts.sessionId || randomUUID()),
@@ -278,10 +295,18 @@ function getBridgeClient(sessionKey, opts) {
 }
 
 function buildOptions(cs, cwd, store) {
+  // Pin the config dir the tmux-launched bridge must use, mirroring the SDK
+  // path's wrapSpawnWithTeamEnv EXACTLY: team2 → its dir; team1 (or unset) →
+  // whatever CLAUDE_CONFIG_DIR the nanocode process itself inherited (the SDK
+  // path doesn't override in that case, so neither do we). undefined → omit -e
+  // and let the bridge inherit the tmux-server env (claude's ~/.claude default).
+  const teamEnv = resolveTeamEnv(readActiveTeam(store))
+  const configDir = teamEnv?.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || undefined
   return {
     sessionId: cs.claudeSessionId,
     turnCount: cs.turnCount,
     explicitSessionId: cs.explicitSessionId,
+    configDir,
     cwd,
     model: store.getSetting('claude_model') || undefined,
     effort: store.getSetting('claude_effort') || undefined,
