@@ -552,13 +552,17 @@ export function createClaudeSdkDriver({
   // One persistent query() per session tab. Messages are pushed into the stream;
   // result events mark the end of each turn.
 
-  function buildStreamingOptions(cs, cwd) {
+  // useResume is decided by the CALLER (runStreamingSdkTurn) using the turn
+  // count captured BEFORE it increments turnCount. We must NOT recompute it from
+  // cs.turnCount here: by the time this runs the caller has already done
+  // `cs.turnCount += 1`, so a genuine first turn would look like turnCount=1 and
+  // we'd wrongly `resume` a brand-new session id → claude errors "No conversation
+  // found" and the fresh tab can never start. Trust the caller's decision.
+  function buildStreamingOptions(cs, cwd, useResume) {
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
     const sdkPermissionMode = resolvePermissionMode(store)
-    const isFirstTurn = cs.turnCount === 0
-    const useResumeOnFirstTurn = !isFirstTurn || (cs.explicitSessionId && !cs.skipAutoResume)
-    const sessionOptions = useResumeOnFirstTurn
+    const sessionOptions = useResume
       ? { resume: cs.claudeSessionId }
       : { sessionId: cs.claudeSessionId }
     const executableOverride = getClaudeCodeExecutableOverride()
@@ -609,13 +613,14 @@ export function createClaudeSdkDriver({
   }
 
   // Create (or rebuild after crash) the streaming session for cs.
-  function ensureStreamingSession(cs, sessionKey, cwd) {
+  // useResume: caller-supplied resume/create decision (see buildStreamingOptions).
+  function ensureStreamingSession(cs, sessionKey, cwd, useResume) {
     if (cs._streamingSession?.isAlive) return cs._streamingSession
 
     // Tear down any dead session.
     teardownStreamingSession(cs)
 
-    const options = buildStreamingOptions(cs, cwd)
+    const options = buildStreamingOptions(cs, cwd, useResume)
     const baseSpawn = options.spawnClaudeCodeProcess || _persistentSpawnHook
     options.spawnClaudeCodeProcess = (opts) => {
       const proxy = wrapSpawnWithTeamEnv(baseSpawn, cs)(opts)
@@ -697,7 +702,11 @@ export function createClaudeSdkDriver({
     // we track turn result in a flag set by the sendAndWait resolution.
 
     try {
-      const ss = ensureStreamingSession(cs, sessionKey, cwd)
+      // Pass the resume decision computed from the PRE-increment isFirstTurn
+      // above — buildStreamingOptions must not recompute it (turnCount has
+      // already been bumped). A fresh first turn → useResumeOnFirstTurn=false →
+      // create with {sessionId}; a resumed/continued tab → true → {resume}.
+      const ss = ensureStreamingSession(cs, sessionKey, cwd, useResumeOnFirstTurn)
 
       // Set cs.currentProc so interrupt() from routes.js can stop the turn.
       // Both soft (SIGINT) and force (SIGKILL) only stop the MAIN turn via
