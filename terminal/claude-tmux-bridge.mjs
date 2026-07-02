@@ -119,6 +119,16 @@ function broadcastSystem(subtype, text, extras = {}) {
   broadcast({ type: 'system', subtype, text, ...extras })
 }
 
+// Raw protocol frame (turn-done / turn-error), NOT wrapped in {type:'event'}.
+function broadcastRaw(obj) {
+  const line = JSON.stringify(obj) + '\n'
+  for (const client of _clients) {
+    if (!client.destroyed) {
+      try { client.write(line) } catch {}
+    }
+  }
+}
+
 async function dispatchTurn(text) {
   await driver.runSdkTurn(cs, text, sessionKey, cwd)
 }
@@ -189,9 +199,15 @@ function handleInterrupt(msg) {
 async function handleUserMessage(text) {
   try {
     await dispatchTurn(text)
+    // The controller's runTmuxTurn awaits this frame to settle the turn promise
+    // and clear cs.busy. Without it the server-side busy flag stayed true forever
+    // after the first turn, so any later message sent without a force-interrupt
+    // (the UI's send button masks this) queued into a session that never drains.
+    broadcastRaw({ type: 'turn-done' })
   } catch (err) {
     broadcastSystem('tmux_turn_error', err?.message || String(err))
     broadcast({ type: 'result', subtype: 'error', session_id: cs.claudeSessionId })
+    broadcastRaw({ type: 'turn-error', error: err?.message || String(err) })
   }
 }
 
