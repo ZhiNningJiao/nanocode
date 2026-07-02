@@ -780,7 +780,14 @@ export function createClaudeSessionController({ store, home, recentAgents, plugi
       // Track whether the sessionId came from store metadata (user-chosen, explicit)
       // vs was generated fresh because the tab had no stored session (implicit/new tab).
       const storedSessionId = tab?.claudeSessionId || null
-      const explicitSessionId = storedSessionId !== null
+      // createTab pre-assigns a random claudeSessionId with claudeSessionStarted=false
+      // (store.js createTab): that UUID has no conversation behind it yet, so it must
+      // NOT count as user-chosen. Treating it as explicit made every fresh tab
+      // --resume a nonexistent session ("No conversation found") on its first turn.
+      // Tabs persisted before the flag existed lack claudeSessionStarted entirely
+      // (undefined !== false), so they keep the resume behaviour; tabs with real
+      // history are also covered by the disk-recovery path below (diskRecovered).
+      const explicitSessionId = storedSessionId !== null && tab?.claudeSessionStarted !== false
       let claudeSessionId = storedSessionId || randomUUID()
 
       const mainSessionId = process.env.CLAUDE_CODE_SESSION_ID

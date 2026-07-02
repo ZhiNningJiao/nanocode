@@ -345,10 +345,18 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn, onTu
 
     cs.busy = true
     cs.currentProc = null
+    // The bridge derives isFirstTurn from opts.turnCount (launchBridge forwards
+    // it as --turn-count), so it must see the PRE-increment value: passing the
+    // post-increment count made a genuine first turn look like turn 2, and the
+    // bridge --resume'd a brand-new UUID → "No conversation found". The
+    // increment itself must stay before ensureConnected — the controller's
+    // tmux-failure catch decrements it when this function throws there.
+    const preTurnCount = cs.turnCount
     cs.turnCount += 1
     if (onTurnStart) try { onTurnStart(cs, sessionKey) } catch {}
 
     const opts = buildOptions(cs, cwd, store)
+    opts.turnCount = preTurnCount
     const client = getBridgeClient(sessionKey, opts)
     await client.ensureConnected()
 
