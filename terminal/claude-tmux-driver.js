@@ -110,9 +110,25 @@ function launchBridge(sessionKey, opts) {
   const args = [
     'new-session',
     '-d',
+    // ── Dual-team config dir ────────────────────────────────────────────────
+    // tmux runs new-session commands in the tmux SERVER's environment (frozen
+    // when that server first started), NOT the caller's — so the bridge would
+    // otherwise miss CLAUDE_CONFIG_DIR and resume/auth under the wrong team's
+    // dir ("No conversation found" for sessions that live under the active
+    // team). Pin it explicitly with -e so the bridge matches the SDK path's
+    // wrapSpawnWithTeamEnv exactly. (This applies the EXISTING team resolution;
+    // it does not change dual-team behaviour.)
+    ...(opts.configDir ? ['-e', `CLAUDE_CONFIG_DIR=${opts.configDir}`] : []),
     '-s', name,
     '-n', 'nanocode-claude',
-    'exec', 'node', BRIDGE_SCRIPT,
+    // NOTE: no bare 'exec' here. tmux runs the trailing argv directly with
+    // execvp (there is NO shell to interpret builtins), so a literal 'exec'
+    // element made tmux look for a program named "exec" → ENOENT → the bridge
+    // session died instantly → the socket never appeared → EVERY turn silently
+    // fell back to the SDK path (where the interrupt/queue wedge lived). Running
+    // `node` as the session's leading process already gives us what `exec`
+    // intended: the bridge is the tmux pane's main process.
+    'node', BRIDGE_SCRIPT,
     ...formatArg('--socket', socketPath),
     ...formatArg('--session-key', sessionKey),
     ...formatArg('--session-id', opts.sessionId || randomUUID()),
@@ -320,15 +336,21 @@ function getBridgeClient(sessionKey, opts) {
 }
 
 function buildOptions(cs, cwd, store, home) {
+  // 需求1 + 需求5 + bridge-fix(9e4625f): resolve the team config dir ONCE via our
+  // own claude-env helper (same path the SDK driver uses → tmux & SDK paths can
+  // never disagree on team). Used two ways below: (1) `-e CLAUDE_CONFIG_DIR` pin
+  // on the tmux new-session so the bridge process env matches the caller's team
+  // (tmux server env is frozen, not the caller's, so without this the bridge
+  // resumes under the wrong team dir → "No conversation found"); (2) the
+  // `--claude-config-dir` arg the bridge forwards to its inner SDK spawn env.
+  const configDir = resolveClaudeConfigDir({ cs, store, home })
   return {
     sessionId: cs.claudeSessionId,
     turnCount: cs.turnCount,
     explicitSessionId: cs.explicitSessionId,
+    configDir,
     cwd,
-    // 需求1 + 需求5: resolve the team config dir (per-tab cross-team override
-    // → global Team setting → default ~/.claude) and forward it to the bridge
-    // so the SDK driver running inside tmux honours CLAUDE_CONFIG_DIR too.
-    claudeConfigDir: resolveClaudeConfigDir({ cs, store, home }),
+    claudeConfigDir: configDir,
     model: store.getSetting('claude_model') || undefined,
     effort: store.getSetting('claude_effort') || undefined,
     // 需求8: forward the resolved persona prompt so the bridge's SDK driver
