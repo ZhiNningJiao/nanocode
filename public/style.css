@@ -2629,6 +2629,24 @@ body.workspace-active .landing-overlay { display: none; }
 .mute-btn.muted { color: var(--text-error, #f44336); opacity: 0.75; }
 .mute-btn.muted:hover { opacity: 1; }
 
+/* Live model badge — which Claude model is actually replying on this tab */
+.model-badge {
+  align-self: center;
+  flex-shrink: 0;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  color: var(--text-secondary, #9aa0a6);
+  background: var(--bg-elevated, rgba(255,255,255,0.04));
+  user-select: none;
+}
+
 /* Language selector in settings */
 .settings-lang-row {
   display: flex;

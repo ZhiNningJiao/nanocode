@@ -385,3 +385,22 @@ commit 03beb00
 - 验证：browse 渲染测试截图 /tmp/favicon-badge-test.png，左=logo+badge(3) 右=原始logo，SVG drawImage 成功
 - 测试：npm test 71/71 pass，run-favicon.log 干净，curl 3001/api/health 200
 - 截图：/tmp/favicon-badge-test.png
+
+## 2026-07-02 14:40 [Block模式发消息假成功修复 + fable5实时模型显示]
+- 症状：主人在 Block 模式发消息有气泡但 agent 无回复（发了个寂寞），9475 所有 resume 旧会话的 tab 全中招
+- 根因：tmux server（4月22 在 Cursor sandbox 里启动，pid 238085）冻结了 HOME=/home/zhiningjiao；
+  `tmux new-session` 起的 bridge 继承该错误 HOME → claude 去 /home/zhiningjiao/.claude 找会话 →
+  真会话在 /storage/home/zhiningjiao/.claude → "No conversation found" → bridge 广播 error result
+  （Block UI 不渲染）+ turn-done → server 侧 turn "成功"结算 → 用户看到假成功。
+  62ad4f4 只钉了 CLAUDE_CONFIG_DIR（且仅 team2 时），没钉 HOME，漏了这个口子
+- 修复：
+  1. launchBridge 永远 `-e HOME=${process.env.HOME}`（tmux 3.2a 支持），bridge/claude 子进程与 server 对齐
+  2. bridge 协议扩展：user 帧带 model/effort，/model 切换对长活 bridge 真生效（空闲时 teardown 重建流式会话，--resume 同会话上下文不丢）
+  3. UI：#model-badge 实时显示实际回复模型（message_start/assistant 事件的 message.model，nanocode:claude-model 事件桥接），/model picker 更新为 fable-5/opus-4-8/sonnet-4-6/haiku-4-5
+  4. 善后：kill 5 个坏 HOME bridge tmux session；/home/.claude 下搁浅的闲置会话拷回 /storage 侧
+- 验证（全部真实端到端）：
+  - 隔离 bridge repro：resume 拷贝会话 + fable-5 → assistant 流式"收到" + result success ✓
+  - 真实 9475 ws → 主人坏 tab 3ab03d8b → resume 196272ad(1.7MB) → "收到" + success，jsonl 落盘增长 ✓
+  - 新 bridge /proc 环境 HOME=/storage ✓
+  - playwright 无头：#/local/zhiningjiao 徽章显示 "opus-4-8"，0 console error，截图留存 ✓
+- 注意：3808addd 会话仍在 /home/.claude 侧由老 bridge 自洽运行，其 bridge 死后 resume 会走 --continue 兜底

@@ -729,6 +729,37 @@ function setupChatInput() {
     }
   })
 
+  // ── Live model badge ─────────────────────────────────────────────────────
+  // Shows which Claude model is actually replying on the active tab, updated in
+  // real time from nanocode:claude-model (dispatched by the block renderer on
+  // every assistant message_start — so mid-session /model switches show up on
+  // the very next turn). One model remembered per tab; tab switches re-render.
+  const modelBadgeEl = document.getElementById('model-badge')
+  const _modelByTab = new Map()
+
+  function _updateModelBadge() {
+    if (!modelBadgeEl) return
+    const activeId = tabManager ? tabManager.activeId : null
+    const model = (isClaudeTab && activeId) ? _modelByTab.get(activeId) : null
+    if (model) {
+      // "claude-fable-5" → "fable-5": keep the pill short (mobile-friendly).
+      modelBadgeEl.textContent = model.replace(/^claude-/, '')
+      modelBadgeEl.title = model
+      modelBadgeEl.hidden = false
+    } else {
+      modelBadgeEl.hidden = true
+    }
+  }
+
+  document.addEventListener('nanocode:claude-model', (e) => {
+    const { tabId, model } = e.detail || {}
+    if (!tabId || !model) return
+    _modelByTab.set(tabId, model)
+    _updateModelBadge()
+  })
+
+  document.addEventListener('nanocode:tab-active', () => _updateModelBadge())
+
   // Listen for subagent-phase transitions.
   // When the main Claude turn has handed off to a subagent (Task tool) and is now
   // idle-waiting, active=true. The outer turn is still in progress (isClaudeThinking
@@ -1231,11 +1262,9 @@ function setupChatInput() {
   // Available Claude models for the picker (canonical list; kept short and real).
   const _MODEL_PICKER_LIST = [
     { id: 'claude-fable-5',          label: 'Claude Fable 5',          hint: 'Latest · recommended' },
-    { id: 'claude-opus-4-5',         label: 'Claude Opus 4.5',         hint: 'Powerful · complex tasks' },
-    { id: 'claude-sonnet-4-5',       label: 'Claude Sonnet 4.5',       hint: 'Balanced' },
+    { id: 'claude-opus-4-8',         label: 'Claude Opus 4.8',         hint: 'Powerful · complex tasks' },
+    { id: 'claude-sonnet-4-6',       label: 'Claude Sonnet 4.6',       hint: 'Balanced' },
     { id: 'claude-haiku-4-5',        label: 'Claude Haiku 4.5',        hint: 'Fast · lightweight' },
-    { id: 'claude-opus-4',           label: 'Claude Opus 4',           hint: 'Advanced reasoning' },
-    { id: 'claude-sonnet-4',         label: 'Claude Sonnet 4',         hint: 'Reliable workhorse' },
     { id: '',                        label: '(CLI default)',            hint: 'Use whatever claude CLI defaults to' },
   ]
 
