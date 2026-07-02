@@ -782,8 +782,16 @@ export class ClaudeBlockRenderer {
     // Do NOT call showInterruptBlock() — CLI emits result/error_during_execution via stdout.
     if (data === '\x03') {
       if (this.projectId && this.tabId) {
-        fetch(`/api/projects/${this.projectId}/tabs/${this.tabId}/interrupt`, { method: 'POST' })
-          .catch(() => {})
+        // Always force-interrupt so the backend arms its turn-unlock watchdog.
+        // A soft-only q.interrupt() can be unresponsive and wedge the UI; force
+        // guarantees the turn settles (real or watchdog-synthetic result) and the
+        // send button comes back. Sub-agents are never killed (streaming mode
+        // maps force to q.interrupt(), never q.close()).
+        fetch(`/api/projects/${this.projectId}/tabs/${this.tabId}/interrupt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: true }),
+        }).catch(() => {})
       }
     }
     // Ctrl+L: visually clear the scroll area

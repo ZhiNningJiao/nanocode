@@ -609,9 +609,12 @@ function setupChatInput() {
     const isActiveBg = activeTabId && _bgTabIds.has(activeTabId)
     if (isClaudeTab && thinking && !isActiveBg) {
       chatInput.classList.add('claude-thinking')
-      // Restore stop button to default icon/state
+      // During thinking the send key becomes a strong-interrupt key (停止键).
+      // One click = force interrupt: stops the main turn + arms a backend
+      // watchdog that guarantees the UI unlocks (send button returns) even if
+      // the SDK interrupt is unresponsive. Sub-agents are never killed.
       stopBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>`
-      stopBtn.title = 'Stop Claude (interrupt)'
+      stopBtn.title = '强中止当前回合（点击=强打断，停主回合不杀后台 sub-agent）'
       stopBtn.disabled = false
       stopBtn.hidden = false
       bgBtn.hidden = false
@@ -758,17 +761,19 @@ function setupChatInput() {
     }
   })
 
-  // ── Interrupt helper (shared by Stop btn, Esc, Ctrl+C) ─────────────────────
-  // Single Esc / Stop interrupts the current turn (soft, SIGINT → q.interrupt()).
-  // A second Esc / Stop while still thinking — or any call with {force:true} —
-  // escalates to a force interrupt that is guaranteed to unlock the UI even if
-  // the soft interrupt was unresponsive. Force stops ONLY the main turn; the
-  // backend keeps the claude process and its background sub-agents alive.
+  // ── Interrupt helper (shared by Stop btn, Esc, "立刻发送") ──────────────────
+  // ALWAYS force-interrupt. A soft-only q.interrupt() can be unresponsive — the
+  // exact failure that wedges the UI ("打不断、也发不了信息"): the turn never
+  // settles, isClaudeThinking never clears, the send button stays hidden, and
+  // repeated soft clicks keep no-op'ing. force calls q.interrupt() AND arms a
+  // backend watchdog (~FORCE_UNLOCK_MS) that settles the turn locally even when
+  // the SDK ignores the interrupt, so the UI is GUARANTEED to unlock and the
+  // send button comes back. Force stops ONLY the main turn; streaming mode maps
+  // force to q.interrupt() (never q.close()), so the claude process + its
+  // background sub-agents survive (red line: 打断只停主回合，绝不杀 sub-agent).
   // Posts /interrupt to the backend. Does NOT call updateThinkingState(false)
-  // — that only happens when the WS 'result' event arrives, preserving the
-  // _pendingQueue protection (b67a2b6).
-  let _interruptArmedUntil = 0   // timestamp: until when a 2nd press escalates to force
-  const _INTERRUPT_ESCALATE_MS = 2500
+  // — that only happens when the WS 'result' event (real or watchdog-synthetic)
+  // arrives, preserving the _pendingQueue protection (b67a2b6).
 
   async function doInterrupt(opts = {}) {
     if (!tabManager) return
@@ -777,12 +782,9 @@ function setupChatInput() {
     const projectId = tabManager.projectId
     const tabId = activeTab.id
 
-    // Decide soft vs force: explicit opt, or a quick second press after a soft one.
-    const now = Date.now()
-    const force = opts.force === true || (_interruptArmedUntil > 0 && now < _interruptArmedUntil)
-    // After a soft interrupt, arm an escalation window so the next press forces.
-    _interruptArmedUntil = force ? 0 : now + _INTERRUPT_ESCALATE_MS
-
+    // Always force — see header comment. opts.andFlush is honoured for the
+    // "立刻发送" caller so the queued message flushes after the interrupt.
+    const force = true
     const body = JSON.stringify({ force, andFlush: opts.andFlush === true })
     try {
       await fetch(`/api/projects/${projectId}/tabs/${tabId}/interrupt`, {
@@ -795,24 +797,18 @@ function setupChatInput() {
     // Do NOT call showInterruptBlock() here — CLI will emit result/error_during_execution
     // via stdout which nanocode transparently forwards. Let the WS event drive UI state.
 
-    // Visual: keep stopBtn visible until the real WS result event triggers
-    // updateThinkingState(false). Do NOT hide stopBtn or show sendBtn yet —
-    // this prevents premature flush of _pendingQueue.
+    // Visual: keep stopBtn visible until the real WS result event (or the backend
+    // force-unlock watchdog's synthetic result) triggers updateThinkingState(false).
+    // Do NOT hide stopBtn or show sendBtn yet — this prevents premature flush of
+    // _pendingQueue. The watchdog guarantees this wait is bounded (~4s max), so the
+    // UI can never wedge here: after the interrupt the send button always returns.
     chatInput.classList.remove('claude-thinking')
     stopBtn.disabled = false
     stopBtn.hidden = false
+    stopBtn.title = '强中止中…（停主回合，不杀后台 sub-agent；回合结束自动恢复发送）'
     bgBtn.hidden = true   // bg button not needed once user chose to interrupt
     sendBtn.hidden = true
-    // Hint that a second press will force-stop (until the escalation window ends).
-    if (!force) {
-      stopBtn.classList.add('claude-stop-armed')
-      stopBtn.title = '再次点击 / 再按 Esc = 强制中止（只停主回合，不杀后台 sub-agent）'
-      setTimeout(() => {
-        if (Date.now() >= _interruptArmedUntil) stopBtn.classList.remove('claude-stop-armed')
-      }, _INTERRUPT_ESCALATE_MS + 50)
-    } else {
-      stopBtn.classList.remove('claude-stop-armed')
-    }
+    stopBtn.classList.remove('claude-stop-armed')
   }
 
   // Stop button: POST interrupt to backend (2nd click escalates to force).
