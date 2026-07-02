@@ -86,13 +86,27 @@ const cs = {
   _replayUserTextCounts: new Map(),
 }
 
+// Model/effort start from the launch args but are MUTABLE: the controller
+// forwards the current claude_model / claude_effort setting on every 'user'
+// frame, so a /model switch reaches long-lived bridges too (the old behaviour
+// froze --model at launch → "Takes effect on next message" was a lie for
+// persistent tmux tabs). When they change between turns, the streaming session
+// is torn down and rebuilt with --resume on the same session id, so the
+// conversation context survives the model swap.
+let currentModel = args.model || null
+let currentEffort = args.effort || null
+// What the LIVE streaming session was built with (null until first build).
+let appliedModel = currentModel
+let appliedEffort = currentEffort
+
 // Minimal store implementation for the SDK driver running inside the bridge.
-// It mirrors the settings the main nanocode process would read, but frozen at
-// bridge launch time so the bridge behaves consistently across reconnects.
+// It mirrors the settings the main nanocode process would read; model/effort
+// are live-updatable (see above), the rest frozen at bridge launch time so the
+// bridge behaves consistently across reconnects.
 const store = {
   getSetting(key) {
-    if (key === 'claude_model') return args.model || null
-    if (key === 'claude_effort') return args.effort || null
+    if (key === 'claude_model') return currentModel
+    if (key === 'claude_effort') return currentEffort
     // The SDK driver resolves global_permission to SDK permissionMode values.
     if (key === 'global_permission') return args.permissionMode || 'full-auto'
     if (key === 'claude_session_fallback') return args.sessionFallback || 'continue'
@@ -198,6 +212,19 @@ function handleInterrupt(msg) {
 
 async function handleUserMessage(text) {
   try {
+    // Apply a pending model/effort switch before starting the turn. Only when
+    // idle — tearing down a live streaming session mid-turn would kill the
+    // active generation. If we're busy the message queues as usual and the
+    // switch applies on the next idle turn.
+    if (!cs.busy && (currentModel !== appliedModel || currentEffort !== appliedEffort)) {
+      if (cs._streamingSession) {
+        try { cs._streamingSession.close() } catch {}
+        cs._streamingSession = null
+      }
+      appliedModel = currentModel
+      appliedEffort = currentEffort
+      broadcastSystem('tmux_model_switch', `Rebuilding session with model=${currentModel || '(CLI default)'} effort=${currentEffort || '(default)'}`)
+    }
     await dispatchTurn(text)
     // The controller's runTmuxTurn awaits this frame to settle the turn promise
     // and clear cs.busy. Without it the server-side busy flag stayed true forever
@@ -224,6 +251,10 @@ const server = createServer((socket) => {
       let msg
       try { msg = JSON.parse(line) } catch { continue }
       if (msg.type === 'user' && typeof msg.text === 'string' && msg.text.trim()) {
+        // Live model/effort sync: the controller sends the CURRENT settings on
+        // every user frame (older controllers omit them — keep launch values).
+        if ('model' in msg) currentModel = msg.model || null
+        if ('effort' in msg) currentEffort = msg.effort || null
         handleUserMessage(msg.text.trim())
       } else if (msg.type === 'interrupt') {
         handleInterrupt(msg)

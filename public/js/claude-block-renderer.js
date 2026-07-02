@@ -1403,6 +1403,25 @@ export class ClaudeBlockRenderer {
       this._setSubagentPhase(true)
     }
 
+    // ── Live model tracking ──────────────────────────────────────────────────
+    // Every assistant message (and its message_start stream event) carries the
+    // model that is ACTUALLY generating it (e.g. "claude-fable-5"). Surface it
+    // so the input bar can show which model is replying in real time — including
+    // mid-session /model switches, and after replay (last event wins).
+    {
+      const model =
+        (event.type === 'assistant' && event.message?.model) ||
+        (event.type === 'stream_event' && event.event?.type === 'message_start' && event.event.message?.model) ||
+        null
+      // Subagent events excluded: parent_tool_use_id → not the main turn's model.
+      if (model && !event.parent_tool_use_id && model !== this._currentModel) {
+        this._currentModel = model
+        document.dispatchEvent(new CustomEvent('nanocode:claude-model', {
+          detail: { tabId: this.tabId, model },
+        }))
+      }
+    }
+
     switch (event.type) {
       case 'system':
         this._handleSystem(event)
