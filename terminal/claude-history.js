@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { extractSummary, relTimeFromMtime } from './recent-agents.js'
 
 export function cwdToClaudeProjectDir(home, cwd) {
   const encoded = cwd.replace(/\//g, '-')
@@ -404,6 +405,103 @@ export function findNewestJsonl(projectDir) {
 }
 
 /**
+ * Count user-message rows in a jsonl by scanning for the `"type":"user"` marker.
+ * Uses a buffered byte scan with a small overlap tail so a marker straddling a
+ * chunk boundary is not missed. Reads at most `capBytes` (default 16 MB) so a
+ * pathological 70 MB+ file does not block the picker; for files larger than the
+ * cap the count is approximate (labelled so by the caller via byteSize).
+ */
+const USER_MSG_NEEDLE = Buffer.from('"type":"user"')
+const COUNT_CAP_BYTES = 16 * 1024 * 1024
+
+export function countUserMessages(jsonlPath, capBytes = COUNT_CAP_BYTES) {
+  let fd
+  try {
+    fd = openSync(jsonlPath, 'r')
+  } catch {
+    return 0
+  }
+  let size = 0
+  try { size = statSync(jsonlPath).size } catch {}
+  const readCap = Math.min(size, capBytes)
+  const chunkBuf = Buffer.allocUnsafe(64 * 1024)
+  let pos = 0
+  let count = 0
+  // Tail keeps needle.length-1 bytes so a marker straddling a chunk boundary is
+  // still found, but a marker can never live entirely in the tail (which would
+  // cause a double count on the next iteration).
+  let tail = Buffer.alloc(0)
+  try {
+    while (pos < readCap) {
+      const n = readSync(fd, chunkBuf, 0, Math.min(chunkBuf.length, readCap - pos), pos)
+      if (n <= 0) break
+      const chunk = chunkBuf.subarray(0, n)
+      const combined = tail.length ? Buffer.concat([tail, chunk]) : chunk
+      let idx = combined.indexOf(USER_MSG_NEEDLE)
+      while (idx !== -1) {
+        count++
+        idx = combined.indexOf(USER_MSG_NEEDLE, idx + USER_MSG_NEEDLE.length)
+      }
+      const keep = USER_MSG_NEEDLE.length - 1
+      tail = combined.length > keep ? combined.subarray(combined.length - keep) : combined
+      pos += n
+    }
+  } catch {} finally {
+    try { closeSync(fd) } catch {}
+  }
+  return count
+}
+
+/**
+ * List the most recent "longer" conversations for a project's cwd.
+ *
+ * Used by the Claude Code tab picker (需求3 Auto Resume): when the user opens a
+ * new Claude Code tab we show up to `limit` recent conversations sorted by length
+ * (byte size = 字节数, an explicit sort criterion in the requirement) so they can
+ * pick one to 继续 (resume) or start a 开启新对话 (fresh). Each entry carries a
+ * summary (first user message), an approximate user-message count, byte size,
+ * mtime and a relative time string — everything the picker needs without a second
+ * round-trip.
+ *
+ * Returns an array of { sessionId, summary, messageCount, byteSize, mtime, relTime }.
+ */
+export function scanRecentConversations(home, cwd, limit = 5, now = Date.now()) {
+  const projectDir = cwdToClaudeProjectDir(home, cwd)
+  if (!existsSync(projectDir)) return []
+  let files
+  try { files = readdirSync(projectDir) } catch { return [] }
+  const entries = []
+  for (const f of files) {
+    if (!f.endsWith('.jsonl')) continue
+    const fullPath = join(projectDir, f)
+    try {
+      const st = statSync(fullPath)
+      // Skip empty/trivial files (a brand-new session with no turns yet).
+      if (st.size < 200) continue
+      entries.push({
+        sessionId: f.replace(/\.jsonl$/, ''),
+        fullPath,
+        mtimeMs: st.mtimeMs,
+        byteSize: st.size,
+      })
+    } catch {}
+  }
+  // "较长" = longer conversation. Sort by byte size desc (字节数, per the
+  // requirement), tiebreak by most-recent mtime so equally-sized files prefer
+  // the fresher one.
+  entries.sort((a, b) => b.byteSize - a.byteSize || b.mtimeMs - a.mtimeMs)
+  const top = entries.slice(0, limit)
+  return top.map((e) => ({
+    sessionId: e.sessionId,
+    summary: extractSummary(e.fullPath),
+    messageCount: countUserMessages(e.fullPath),
+    byteSize: e.byteSize,
+    mtime: new Date(e.mtimeMs).toISOString(),
+    relTime: relTimeFromMtime(e.mtimeMs, now),
+  }))
+}
+
+/**
  * Resolve the jsonl file and sessionId for a claude tab by directory.
  *
  * Reads from the same source as block-mode history replay
@@ -439,9 +537,12 @@ export function resolveSessionJsonl({ store, home, project, tab }) {
     // The active-session guard applies HERE to the fallback path only, because
     // this path would otherwise silently --resume the main session on the first
     // user turn, causing a lock conflict.
+    // EXCEPTION: tab.skipAutoResume is set when the user explicitly chose
+    // "开启新对话" (start a fresh conversation) from the Claude Code tab picker.
+    // In that case we must NOT fall back to the newest jsonl — start fresh.
     const autoResumeSetting = store.getSetting('claude_autoresume')
     const autoResumeEnabled = autoResumeSetting !== '0'
-    if (autoResumeEnabled) {
+    if (autoResumeEnabled && !tab?.skipAutoResume) {
       const newest = findNewestJsonl(projectDir)
       if (newest) {
         const mainSessionId = process.env.CLAUDE_CODE_SESSION_ID
@@ -583,5 +684,6 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     cwdToClaudeProjectDir: (cwd) => cwdToClaudeProjectDir(home, cwd),
     findMostRecentClaudeTab,
     handleHistory,
+    recentConversations: (cwd, limit) => scanRecentConversations(home, cwd, limit),
   }
 }

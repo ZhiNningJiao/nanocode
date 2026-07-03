@@ -125,6 +125,9 @@ export function createStore(filePath = ':memory:') {
     if (type === 'claude') {
       tab.claudeSessionId = opts.claudeSessionId || randomUUID()
       tab.claudeSessionStarted = false
+      // 需求3: "开启新对话" sets skipAutoResume so the tab starts a fresh
+      // conversation instead of falling back to the newest jsonl in the dir.
+      if (opts.skipAutoResume) tab.skipAutoResume = true
     } else if (type === 'codex') {
       tab.codexThreadId = opts.codexThreadId || null
     } else if (type === 'tmux') {

@@ -93,9 +93,9 @@ export class TabManager {
 
   // --- Public mutations ---
 
-  async newTab(type = 'bash') {
+  async newTab(type = 'bash', extraOpts = {}) {
     try {
-      const tab = await createTab(this.projectId, { type })
+      const tab = await createTab(this.projectId, { type, ...extraOpts })
       this._pendingActiveId = tab.id
       // The WS broadcast that follows will add the tab + setActive.
       return tab.id
@@ -516,6 +516,13 @@ export class TabManager {
         (opt.hint ? `<span class="tab-new-menu-hint">${opt.hint}</span>` : '')
       item.addEventListener('click', () => {
         this._closeNewTabMenu()
+        // 需求3: opening a Claude Code tab shows a picker of the 5 most recent
+        // "longer" conversations to 继续 (resume) or 开启新对话 (start fresh),
+        // instead of silently auto-resuming the newest one.
+        if (opt.type === 'claude') {
+          this._showClaudeResumePicker()
+          return
+        }
         this.newTab(opt.type)
       })
       menu.appendChild(item)
@@ -560,6 +567,138 @@ export class TabManager {
     if (this._menuEl) {
       this._menuEl.remove()
       this._menuEl = null
+    }
+  }
+
+  // ── 需求3: Claude Code tab picker ──────────────────────────────────────────
+  // Lists up to 5 recent "longer" conversations for the current project (by byte
+  // size) so the user can 继续 a specific one or 开启新对话 (fresh). "继续" creates
+  // a claude tab pre-seeded with that sessionId (resume); "开启新对话" creates a
+  // claude tab with fresh=true so the server starts a brand new session instead
+  // of auto-resuming the newest jsonl.
+  _showClaudeResumePicker() {
+    this._closeClaudeResumePicker()
+    const overlay = document.createElement('div')
+    overlay.className = 'claude-resume-picker'
+
+    const card = document.createElement('div')
+    card.className = 'claude-resume-picker-card'
+    overlay.appendChild(card)
+
+    const header = document.createElement('div')
+    header.className = 'claude-resume-picker-header'
+    const title = document.createElement('div')
+    title.className = 'claude-resume-picker-title'
+    title.textContent = 'Claude Code — resume or start new'
+    const closeBtn = document.createElement('button')
+    closeBtn.type = 'button'
+    closeBtn.className = 'claude-resume-picker-close'
+    closeBtn.textContent = '×'
+    closeBtn.title = 'Close'
+    header.appendChild(title)
+    header.appendChild(closeBtn)
+    card.appendChild(header)
+
+    const body = document.createElement('div')
+    body.className = 'claude-resume-picker-body'
+    const loading = document.createElement('div')
+    loading.className = 'claude-resume-picker-loading'
+    loading.textContent = 'Loading recent conversations…'
+    body.appendChild(loading)
+    card.appendChild(body)
+
+    const footer = document.createElement('div')
+    footer.className = 'claude-resume-picker-footer'
+    const newBtn = document.createElement('button')
+    newBtn.type = 'button'
+    newBtn.className = 'claude-resume-picker-new'
+    newBtn.textContent = '＋ 开启新对话'
+    newBtn.title = 'Start a brand new Claude conversation'
+    const cancelBtn = document.createElement('button')
+    cancelBtn.type = 'button'
+    cancelBtn.className = 'claude-resume-picker-secondary'
+    cancelBtn.textContent = 'Cancel'
+    footer.appendChild(cancelBtn)
+    footer.appendChild(newBtn)
+    card.appendChild(footer)
+
+    document.body.appendChild(overlay)
+    this._pickerEl = overlay
+
+    const dismiss = () => this._closeClaudeResumePicker()
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss() })
+    closeBtn.addEventListener('click', dismiss)
+    cancelBtn.addEventListener('click', dismiss)
+    const onKey = (e) => { if (e.key === 'Escape') { dismiss(); document.removeEventListener('keydown', onKey, true) } }
+    document.addEventListener('keydown', onKey, true)
+
+    newBtn.addEventListener('click', () => {
+      dismiss()
+      this.newTab('claude', { fresh: true, label: 'new' })
+    })
+
+    // Load recent conversations
+    this._loadRecentConversationsInto(body)
+  }
+
+  async _loadRecentConversationsInto(body) {
+    let conversations = []
+    try {
+      const resp = await fetch(`/api/projects/${this.projectId}/recent-conversations?limit=5`)
+      if (resp.ok) {
+        const data = await resp.json()
+        conversations = data.conversations || []
+      }
+    } catch (err) {
+      console.warn('[claude-resume-picker] failed to load conversations', err)
+    }
+
+    body.innerHTML = ''
+    if (!conversations.length) {
+      const empty = document.createElement('div')
+      empty.className = 'claude-resume-picker-empty'
+      empty.textContent = 'No recent conversations in this project. Start a new one below.'
+      body.appendChild(empty)
+      return
+    }
+
+    for (const c of conversations) {
+      const row = document.createElement('div')
+      row.className = 'claude-resume-picker-item'
+
+      const info = document.createElement('div')
+      info.className = 'claude-resume-picker-item-info'
+      const summary = document.createElement('div')
+      summary.className = 'claude-resume-picker-item-summary'
+      summary.textContent = c.summary || '(no summary)'
+      summary.title = c.summary || ''
+      const meta = document.createElement('div')
+      meta.className = 'claude-resume-picker-item-meta'
+      const sizeKb = c.byteSize > 1024 ? (c.byteSize / 1024).toFixed(0) + ' KB' : c.byteSize + ' B'
+      meta.textContent = `${c.messageCount} msgs · ${sizeKb} · ${c.relTime}`
+      info.appendChild(summary)
+      info.appendChild(meta)
+      row.appendChild(info)
+
+      const resume = document.createElement('button')
+      resume.type = 'button'
+      resume.className = 'claude-resume-picker-resume'
+      resume.textContent = '继续'
+      resume.title = `Resume session ${c.sessionId}`
+      resume.addEventListener('click', () => {
+        this._closeClaudeResumePicker()
+        this.newTab('claude', { claudeSessionId: c.sessionId, label: 'resume' })
+      })
+      row.appendChild(resume)
+
+      body.appendChild(row)
+    }
+  }
+
+  _closeClaudeResumePicker() {
+    if (this._pickerEl) {
+      this._pickerEl.remove()
+      this._pickerEl = null
     }
   }
 }

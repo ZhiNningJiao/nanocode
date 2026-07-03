@@ -1339,6 +1339,140 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   font-size: 11px;
 }
 
+/* ── Claude Code tab picker (需求3 Auto Resume) ────────────────────────────
+   Shown when the user opens a new Claude Code tab: lists up to 5 recent
+   "longer" conversations to 继续 (resume) or 开启新对话 (start fresh). */
+.claude-resume-picker {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 14, 0.45);
+  backdrop-filter: blur(3px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: crp-fade 0.12s ease-out;
+}
+@keyframes crp-fade { from { opacity: 0 } to { opacity: 1 } }
+.claude-resume-picker-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 20px 60px rgba(20, 18, 14, 0.28);
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.claude-resume-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.claude-resume-picker-title {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.claude-resume-picker-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+}
+.claude-resume-picker-close:hover { background: var(--bg-hover); color: var(--text); }
+.claude-resume-picker-body {
+  padding: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+.claude-resume-picker-loading,
+.claude-resume-picker-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+.claude-resume-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.claude-resume-picker-item:hover { background: var(--bg-hover); border-color: var(--border); }
+.claude-resume-picker-item-info { flex: 1; min-width: 0; }
+.claude-resume-picker-item-summary {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.claude-resume-picker-item-meta {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.claude-resume-picker-resume {
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.claude-resume-picker-resume:hover { background: var(--bg-active, var(--bg-hover)); }
+.claude-resume-picker-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.claude-resume-picker-new {
+  border: none;
+  background: var(--accent, #6b8cff);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.claude-resume-picker-new:hover { filter: brightness(1.08); }
+.claude-resume-picker-secondary {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.claude-resume-picker-secondary:hover { background: var(--bg-hover); color: var(--text); }
+
 .input-row {
   display: flex;
   gap: var(--s-2);

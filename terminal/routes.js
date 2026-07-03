@@ -170,6 +170,23 @@ export function createTerminalRoutes(store) {
     res.json({ tabId: historyService.findMostRecentClaudeTab(project) })
   })
 
+  // ── GET /api/projects/:id/recent-conversations ──────────────────────────────
+  // Returns up to `limit` (default 5, max 20) recent Claude conversations for the
+  // project's cwd, sorted by length (byte size) so the Claude Code tab picker
+  // (需求3 Auto Resume) can offer the "longer" conversations to 继续 / 开启新对话.
+  router.get('/api/projects/:id/recent-conversations', async (req, res) => {
+    try {
+      const project = store.getProject(req.params.id)
+      if (!project) return res.status(404).json({ error: 'project not found' })
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 20)
+      const conversations = historyService.recentConversations(project.cwd, limit)
+      res.json({ conversations })
+    } catch (err) {
+      console.error('[/api/recent-conversations]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
   router.post('/api/projects/:id/tabs', (req, res) => {
     const project = store.getProject(req.params.id)
     if (!project) return res.status(404).json({ error: 'project not found' })
@@ -185,7 +202,11 @@ export function createTerminalRoutes(store) {
     const tmuxTarget = typeof req.body?.tmuxTarget === 'string' && req.body.tmuxTarget.trim()
       ? req.body.tmuxTarget.trim()
       : undefined
-    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, tmuxTarget })
+    // 需求3: `fresh: true` marks a Claude tab opened via "开启新对话" — it must
+    // NOT auto-resume the newest jsonl. Stored as tab.skipAutoResume and honored
+    // by resolveSessionJsonl + the first-turn --session-id decision.
+    const skipAutoResume = type === 'claude' && req.body?.fresh === true
+    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, tmuxTarget, skipAutoResume })
     broadcastTabs(req.params.id)
     res.status(201).json(tab)
   })
