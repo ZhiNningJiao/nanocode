@@ -26,6 +26,9 @@ import { renderMemoryPane, resetMemoryLoadState } from './memory-panel.js'
 import { renderPersonaPane, resetPersonaLoadState } from './persona-panel.js'
 import { renderComparePane, resetCompareLoadState } from './compare-panel.js'
 import { renderRemotePane, resetRemoteLoadState } from './remote-panel.js'
+import { renderNotifySettings } from './notify-panel.js'
+import { renderTtsSettings } from './tts-panel.js'
+import { renderServicesPane, resetServicesLoadState } from './services-panel.js'
 
 const DOMAIN_KEY = 'rightPanel:domain'
 const SUBTAB_KEY = (d) => `rightPanel:subtab:${d}`
@@ -46,6 +49,14 @@ const PLUGIN_RENDERERS = {
   persona: renderPersonaPane,
   compare: renderComparePane,
   remote: renderRemotePane,
+  services: renderServicesPane,
+}
+// 需求13: per-plugin settings renderers. A plugin with an entry here surfaces an
+// expandable settings panel in the plugin manager. Settings-only plugins (no
+// `tab`, e.g. tts / notify) only appear via this map — they mount no tab.
+const PLUGIN_SETTINGS_RENDERERS = {
+  notify: renderNotifySettings,
+  tts: renderTtsSettings,
 }
 
 let activeDomain = 'artifacts'
@@ -139,6 +150,9 @@ function mountPlugin(plugin, opts = {}) {
     return
   }
   if (mounted.has(plugin.name)) return
+  // Settings-only plugins (no `tab`) mount no tab — they only surface a settings
+  // panel in the plugin manager. Nothing to mount here.
+  if (!plugin.tab) return
   const tabsEl = getDomainTabsEl(plugin.group)
   const bodyEl = getDomainBodyEl(plugin.group)
   if (!tabsEl || !bodyEl) return
@@ -170,6 +184,7 @@ function mountPlugin(plugin, opts = {}) {
 }
 
 function unmountPlugin(plugin) {
+  if (!plugin.tab) return // settings-only plugin mounts no tab
   const entry = mounted.get(plugin.name)
   if (!entry) return
   const domain = plugin.group
@@ -205,14 +220,17 @@ function renderPluginManager(pane) {
   for (const plugin of BUILTIN_PLUGINS) {
     const row = document.createElement('div')
     row.className = 'pm-row'
+    row.dataset.plugin = plugin.name
     const head = document.createElement('div')
     head.className = 'pm-row-head'
     const nameEl = document.createElement('div')
     nameEl.className = 'pm-name'
-    nameEl.textContent = t(plugin.tab.labelKey)
+    nameEl.textContent = t(plugin.tab?.labelKey || plugin.labelKey || plugin.name)
     const meta = document.createElement('div')
     meta.className = 'pm-meta'
-    meta.textContent = `v${plugin.version} · api ${plugin.apiVersion} · ${plugin.group}`
+    meta.textContent = plugin.tab
+      ? `v${plugin.version} · api ${plugin.apiVersion} · ${plugin.group}`
+      : `v${plugin.version} · api ${plugin.apiVersion} · ${plugin.group} · settings`
     head.appendChild(nameEl)
     head.appendChild(meta)
 
@@ -222,20 +240,46 @@ function renderPluginManager(pane) {
       ? `${t('plugin.manager.permissions')}: ${plugin.permissions.join(', ')}`
       : t('plugin.manager.noperms')
 
-    const toggle = document.createElement('label')
-    toggle.className = 'pm-toggle'
-    const cb = document.createElement('input')
-    cb.type = 'checkbox'
-    cb.checked = isEnabled(plugin.name)
-    cb.addEventListener('change', () => setEnabled(plugin.name, cb.checked))
-    const slider = document.createElement('span')
-    slider.className = 'pm-slider'
-    toggle.appendChild(cb)
-    toggle.appendChild(slider)
-
     row.appendChild(head)
     row.appendChild(perms)
-    row.appendChild(toggle)
+
+    // Plugins that mount a tab get an enable toggle. Settings-only plugins
+    // (no tab) have nothing to toggle — their settings panel always shows.
+    if (plugin.tab) {
+      const toggle = document.createElement('label')
+      toggle.className = 'pm-toggle'
+      const cb = document.createElement('input')
+      cb.type = 'checkbox'
+      cb.checked = isEnabled(plugin.name)
+      cb.addEventListener('change', () => setEnabled(plugin.name, cb.checked))
+      const slider = document.createElement('span')
+      slider.className = 'pm-slider'
+      toggle.appendChild(cb)
+      toggle.appendChild(slider)
+      row.appendChild(toggle)
+    }
+
+    // 需求13: per-plugin expandable settings panel.
+    const settingsRenderer = PLUGIN_SETTINGS_RENDERERS[plugin.name]
+    if (settingsRenderer) {
+      const disc = document.createElement('details')
+      disc.className = 'pm-settings'
+      const sum = document.createElement('summary')
+      sum.className = 'pm-settings-summary'
+      sum.textContent = t('plugin.manager.settings')
+      disc.appendChild(sum)
+      const body = document.createElement('div')
+      body.className = 'pm-settings-body'
+      disc.appendChild(body)
+      disc.addEventListener('toggle', () => {
+        if (disc.open && !body.dataset.rendered) {
+          settingsRenderer(body)
+          body.dataset.rendered = '1'
+        }
+      })
+      row.appendChild(disc)
+    }
+
     section.appendChild(row)
   }
 
@@ -362,6 +406,7 @@ function resetPluginLoadStateFor(name) {
   if (name === 'persona') resetPersonaLoadState()
   if (name === 'compare') resetCompareLoadState()
   if (name === 'remote') resetRemoteLoadState()
+  if (name === 'services') resetServicesLoadState()
 }
 
 // ── persistence ───────────────────────────────────────────────────────────────

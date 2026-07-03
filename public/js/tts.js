@@ -247,6 +247,15 @@ if (ttsStreamingCheckbox) ttsStreamingCheckbox.addEventListener('change', () => 
   ttsStreaming = ttsStreamingCheckbox.checked
   localStorage.setItem('ttsStreaming', ttsStreaming)
 })
+// 需求13: TTS plugin settings panel (tts-panel.js) toggles the same localStorage
+// keys but cannot call setTtsEnabled directly (not exported). It dispatches these
+// events so this module updates its in-memory state + UI live.
+document.addEventListener('nanocode:tts-enabled', (e) => setTtsEnabled(!!(e.detail && e.detail.enabled)))
+document.addEventListener('nanocode:tts-streaming', (e) => {
+  ttsStreaming = !!(e.detail && e.detail.streaming)
+  localStorage.setItem('ttsStreaming', ttsStreaming)
+  updateTtsUi()
+})
 if (ttsSaveBtn) ttsSaveBtn.addEventListener('click', async () => {
   const ref = ttsRefAudioInput?.value?.trim()
   const prompt = ttsPromptTextInput?.value?.trim()

@@ -357,137 +357,14 @@
             </h3>
             <div class="settings-section-body" data-body="monitor">
 
-            <!-- Services -->
+            <!-- 需求13: Port Health, ntfy, notification sounds, turn-complete alert,
+                 and TTS have all migrated to the Plugins manager (Ops → Plugin
+                 Manager / Port Health tab). Legacy elements are removed; the JS
+                 guards against missing ids so nothing breaks. -->
             <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.services.label">Port Health</span> <span class="settings-hint-inline" data-i18n="settings.services.hint">Checked every 30s</span></div>
-              <p class="services-local-ip" id="services-local-ip"></p>
-              <div class="services-grid" id="services-grid"></div>
-              <form class="services-add-form" id="services-add-form" autocomplete="off">
-                <input type="text" id="svc-add-name" class="settings-input" placeholder="Name" />
-                <input type="text" id="svc-add-host" class="settings-input" placeholder="IP / host" />
-                <input type="number" id="svc-add-port" class="settings-input" placeholder="Port" min="1" max="65535" />
-                <button type="submit" class="btn btn-secondary" data-i18n="settings.services.add">+ Add</button>
-              </form>
-              <p class="services-checked-at" id="services-checked-at"></p>
-            </div>
-
-            <!-- ntfy -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.ntfy.label">ntfy Push</span> <span class="settings-hint-inline" data-i18n="settings.ntfy.hint">Leave blank to disable</span></div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.ntfy.url">Server URL</label>
-                <input type="text" id="ntfy-url" class="settings-input" placeholder="http://localhost" />
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.ntfy.topic">Topic</label>
-                <input type="text" id="ntfy-topic" class="settings-input" placeholder="yourname" />
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="ntfy-save-btn" data-i18n="btn.save">Save</button>
-                <button type="button" class="btn btn-secondary" id="ntfy-test-btn" data-i18n="settings.ntfy.test">Test</button>
-                <span class="settings-status" id="ntfy-status"></span>
-              </div>
-            </div>
-
-            <!-- Notification sounds -->
-            <div class="settings-subsection">
-              <div class="settings-label-row" data-i18n="settings.notify.label">Notification Sounds</div>
-              <div class="settings-toggle-row">
-                <label class="toggle-label">
-                  <input type="checkbox" id="notify-sound-enabled" />
-                  <span data-i18n="settings.notify.enabled">Enable sounds (done / blocked / QA)</span>
-                </label>
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.notify.volume">Volume</label>
-                <div style="display:flex;align-items:center;gap:8px">
-                  <input type="range" id="notify-sound-volume" min="0" max="1" step="0.05" value="0.7" style="flex:1" />
-                  <span id="notify-sound-volume-value" style="min-width:36px;text-align:right">70%</span>
-                </div>
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.notify.done">Done</label>
-                <div style="display:flex;align-items:center;gap:8px">
-                  <select id="notify-sound-done" class="settings-input" style="flex:1">
-                    <option value="bamboo">Bamboo knock</option>
-                    <option value="ding">Bright ding</option>
-                    <option value="thud">Low thud</option>
-                  </select>
-                  <button type="button" class="btn btn-secondary" id="notify-test-done">&#9654;</button>
-                </div>
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.notify.blocked">Blocked</label>
-                <div style="display:flex;align-items:center;gap:8px">
-                  <select id="notify-sound-blocked" class="settings-input" style="flex:1">
-                    <option value="thud">Low thud</option>
-                    <option value="bamboo">Bamboo knock</option>
-                    <option value="ding">Bright ding</option>
-                  </select>
-                  <button type="button" class="btn btn-secondary" id="notify-test-blocked">&#9654;</button>
-                </div>
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.notify.qa">QA</label>
-                <div style="display:flex;align-items:center;gap:8px">
-                  <select id="notify-sound-qa" class="settings-input" style="flex:1">
-                    <option value="ding">Bright ding</option>
-                    <option value="bamboo">Bamboo knock</option>
-                    <option value="thud">Low thud</option>
-                  </select>
-                  <button type="button" class="btn btn-secondary" id="notify-test-qa">&#9654;</button>
-                </div>
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="notify-sound-save-btn" data-i18n="btn.save">Save</button>
-                <span class="settings-status" id="notify-sound-status"></span>
-              </div>
-              <!-- Turn-complete notification controls -->
-              <div class="settings-field" style="margin-top:8px">
-                <label class="settings-label" data-i18n="settings.notify.turn_threshold_label">Turn complete alert threshold (s)</label>
-                <div style="display:flex;align-items:center;gap:8px">
-                  <input type="number" id="turn-notify-threshold" class="settings-input" min="1" max="300" value="10" style="width:80px" />
-                  <span class="settings-hint-inline" data-i18n="settings.notify.turn_threshold_hint">Notify when turn exceeds this many seconds</span>
-                </div>
-              </div>
-              <div class="settings-toggle-row" style="margin-top:4px">
-                <label class="toggle-label">
-                  <input type="checkbox" id="turn-notify-ntfy" checked />
-                  <span data-i18n="settings.notify.turn_ntfy_label">Push turn-complete via ntfy</span>
-                </label>
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="turn-notify-save-btn" data-i18n="btn.save">Save</button>
-                <span class="settings-status" id="turn-notify-status"></span>
-              </div>
-            </div>
-
-            <!-- TTS -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.tts.label">TTS (GPT-SoVITS)</span> <span class="settings-hint-inline"><span class="tts-status-dot" id="tts-status-dot"></span><span class="tts-status-text" id="tts-status-text"></span></span></div>
-              <div class="settings-toggle-row">
-                <label class="toggle-label"><input type="checkbox" id="tts-enabled" /> <span data-i18n="settings.tts.enabled">Enable TTS</span></label>
-              </div>
-              <div class="settings-toggle-row">
-                <label class="toggle-label"><input type="checkbox" id="tts-streaming" /> <span data-i18n="settings.tts.streaming">Streaming mode (low latency)</span></label>
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.tts.refaudio">Reference audio path</label>
-                <input type="text" id="tts-ref-audio" class="settings-input" placeholder="/path/to/voice.wav" />
-              </div>
-              <div class="settings-field">
-                <label class="settings-label" data-i18n="settings.tts.prompttext">Reference text</label>
-                <input type="text" id="tts-prompt-text" class="settings-input" placeholder="Reference audio transcript" />
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="tts-save-btn" data-i18n="btn.save">Save</button>
-                <button type="button" class="btn btn-secondary" id="tts-test-btn" data-i18n="btn.test">Test</button>
-                <span class="settings-status" id="tts-status"></span>
-              </div>
-              <details class="tts-log-details">
-                <summary class="tts-log-summary" data-i18n="settings.tts.debuglog">TTS Debug Log</summary>
-                <div class="tts-log-panel" id="tts-log-panel"></div>
-              </details>
+              <p class="settings-moved-hint" data-i18n="plugin.manager.movedHint">
+                More settings have moved to the Plugins manager (Ops → Plugin Manager).
+              </p>
             </div>
             </div><!-- /settings-section-body[monitor] -->
           </section>

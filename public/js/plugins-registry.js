@@ -32,11 +32,16 @@ export function validateManifest(m) {
   if (!PLUGIN_GROUPS.includes(m.group)) {
     errors.push(`group must be one of ${PLUGIN_GROUPS.join(', ')} (got ${JSON.stringify(m.group)})`)
   }
-  if (!m.tab || typeof m.tab !== 'object' || Array.isArray(m.tab)) {
-    errors.push('tab must be a plain object')
-  } else {
-    if (!m.tab.id || typeof m.tab.id !== 'string') errors.push('tab.id must be a non-empty string')
-    if (m.tab.labelKey != null && typeof m.tab.labelKey !== 'string') errors.push('tab.labelKey must be a string')
+  // `tab` is optional (需求13): a settings-only plugin (e.g. tts / notify) has
+  // no tab — it only surfaces a per-plugin settings panel in the plugin manager.
+  // When present, it must be a plain object with a non-empty id.
+  if (m.tab != null) {
+    if (typeof m.tab !== 'object' || Array.isArray(m.tab)) {
+      errors.push('tab must be a plain object')
+    } else {
+      if (!m.tab.id || typeof m.tab.id !== 'string') errors.push('tab.id must be a non-empty string')
+      if (m.tab.labelKey != null && typeof m.tab.labelKey !== 'string') errors.push('tab.labelKey must be a string')
+    }
   }
   if (m.permissions != null) {
     if (!Array.isArray(m.permissions)) {
@@ -47,11 +52,9 @@ export function validateManifest(m) {
       }
     }
   }
-  // `settings` is optional (需求14 补充: ecosystem field for per-plugin config).
+  // `settings` is optional (需求14 补充: ecosystem field for per-plugin config;
+  // 需求13 surfaces it as a per-plugin settings panel in the plugin manager).
   // If present it must be a plain object — the values are plugin-defined.
-  // NOTE (gap, recorded in REPORT): the plugin manager does not yet render a
-  // per-plugin settings panel (that's 需求13's scope); declaring it here is the
-  // forward-compatible ground for the future settings UI.
   if (m.settings != null) {
     if (typeof m.settings !== 'object' || Array.isArray(m.settings)) {
       errors.push('settings must be a plain object')
@@ -131,6 +134,50 @@ export const BUILTIN_PLUGINS = [
     tab: { id: 'remote', labelKey: 'plugin.remote.label' },
     permissions: ['network'],
     descriptionKey: 'plugin.remote.desc',
+    builtin: true,
+  },
+  {
+    // 需求13 — Notify: side-channel notification settings migrated out of the
+    // Settings page (ntfy push + notification sounds + turn-complete alert).
+    // Settings-only plugin (no tab): it surfaces a per-plugin settings panel in
+    // the plugin manager. Storage keys are unchanged from the old Settings UI
+    // (ntfy_url/ntfy_topic server-side; notifySoundPrefs / nanocodeTurnNotify
+    // in localStorage) so existing configs carry over with no migration step.
+    name: 'notify',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'ops',
+    permissions: ['network'],
+    labelKey: 'plugin.notify.label',
+    descriptionKey: 'plugin.notify.desc',
+    builtin: true,
+  },
+  {
+    // 需13 — TTS: GPT-SoVITS voice settings migrated out of the Settings page
+    // (enable / streaming / reference audio / prompt text). Settings-only plugin
+    // (no tab): per-plugin settings panel in the plugin manager. Storage keys
+    // unchanged (ttsEnabled / ttsStreaming localStorage; /api/tts/voice server).
+    name: 'tts',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'ops',
+    permissions: ['network'],
+    labelKey: 'plugin.tts.label',
+    descriptionKey: 'plugin.tts.desc',
+    builtin: true,
+  },
+  {
+    // 需求13 — Services: port-health monitor migrated out of the Settings page.
+    // Tab plugin (ops): the live services grid + add/edit/delete form live in
+    // the tab pane. The server-side checker (runServiceChecks) keeps polling
+    // independently; the pane just displays + listens for service_status.
+    name: 'services',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'ops',
+    tab: { id: 'services', labelKey: 'plugin.services.label' },
+    permissions: ['network'],
+    descriptionKey: 'plugin.services.desc',
     builtin: true,
   },
 ]

@@ -203,6 +203,11 @@ function initNotifyWs() {
         console.log('[notify]', text)
       } else if (msg.type === 'service_status') {
         updateServiceDot(msg.name, msg.status, msg.checkedAt)
+        // 需求13: services plugin pane (Ops → Port Health) listens on this event
+        // for live dot updates; legacy Settings grid keeps using updateServiceDot.
+        document.dispatchEvent(new CustomEvent('nanocode:service-status', {
+          detail: { name: msg.name, status: msg.status, checkedAt: msg.checkedAt },
+        }))
       } else if (msg.type === 'activity') {
         console.log('[activity]', msg.repo, msg.heading)
       } else if (msg.type === 'agent_health') {
@@ -391,6 +396,15 @@ function _playDing(vol) {
 }
 
 const _soundFns = { bamboo: _playBamboo, thud: _playThud, ding: _playDing }
+
+// 需求13: notify plugin settings panel test buttons request sound playback via
+// this event (decouples the panel from app.js's private _soundFns).
+document.addEventListener('nanocode:play-sound', (e) => {
+  if (isGlobalMuted()) return
+  const { key, volume } = e.detail || {}
+  const fn = _soundFns[key]
+  if (fn) try { fn(parseFloat(volume ?? 0.7)) } catch {}
+})
 
 function getNotifySoundPrefs() {
   try { return JSON.parse(localStorage.getItem(NOTIFY_SOUND_KEY)) || {} } catch { return {} }
