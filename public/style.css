@@ -801,6 +801,116 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   background: var(--primary);
 }
 
+/* 需求13: per-plugin expandable settings panel (notify / tts) + moved-hint */
+.pm-settings {
+  margin-top: var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.pm-settings-summary {
+  cursor: pointer;
+  padding: var(--s-2) var(--s-3);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.pm-settings-summary::-webkit-details-marker { display: none; }
+.pm-settings-summary::after {
+  content: '▸';
+  font-size: 10px;
+  color: var(--text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+.pm-settings[open] > .pm-settings-summary::after { transform: rotate(90deg); }
+.pm-settings-body {
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+.pm-settings-subhead {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  padding-bottom: 2px;
+  border-bottom: 1px dashed var(--border);
+}
+.pm-settings-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.pm-setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pm-setting-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.pm-setting-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.pm-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  width: 100%;
+  box-sizing: border-box;
+}
+.pm-input:focus { outline: none; border-color: var(--border-active); }
+.pm-input-narrow { width: 80px; }
+.pm-btn { padding: 4px 12px; font-size: 11px; }
+.pm-btn-icon { padding: 4px 8px; min-width: 32px; }
+.pm-status {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+.pm-status.ok { color: var(--primary); }
+.pm-status.err { color: #ff6b6b; }
+.pm-toggle-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+.pm-toggle-line input { width: 16px; height: 16px; cursor: pointer; }
+.pm-range { flex: 1; cursor: pointer; }
+.pm-range-row { display: flex; align-items: center; gap: var(--s-2); }
+.pm-range-value { min-width: 36px; text-align: right; font-size: 11px; font-family: var(--font-mono); color: var(--text-tertiary); }
+.pm-select-test-row { display: flex; align-items: center; gap: var(--s-2); }
+.pm-select-test-row .pm-input { flex: 1; }
+.pm-tts-status-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.settings-moved-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: var(--s-3);
+  background: var(--bg-hover);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  line-height: 1.5;
+}
+
 .rp-loading {
   padding: var(--s-4);
   color: var(--text-tertiary);
@@ -3263,6 +3373,24 @@ body.workspace-active .landing-overlay { display: none; }
   .pm-slider { width: 44px; height: 24px; }
   .pm-slider::after { width: 18px; height: 18px; }
   .pm-toggle input:checked + .pm-slider::after { transform: translateX(20px); }
+  /* 需求13: per-plugin settings panel touch targets — ≥44px controls, stacked form */
+  .pm-settings-summary { min-height: 44px; padding: 12px var(--s-4); font-size: 13px; }
+  .pm-settings-body { padding: var(--s-4); }
+  .pm-btn { min-height: 44px; padding: 8px 16px; font-size: 13px; }
+  .pm-btn-icon { min-width: 44px; min-height: 44px; }
+  .pm-input { min-height: 44px; font-size: 14px; }
+  .pm-toggle-line { min-height: 44px; font-size: 14px; }
+  .pm-toggle-line input { width: 20px; height: 20px; }
+  .pm-select-test-row { flex-direction: column; align-items: stretch; }
+  .pm-select-test-row .pm-btn-icon { align-self: flex-end; }
+
+  /* 需求13: services (Port Health) plugin — mobile touch targets ≥44px.
+     The add form stacks vertically; grid edit/delete buttons grow. */
+  .services-add-form { flex-direction: column; align-items: stretch; }
+  .services-add-form .settings-input { width: 100% !important; min-height: 44px; font-size: 14px; }
+  .services-add-form .btn[type="submit"] { min-height: 44px; }
+  .service-item { min-height: 44px; }
+  .svc-btn { min-width: 44px; min-height: 44px; font-size: 16px; }
 
   /* Resume picker: near-fullscreen bottom sheet on phones */
   .claude-resume-picker { align-items: flex-end; }

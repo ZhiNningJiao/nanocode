@@ -85,6 +85,46 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(v.ok, `remote manifest invalid: ${v.errors.join('; ')}`)
   })
 
+  it('notify plugin (需求13) is settings-only (no tab) + network perm', () => {
+    const m = builtinPlugin('notify')
+    assert.ok(m, 'notify plugin must be registered')
+    assert.equal(m.group, 'ops')
+    assert.equal(m.tab, undefined, 'notify is settings-only — no tab')
+    assert.ok(m.labelKey, 'settings-only plugins need a labelKey for the manager')
+    assert.ok(Array.isArray(m.permissions))
+    assert.ok(m.permissions.includes('network'))
+    const v = validateManifest(m)
+    assert.ok(v.ok, `notify manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('tts plugin (需求13) is settings-only (no tab) + network perm', () => {
+    const m = builtinPlugin('tts')
+    assert.ok(m, 'tts plugin must be registered')
+    assert.equal(m.group, 'ops')
+    assert.equal(m.tab, undefined, 'tts is settings-only — no tab')
+    assert.ok(m.labelKey, 'settings-only plugins need a labelKey for the manager')
+    const v = validateManifest(m)
+    assert.ok(v.ok, `tts manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('services plugin (需求13) is a tab plugin (ops) + network perm', () => {
+    const m = builtinPlugin('services')
+    assert.ok(m, 'services plugin must be registered')
+    assert.equal(m.group, 'ops')
+    assert.equal(m.tab.id, 'services')
+    assert.ok(m.permissions.includes('network'))
+    const v = validateManifest(m)
+    assert.ok(v.ok, `services manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('accepts a settings-only manifest with no tab (需求13)', () => {
+    const v = validateManifest({
+      name: 'cfg', version: '1.0.0', apiVersion: '1.0', group: 'ops',
+      permissions: [], labelKey: 'plugin.cfg.label',
+    })
+    assert.equal(v.ok, true)
+  })
+
   it('rejects a non-object manifest', () => {
     const v = validateManifest(null)
     assert.equal(v.ok, false)
