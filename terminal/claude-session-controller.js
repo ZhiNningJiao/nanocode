@@ -819,7 +819,14 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       // Track whether the sessionId came from store metadata (user-chosen, explicit)
       // vs was generated fresh because the tab had no stored session (implicit/new tab).
       const storedSessionId = tab?.claudeSessionId || null
-      const explicitSessionId = storedSessionId !== null
+      // createTab pre-assigns a random claudeSessionId with claudeSessionStarted=false
+      // (store.js createTab): that UUID has no conversation behind it yet, so it must
+      // NOT count as user-chosen. Treating it as explicit made every fresh tab
+      // --resume a nonexistent session ("No conversation found") on its first turn.
+      // Tabs persisted before the flag existed lack claudeSessionStarted entirely
+      // (undefined !== false), so they keep the resume behaviour; tabs with real
+      // history are also covered by the disk-recovery path below (diskRecovered).
+      const explicitSessionId = storedSessionId !== null && tab?.claudeSessionStarted !== false
       let claudeSessionId = storedSessionId || randomUUID()
 
       const mainSessionId = process.env.CLAUDE_CODE_SESSION_ID
@@ -1534,6 +1541,19 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     ws.once('message', once)
   }
 
+  // Server-shutdown teardown: kill every in-process SDK streaming session so
+  // their child-process handles release and the process can exit. This is the
+  // ONLY safe place to call teardownStreamingSession for a live tab — ws.close
+  // deliberately does NOT do this so a browser reload (WS drop + reconnect)
+  // keeps the session alive (reload-survives). The tmux bridge is a separate
+  // process by design and is unaffected (tmux-routed cs have no _streamingSession).
+  function disposeClaudeSessions() {
+    for (const cs of claudeSessions.values()) {
+      try { sdkDriver.teardownStreamingSession(cs) } catch {}
+    }
+    claudeSessions.clear()
+  }
+
   return {
     claudeSessions,
     codexSessions,
@@ -1543,5 +1563,6 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     primeReplayHistory,
     setAgentHealthMonitor,
     setClaudeSessionId,
+    disposeClaudeSessions,
   }
 }

@@ -23,6 +23,13 @@ export function createTerminalRoutes(store) {
   const home = homedir()
   const recentAgents = createRecentAgentsService({ home })
   const sessionController = createClaudeSessionController({ store, home, recentAgents })
+  // On server shutdown / test end, tear down all in-process SDK streaming
+  // sessions so their child-process handles release and the process can exit.
+  // (Reload-survives is preserved: this only fires from store.close(), not from
+  // a WS drop.) See controller.disposeClaudeSessions.
+  if (typeof store.registerCloseHook === 'function') {
+    store.registerCloseHook(() => sessionController.disposeClaudeSessions())
+  }
   const historyService = createClaudeHistoryService({
     store,
     home,
