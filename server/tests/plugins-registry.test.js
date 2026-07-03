@@ -26,6 +26,7 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.equal(builtinPlugin('team-model').group, 'session')
     assert.equal(builtinPlugin('usage').group, 'ops')
     assert.equal(builtinPlugin('memory').group, 'session')
+    assert.equal(builtinPlugin('persona').group, 'session')
     assert.equal(builtinPlugin('nope'), null)
   })
 
@@ -39,6 +40,19 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(m.permissions.includes('fs.write'))
     const v = validateManifest(m)
     assert.ok(v.ok, `memory manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('persona plugin (需求8) declares session group + fs.read only', () => {
+    const m = builtinPlugin('persona')
+    assert.ok(m, 'persona plugin must be registered')
+    assert.equal(m.group, 'session')
+    assert.equal(m.tab.id, 'persona')
+    assert.equal(m.apiVersion, PLUGIN_API_VERSION)
+    assert.ok(Array.isArray(m.permissions))
+    assert.ok(m.permissions.includes('fs.read'))
+    assert.ok(!m.permissions.includes('fs.write'), 'persona is browse-only — no fs.write')
+    const v = validateManifest(m)
+    assert.ok(v.ok, `persona manifest invalid: ${v.errors.join('; ')}`)
   })
 
   it('rejects a non-object manifest', () => {

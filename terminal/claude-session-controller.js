@@ -9,6 +9,7 @@ import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
 import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
+import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
 
 export function createClaudeSessionController({ store, home, recentAgents }) {
   const IS_WIN = platform() === 'win32'
@@ -397,6 +398,9 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     if (claudeModel) launchArgs.push('--model', claudeModel)
     if (claudeEffort) launchArgs.push('--effort', claudeEffort)
     if (tabLabel) launchArgs.push('--name', tabLabel)
+    // 需求8: persona injection (CLI flag). Re-applied every turn so the persona
+    // survives resume/reconnect. Empty prompt = no flag (no-op).
+    if (cs.personaPrompt) launchArgs.push('--append-system-prompt', cs.personaPrompt)
 
     launchArgs.push('--')
     launchArgs.push(userText)
@@ -580,6 +584,9 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     if (claudeModel) launchArgs.push('--model', claudeModel)
     if (claudeEffort) launchArgs.push('--effort', claudeEffort)
     if (tabLabel) launchArgs.push('--name', tabLabel)
+    // 需求8: persona injection (CLI flag). Re-applied every turn so the persona
+    // survives resume/reconnect. Empty prompt = no flag (no-op).
+    if (cs.personaPrompt) launchArgs.push('--append-system-prompt', cs.personaPrompt)
 
     launchArgs.push(sessionArg)
     launchArgs.push('--')
@@ -587,10 +594,11 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     const escapedArgs = launchArgs.map((a) => sq(a))
     const launchCmd = `exec claude ${escapedArgs.join(' ')}`
 
-    console.log(`[claude:spawn] sessionKey=${sessionKey} turn=${cs.turnCount} len=${userText.length}`)
+    const _spawnEnv = buildClaudeChildEnv(cs)
+    console.log(`[claude:spawn] sessionKey=${sessionKey} turn=${cs.turnCount} len=${userText.length} cfgDir=${cs.claudeConfigDir || '(default)'} env.CLAUDE_CONFIG_DIR=${_spawnEnv.CLAUDE_CONFIG_DIR || '(unset)'} persona=${cs.persona || '(none)'} personaPromptLen=${(cs.personaPrompt || '').length} cmd=${launchCmd.slice(0, 200)}`)
     const proc = spawn('bash', ['-lc', launchCmd], {
       cwd,
-      env: buildClaudeChildEnv(cs),
+      env: _spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     })
@@ -906,6 +914,13 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         cwd: (tab?.claudeSessionCwd && typeof tab.claudeSessionCwd === 'string' && tab.claudeSessionCwd.trim()) ? tab.claudeSessionCwd.trim() : project.cwd,
         currentProc: null,
         tabLabel: tab?.label || '',
+        // 需求8: persona chosen at new-session creation. Resolved to its
+        // instruction text once at attach, FRAMED so it can override a strong
+        // CLAUDE.md personality (e.g. catgirl), and carried on cs so every driver
+        // injects it via --append-system-prompt / appendSystemPrompt each turn
+        // (keeps the persona active across reconnects/resumes).
+        persona: tab?.persona || null,
+        personaPrompt: tab?.persona ? framePersonaPrompt(resolvePersonaPrompt(home, tab.persona)) : '',
         queue: [],
         pendingUserDialogs: new Map(),
         _replayUserTextCounts: liveSeed?.userTextCounts || seed?.userTextCounts || new Map(),
