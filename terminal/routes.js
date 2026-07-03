@@ -10,6 +10,7 @@ import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
 import { scanClaudeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
+import { listPersonas, readPersona, listSkills } from './personas.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -220,7 +221,14 @@ export function createTerminalRoutes(store) {
     // NOT auto-resume the newest jsonl. Stored as tab.skipAutoResume and honored
     // by resolveSessionJsonl + the first-turn --session-id decision.
     const skipAutoResume = type === 'claude' && req.body?.fresh === true
-    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, claudeConfigDir, claudeSessionCwd, tmuxTarget, skipAutoResume })
+    // 需求8: persona id (chosen in the new-session picker) → stored on the tab,
+    // resolved to its instruction text at attach time and injected via
+    // --append-system-prompt on every turn so the persona stays active.
+    // Strict id format (no path traversal / slashes); bad ids are dropped, not
+    // stored — resolvePersonaPrompt would no-op anyway, but we keep the tab clean.
+    const _personaRaw = typeof req.body?.persona === 'string' ? req.body.persona.trim() : ''
+    const persona = _personaRaw && /^[A-Za-z0-9._-]+$/.test(_personaRaw) ? _personaRaw : undefined
+    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, claudeConfigDir, claudeSessionCwd, tmuxTarget, skipAutoResume, persona })
     broadcastTabs(req.params.id)
     res.status(201).json(tab)
   })
@@ -819,6 +827,45 @@ export function createTerminalRoutes(store) {
       res.json(saveMemoryFile(team, project, file, content))
     } catch (err) {
       console.error('[/api/memory/save]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── 需求8 persona library + skills browser routes ──────────────────────────
+  //
+  // GET  /api/personas        — list bundled + user personas (merged, user wins)
+  // GET  /api/personas/:id    — read one persona (name + instruction)
+  // GET  /api/skills          — read-only list of Claude-native skills across teams
+  //
+  // Personas are injected into a new Claude session via --append-system-prompt
+  // (CLI) / appendSystemPrompt (SDK) / --append-system-prompt bridge arg (tmux).
+  // Skills are browse-only — loading a native skill is Claude's own mechanism.
+
+  router.get('/api/personas', (req, res) => {
+    try {
+      res.json(listPersonas(home))
+    } catch (err) {
+      console.error('[/api/personas]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/personas/:id', (req, res) => {
+    try {
+      const p = readPersona(home, req.params.id)
+      if (!p) return res.status(404).json({ error: 'persona not found' })
+      res.json(p)
+    } catch (err) {
+      console.error('[/api/personas/:id]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/skills', (req, res) => {
+    try {
+      res.json(listSkills(home, store))
+    } catch (err) {
+      console.error('[/api/skills]', err)
       res.status(500).json({ error: err.message })
     }
   })

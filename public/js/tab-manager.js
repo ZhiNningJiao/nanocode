@@ -262,10 +262,12 @@ export class TabManager {
     for (const t of serverTabs) {
       const local = this.tabs.find((x) => x.id === t.id)
       if (!local) {
-        this._addTab(t.id, t.label, t.type || 'bash')
+        this._addTab(t.id, t.label, t.type || 'bash', { persona: t.persona || '' })
       } else {
         if (local.label !== t.label) local.label = t.label
         if (t.type && local.type !== t.type) local.type = t.type
+        // 需求8: keep persona in sync so the 🐱 tab chip reflects server state.
+        if ((local.persona || '') !== (t.persona || '')) local.persona = t.persona || ''
       }
     }
 
@@ -351,7 +353,7 @@ export class TabManager {
 
   // --- Internals ---
 
-  _addTab(id, label, type = 'bash') {
+  _addTab(id, label, type = 'bash', opts = {}) {
     const paneEl = document.createElement('div')
     paneEl.className = 'pane-terminal'
     paneEl.dataset.tabId = id
@@ -382,7 +384,7 @@ export class TabManager {
       pane = new TerminalPane(paneEl, paneOpts)
     }
 
-    this.tabs.push({ id, label, type, pane, paneEl })
+    this.tabs.push({ id, label, type, pane, paneEl, persona: opts.persona || '' })
     // Track grew; keep the visible position pinned to the active tab.
     this._syncTrackPosition({ noAnim: true })
   }
@@ -472,6 +474,16 @@ export class TabManager {
       label.className = 'tab-chip-label'
       label.textContent = tab.label
       btn.appendChild(label)
+
+      // 需求8: annotate tabs carrying a persona so the active persona is
+      // visible in the tab strip (e.g. "new 🐱"). Only Claude tabs have one.
+      if (tab.persona) {
+        const chip = document.createElement('span')
+        chip.className = 'tab-chip-persona'
+        chip.textContent = '🐱'
+        chip.title = `persona: ${tab.persona}`
+        btn.appendChild(chip)
+      }
 
       const close = document.createElement('span')
       close.className = 'tab-chip-close'
@@ -609,6 +621,35 @@ export class TabManager {
 
     const footer = document.createElement('div')
     footer.className = 'claude-resume-picker-footer'
+
+    // 需求8: persona selector — chosen persona is injected via
+    // --append-system-prompt on every turn (applies to both 继续 + 开启新对话).
+    const personaField = document.createElement('label')
+    personaField.className = 'claude-resume-picker-persona'
+    const personaLab = document.createElement('span')
+    personaLab.className = 'claude-resume-picker-persona-label'
+    personaLab.textContent = 'Persona'
+    const personaSel = document.createElement('select')
+    personaSel.className = 'rp-select claude-resume-picker-persona-select'
+    personaSel.id = 'claude-resume-persona'
+    const personaNone = document.createElement('option')
+    personaNone.value = ''
+    personaNone.textContent = '(none)'
+    personaSel.appendChild(personaNone)
+    personaField.appendChild(personaLab)
+    personaField.appendChild(personaSel)
+    footer.appendChild(personaField)
+    // Populate personas async (non-blocking — picker stays usable if empty).
+    fetch('/api/personas').then((r) => r.json()).then((data) => {
+      if (!data || !Array.isArray(data.personas)) return
+      for (const p of data.personas) {
+        const opt = document.createElement('option')
+        opt.value = p.id
+        opt.textContent = p.name
+        personaSel.appendChild(opt)
+      }
+    }).catch(() => {})
+
     const newBtn = document.createElement('button')
     newBtn.type = 'button'
     newBtn.className = 'claude-resume-picker-new'
@@ -633,8 +674,9 @@ export class TabManager {
     document.addEventListener('keydown', onKey, true)
 
     newBtn.addEventListener('click', () => {
+      const persona = personaSel.value || ''
       dismiss()
-      this.newTab('claude', { fresh: true, label: 'new' })
+      this.newTab('claude', { fresh: true, label: 'new', ...(persona ? { persona } : {}) })
     })
 
     // Load recent conversations. 需求5.3: remember the last chosen source
@@ -728,11 +770,19 @@ export class TabManager {
       resume.textContent = '继续'
       resume.title = `Resume session ${c.sessionId}`
       resume.addEventListener('click', () => {
+        // 需求8: read the chosen persona BEFORE closing the picker — _closeClaudeResumePicker
+        // removes the overlay (and #claude-resume-persona) from the DOM, so reading it
+        // after the close would always yield '' and silently drop the persona on resume.
+        const personaEl = document.getElementById('claude-resume-persona')
+        const personaVal = personaEl ? personaEl.value : ''
         this._closeClaudeResumePicker()
         // 需求5: carry the session's owning team (configDir) + original cwd so
         // the spawned claude resumes under the right CLAUDE_CONFIG_DIR and in
         // the matching project-slug dir (cross-team / cross-cwd resume).
         const opts = { claudeSessionId: c.sessionId }
+        // 需求8: apply the persona chosen in the picker to resumed sessions too
+        // (re-injected each turn via --append-system-prompt).
+        if (personaVal) opts.persona = personaVal
         // 需求5: annotate the tab label with the source team so cross-team tabs
         // are distinguishable in the tab strip (e.g. "resume·team2", "resume·home").
         const tags = []

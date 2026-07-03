@@ -48,6 +48,9 @@ export function createTab(projectId, opts = {}) {
   if (opts.claudeConfigDir) body.claudeConfigDir = opts.claudeConfigDir
   if (opts.claudeSessionCwd) body.claudeSessionCwd = opts.claudeSessionCwd
   if (opts.fresh) body.fresh = true
+  // 需求8: persona id chosen in the new-session picker → forwarded to the
+  // server, stored on the tab, re-injected each turn via --append-system-prompt.
+  if (opts.persona) body.persona = opts.persona
   return request(`/projects/${projectId}/tabs`, {
     method: 'POST',
     body: JSON.stringify(body),

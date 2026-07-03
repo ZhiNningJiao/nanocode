@@ -1232,6 +1232,71 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 }
 .mem-error { color: var(--warning); }
 
+/* -- Persona library + skills browser (MES-13740 需求8) ---------- */
+
+.persona-preview {
+  margin-top: var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset, var(--bg-hover));
+  max-height: 220px;
+  overflow: auto;
+}
+.persona-preview-head {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 13px;
+  position: sticky;
+  top: 0;
+  background: inherit;
+}
+.persona-preview-body {
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.persona-preview-body :is(h1, h2, h3) { margin: var(--s-2) 0 4px; }
+.persona-preview-body h1 { font-size: 15px; }
+.persona-preview-body h2 { font-size: 14px; }
+.persona-preview-body p { margin: 0 0 var(--s-2); }
+.persona-preview-body ul, .persona-preview-body ol { margin: 0 0 var(--s-2); padding-left: var(--s-4); }
+.persona-apply-hint { margin-top: var(--s-2); }
+
+.persona-skill-group { margin-top: var(--s-2); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.persona-skill-group-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg-inset, var(--bg-hover));
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  min-height: 44px;
+  text-align: left;
+}
+.persona-skill-group-head:hover { filter: brightness(1.04); }
+.persona-skill-chev { width: 12px; flex-shrink: 0; opacity: 0.7; }
+.persona-skill-group-name { flex: 1; font-weight: 600; }
+.persona-skill-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent, #6b8cff);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 500;
+}
+.persona-skill-list { padding: 4px 10px; }
+.persona-skill-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.persona-skill-row:last-child { border-bottom: none; }
+.persona-skill-name { font-size: 12px; font-weight: 600; }
+.persona-skill-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; line-height: 1.5; }
+
 /* -- Terminal tab strip + stack -------------------------------- */
 
 .terminal-tab-strip {
@@ -1327,6 +1392,14 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 }
 .tab-chip:not(.active) .tab-chip-close { opacity: 0; }
 .tab-chip:hover .tab-chip-close { opacity: 1; }
+.tab-chip-persona {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1;
+  margin-left: 2px;
+  opacity: 0.85;
+}
 
 .tab-chip-add {
   display: inline-flex;
@@ -2123,8 +2196,19 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   border-top: 1px solid var(--border);
   display: flex;
   gap: 8px;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
 }
+.claude-resume-picker-persona {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.claude-resume-picker-persona-label { white-space: nowrap; }
+.claude-resume-picker-persona-select { min-height: 32px; max-width: 180px; }
 .claude-resume-picker-new {
   border: none;
   background: var(--accent, #6b8cff);
@@ -2948,6 +3032,11 @@ body.workspace-active .landing-overlay { display: none; }
   .mem-content-actions .rp-btn-sm { min-height: 44px; }
   .mem-content-meta { display: none; }
   .mem-editor { min-height: 200px; font-size: 13px; }
+
+  /* Persona panel: ≥44px touch targets (MES-13740 需求8) */
+  #persona-select { min-height: 44px; }
+  .persona-skill-group-head { min-height: 44px; }
+  .claude-resume-picker-persona-select { min-height: 44px; max-width: 100%; }
 
 }
 

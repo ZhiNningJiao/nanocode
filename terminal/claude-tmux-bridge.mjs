@@ -40,6 +40,7 @@ function parseArgs(argv) {
     else if (arg === '--claude-config-dir') args.claudeConfigDir = argv[++i]
     else if (arg === '--model') args.model = argv[++i]
     else if (arg === '--effort') args.effort = argv[++i]
+    else if (arg === '--append-system-prompt') args.appendSystemPrompt = argv[++i]
     else if (arg === '--permission-mode') args.permissionMode = argv[++i]
     else if (arg === '--session-fallback') args.sessionFallback = argv[++i]
     else if (arg === '--executable') args.executableOverride = argv[++i]
@@ -79,6 +80,9 @@ const cs = {
   cwd,
   currentProc: null,
   tabLabel: args.tabLabel || '',
+  // 需求8: persona prompt forwarded by launchBridge → bridge SDK driver
+  // injects it via appendSystemPrompt each turn (keeps persona active).
+  personaPrompt: args.appendSystemPrompt || '',
   queue: [],
   pendingUserDialogs: new Map(),
   _replayUserTextCounts: new Map(),

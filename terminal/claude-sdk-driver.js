@@ -365,7 +365,7 @@ export function createClaudeSdkDriver({
     const claudeEffort = store.getSetting('claude_effort') || ''
     const sessionFallback = store.getSetting('claude_session_fallback') || 'continue'
     const sdkPermissionMode = resolvePermissionMode(store)
-    const useResumeOnFirstTurn = !isFirstTurn || cs.explicitSessionId
+    const useResumeOnFirstTurn = !isFirstTurn || (cs.explicitSessionId && !cs.skipAutoResume)
     const sessionOptions = useResumeOnFirstTurn
       ? { resume: cs.claudeSessionId }
       : { sessionId: cs.claudeSessionId }
@@ -386,6 +386,14 @@ export function createClaudeSdkDriver({
           forwardSubagentText: true,
           model: claudeModel || undefined,
           effort: claudeEffort || undefined,
+          // 需求8: persona injection — the direct query() path does NOT honor a
+          // top-level `appendSystemPrompt` (that field only exists on the bridge
+          // SDKControlInitializeRequest). The documented way to append to the
+          // default claude_code system prompt is `systemPrompt: { type: 'preset',
+          // preset: 'claude_code', append }` (sdk.d.ts ~L1945). Verified empirically:
+          // top-level appendSystemPrompt is a silent no-op; preset.append works.
+          // Only set when a persona is active so non-persona tabs keep the default.
+          ...(cs.personaPrompt ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: cs.personaPrompt } } : {}),
           ...(executableOverride ? { pathToClaudeCodeExecutable: executableOverride } : {}),
           permissionMode: sdkPermissionMode,
           allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
@@ -549,7 +557,7 @@ export function createClaudeSdkDriver({
     const claudeEffort = store.getSetting('claude_effort') || ''
     const sdkPermissionMode = resolvePermissionMode(store)
     const isFirstTurn = cs.turnCount === 0
-    const useResumeOnFirstTurn = !isFirstTurn || cs.explicitSessionId
+    const useResumeOnFirstTurn = !isFirstTurn || (cs.explicitSessionId && !cs.skipAutoResume)
     const sessionOptions = useResumeOnFirstTurn
       ? { resume: cs.claudeSessionId }
       : { sessionId: cs.claudeSessionId }
@@ -560,6 +568,12 @@ export function createClaudeSdkDriver({
       forwardSubagentText: true,
       model: claudeModel || undefined,
       effort: claudeEffort || undefined,
+      // 需求8: persona injection — use `systemPrompt: { type: 'preset',
+      // preset: 'claude_code', append }` (the documented direct-query() form).
+      // A top-level `appendSystemPrompt` is a silent no-op here (empirically
+      // verified). Re-applied every turn so the persona survives resume/reconnect.
+      // Empty = no systemPrompt override (keeps the exact default behavior).
+      ...(cs.personaPrompt ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: cs.personaPrompt } } : {}),
       ...(executableOverride ? { pathToClaudeCodeExecutable: executableOverride } : {}),
       permissionMode: sdkPermissionMode,
       allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
@@ -667,7 +681,7 @@ export function createClaudeSdkDriver({
     cs.turnCount += 1
 
     const sessionFallback = store.getSetting('claude_session_fallback') || 'continue'
-    const useResumeOnFirstTurn = !isFirstTurn || cs.explicitSessionId
+    const useResumeOnFirstTurn = !isFirstTurn || (cs.explicitSessionId && !cs.skipAutoResume)
 
     let sawResult = false
     let finalSubtype = 'success'

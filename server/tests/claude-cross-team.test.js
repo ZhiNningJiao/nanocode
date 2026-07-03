@@ -200,6 +200,35 @@ describe('store: cross-team tab metadata (claudeConfigDir / claudeSessionCwd)', 
     assert.equal(tab.claudeConfigDir, undefined)
     assert.equal(tab.claudeSessionCwd, undefined)
   })
+
+  // 需求8: persona id chosen at new-session creation is persisted on the tab
+  // so every turn re-injects it via --append-system-prompt (survives reconnects).
+  it('createTab persists persona for a claude tab (需求8)', () => {
+    const store = createStore(':memory:')
+    const project = store.createProject('Proj', '/tmp/proj')
+    const tab = store.createTab(project.id, { type: 'claude', label: 'new', persona: 'catgirl' })
+    assert.equal(tab.persona, 'catgirl')
+    const fetched = store.getTab(project.id, tab.id)
+    assert.equal(fetched.persona, 'catgirl')
+  })
+
+  it('createTab trims and ignores empty/whitespace persona', () => {
+    const store = createStore(':memory:')
+    const project = store.createProject('Proj', '/tmp/proj')
+    const tab = store.createTab(project.id, { type: 'claude', label: 'new', persona: '  ' })
+    assert.equal(tab.persona, undefined)
+    const tab2 = store.createTab(project.id, { type: 'claude', label: 'new2', persona: ' catgirl ' })
+    assert.equal(tab2.persona, 'catgirl')
+  })
+
+  it('updateTabMetadata accepts persona in the whitelist', () => {
+    const store = createStore(':memory:')
+    const project = store.createProject('Proj', '/tmp/proj')
+    const tab = store.createTab(project.id, { type: 'claude', label: 'c' })
+    store.updateTabMetadata(project.id, tab.id, { persona: 'concise' })
+    const fetched = store.getTab(project.id, tab.id)
+    assert.equal(fetched.persona, 'concise')
+  })
 })
 
 describe('claude-history: scanRecentConversationsMulti (cross-team aggregation)', () => {

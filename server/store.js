@@ -133,6 +133,12 @@ export function createStore(filePath = ':memory:') {
       // lookup use the right team/project-slug dir.
       if (opts.claudeConfigDir) tab.claudeConfigDir = opts.claudeConfigDir
       if (opts.claudeSessionCwd) tab.claudeSessionCwd = opts.claudeSessionCwd
+      // 需求8: persona id chosen at new-session creation. Stored on the tab so
+      // every turn (new or resume) re-injects the persona via --append-system-prompt,
+      // keeping the persona active across reconnects. Empty/absent = no persona.
+      if (opts.persona && typeof opts.persona === 'string' && opts.persona.trim()) {
+        tab.persona = opts.persona.trim()
+      }
     } else if (type === 'codex') {
       tab.codexThreadId = opts.codexThreadId || null
     } else if (type === 'tmux') {
@@ -178,7 +184,7 @@ export function createStore(filePath = ':memory:') {
     if (!data.tabs[projectId]) return null
     const tab = data.tabs[projectId].find((t) => t.id === tabId)
     if (!tab) return null
-    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd']
+    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona']
     let changed = false
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
