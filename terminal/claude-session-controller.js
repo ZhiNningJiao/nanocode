@@ -89,6 +89,21 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       // Fallback: assume MESHY_AIGW_KEY already in env
       return 'opencode .; exec bash -l'
     },
+    // fable5: opencode with Claude Fable 5 (litellm/claude-fable-5) via Meshy AIGW.
+    // The kimi provider in the global opencode.json already has the AIGW baseURL +
+    // apiKey, but only registers GLM/Kimi/gpt-5.5 models — claude-fable-5 is not
+    // registered, so opencode rejects it with ProviderModelNotFoundError.
+    // OPENCODE_CONFIG_CONTENT is an inline runtime override (merged, not replacing)
+    // that adds litellm/claude-fable-5 to the kimi provider, reusing its AIGW baseURL.
+    'fable5': () => {
+      const keyFile = join(home || process.env.HOME, '.config', 'meshy-aigw.key')
+      const cfg = '{"$schema":"https://opencode.ai/config.json","provider":{"kimi":{"models":{"litellm/claude-fable-5":{"name":"Claude Fable 5"}}}}}'
+      const launch = `export OPENCODE_CONFIG_CONTENT='${cfg}'; opencode -m kimi/litellm/claude-fable-5 .; exec bash -l`
+      if (existsSync(keyFile)) {
+        return `export MESHY_AIGW_KEY=$(cat ${keyFile}); ${launch}`
+      }
+      return launch
+    },
   }
 
   function sessionKeyFor(projectId, tabId) {

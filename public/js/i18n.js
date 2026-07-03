@@ -71,6 +71,7 @@ const translations = {
     'settings.tabtypes.agent': 'Cursor Agent',
     'settings.tabtypes.opencode': 'OpenCode',
     'settings.tabtypes.meshy': 'Meshy AIGW (Kimi)',
+    'settings.tabtypes.fable5': 'Fable 5 (OpenCode AIGW)',
     'settings.tabtypes.tmux': 'Tmux Session',
     // Monitor subsections
     'settings.services.label': 'Port Health',
@@ -200,6 +201,7 @@ const translations = {
     'settings.tabtypes.agent': 'Cursor Agent',
     'settings.tabtypes.opencode': 'OpenCode',
     'settings.tabtypes.meshy': 'Meshy AIGW (Kimi)',
+    'settings.tabtypes.fable5': 'Fable 5 (OpenCode AIGW)',
     'settings.tabtypes.tmux': 'Tmux 会话',
     // Monitor subsections
     'settings.services.label': '端口健康',
