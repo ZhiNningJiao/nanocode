@@ -25,6 +25,7 @@ import { renderTeamModelPane, renderUsagePane, resetPluginLoadState } from './pl
 import { renderMemoryPane, resetMemoryLoadState } from './memory-panel.js'
 import { renderPersonaPane, resetPersonaLoadState } from './persona-panel.js'
 import { renderComparePane, resetCompareLoadState } from './compare-panel.js'
+import { renderRemotePane, resetRemoteLoadState } from './remote-panel.js'
 
 const DOMAIN_KEY = 'rightPanel:domain'
 const SUBTAB_KEY = (d) => `rightPanel:subtab:${d}`
@@ -44,6 +45,7 @@ const PLUGIN_RENDERERS = {
   memory: renderMemoryPane,
   persona: renderPersonaPane,
   compare: renderComparePane,
+  remote: renderRemotePane,
 }
 
 let activeDomain = 'artifacts'
@@ -359,6 +361,7 @@ function resetPluginLoadStateFor(name) {
   if (name === 'memory') resetMemoryLoadState()
   if (name === 'persona') resetPersonaLoadState()
   if (name === 'compare') resetCompareLoadState()
+  if (name === 'remote') resetRemoteLoadState()
 }
 
 // ── persistence ───────────────────────────────────────────────────────────────

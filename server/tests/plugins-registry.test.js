@@ -27,6 +27,8 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.equal(builtinPlugin('usage').group, 'ops')
     assert.equal(builtinPlugin('memory').group, 'session')
     assert.equal(builtinPlugin('persona').group, 'session')
+    assert.equal(builtinPlugin('compare').group, 'artifacts')
+    assert.equal(builtinPlugin('remote').group, 'ops')
     assert.equal(builtinPlugin('nope'), null)
   })
 
@@ -69,6 +71,18 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.equal(m.settings.defaultBranches, 10)
     const v = validateManifest(m)
     assert.ok(v.ok, `compare manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('remote plugin (需求10) declares ops group + network permission', () => {
+    const m = builtinPlugin('remote')
+    assert.ok(m, 'remote plugin must be registered')
+    assert.equal(m.group, 'ops')
+    assert.equal(m.tab.id, 'remote')
+    assert.equal(m.apiVersion, PLUGIN_API_VERSION)
+    assert.ok(Array.isArray(m.permissions))
+    assert.ok(m.permissions.includes('network'))
+    const v = validateManifest(m)
+    assert.ok(v.ok, `remote manifest invalid: ${v.errors.join('; ')}`)
   })
 
   it('rejects a non-object manifest', () => {

@@ -12,6 +12,7 @@ import { createRecentAgentsService } from './recent-agents.js'
 import { scanClaudeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
+import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri } from './remote.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -922,6 +923,66 @@ export function createTerminalRoutes(store) {
       res.json(await fileDiff(cwd, base, head, file))
     } catch (err) {
       console.error('[/api/compare/file-diff]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── 需求10 remote machines plugin routes (address book + URI scheme) ───────
+  //
+  // GET    /api/remote/machines          — list address book
+  // POST   /api/remote/machines          — add a machine { alias, peerId, password?, relay?, note? }
+  // POST   /api/remote/machines/:id      — update a machine (same body)
+  // DELETE /api/remote/machines/:id      — remove a machine
+  //
+  // The server only persists the book (core settings store); it bundles no
+  // RustDesk code. The browser turns a Connect click into a `rustdesk://` URI
+  // that the user's local OS hands to the native RustDesk client. See REPORT
+  // for the AGPL + web-client + relay-server research conclusions.
+
+  router.get('/api/remote/machines', (req, res) => {
+    try {
+      res.json({ machines: listMachines(store) })
+    } catch (err) {
+      console.error('[/api/remote/machines]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.post('/api/remote/machines', (req, res) => {
+    try {
+      const result = addMachine(store, req.body)
+      if (result.error) return res.status(400).json({ error: result.error })
+      res.json({ machine: result.machine })
+    } catch (err) {
+      console.error('[POST /api/remote/machines]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.post('/api/remote/machines/:id', (req, res) => {
+    try {
+      const result = updateMachine(store, req.params.id, req.body)
+      if (result.error) {
+        const code = /not found/.test(result.error) ? 404 : 400
+        return res.status(code).json({ error: result.error })
+      }
+      res.json({ machine: result.machine })
+    } catch (err) {
+      console.error('[POST /api/remote/machines/:id]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.delete('/api/remote/machines/:id', (req, res) => {
+    try {
+      const result = deleteMachine(store, req.params.id)
+      if (result.error) {
+        const code = /not found/.test(result.error) ? 404 : 400
+        return res.status(code).json({ error: result.error })
+      }
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[DELETE /api/remote/machines/:id]', err)
       res.status(500).json({ error: err.message })
     }
   })
