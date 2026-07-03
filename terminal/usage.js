@@ -17,7 +17,7 @@
  * Team discovery: `~/.claude` (team1 / default) and any `~/.claude-team*` dirs.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -362,5 +362,179 @@ export async function probeAigwCost({ key, model = 'litellm/SGLang-GLM-latest', 
     base: AIGW_BASE,
     keyPresent: true,
     note: 'nanocode made this call directly; opencode session calls are not proxied by nanocode so their per-call cost is not captured here.',
+  }
+}
+
+// ── Claude memory viewer (MES-13740 需求7) ───────────────────────────────────
+//
+// Memory data source: each team config dir's `projects/<slug>/memory/*.md`
+// (MEMORY.md + fragment md files). The plugin lets the user browse by
+// team × project, render md (read-only first), search keywords, and — as a
+// dangerous, opt-in op — edit a file with a timestamped backup of the original.
+//
+// Path-traversal guards: `team` must be a known config dir (validated by the
+// route against listTeams); `projectSlug` and `fileName` are validated by
+// strict character classes so no `..` / `/` can escape the memory dir.
+
+const SLUG_RE = /^[A-Za-z0-9._-]+$/
+const MEM_FILE_RE = /^[A-Za-z0-9._-]+\.md$/i
+
+function isValidSlug(slug) {
+  return typeof slug === 'string' && slug.length > 0 && SLUG_RE.test(slug) && !slug.includes('..')
+}
+function isValidMemFile(name) {
+  return typeof name === 'string' && name.length > 0 && MEM_FILE_RE.test(name) && !name.includes('..')
+}
+
+/**
+ * Decode a Claude project slug back to an approximate cwd. Claude encodes cwd
+ * by replacing '/' with '-' (see claudeProjectsDir), which is lossy when a path
+ * segment itself contains '-'. This is for DISPLAY ONLY — file operations use
+ * the exact slug, never the decoded cwd, so the lossiness never affects safety.
+ */
+export function claudeProjectSlugToCwd(slug) {
+  if (!slug) return ''
+  return String(slug).replace(/-/g, '/')
+}
+
+/**
+ * List projects (slugs) under a team config dir that have a `memory/` subdir,
+ * with file count + most-recent mtime. Sorted newest-first.
+ */
+export function listMemoryProjects(configDir) {
+  const projectsRoot = join(configDir, 'projects')
+  let entries = []
+  try { entries = readdirSync(projectsRoot, { withFileTypes: true }) } catch { return [] }
+  const out = []
+  for (const d of entries) {
+    if (!d.isDirectory()) continue
+    const memDir = join(projectsRoot, d.name, 'memory')
+    if (!existsSync(memDir)) continue
+    let fileCount = 0
+    let lastMtime = 0
+    try {
+      const files = readdirSync(memDir, { withFileTypes: true })
+      for (const f of files) {
+        if (!f.isFile() || !f.name.endsWith('.md')) continue
+        fileCount++
+        try { const st = statSync(join(memDir, f.name)); if (st.mtimeMs > lastMtime) lastMtime = st.mtimeMs } catch {}
+      }
+    } catch {}
+    out.push({ slug: d.name, cwd: claudeProjectSlugToCwd(d.name), fileCount, lastMtime })
+  }
+  out.sort((a, b) => b.lastMtime - a.lastMtime)
+  return out
+}
+
+/**
+ * Build the full browse tree: every known team → its projects that have memory.
+ * Teams come from listTeams (~/.claude + ~/.claude-team*). Non-existent team
+ * dirs are skipped.
+ */
+export function listMemoryTree(home, store) {
+  const { teams } = listTeams(home, store)
+  const out = []
+  for (const team of teams) {
+    if (!team.exists) continue
+    out.push({
+      id: team.id,
+      name: team.name,
+      path: team.path,
+      projects: listMemoryProjects(team.path),
+    })
+  }
+  return out
+}
+
+/** List .md files in a team/project memory dir (name, size, mtime), newest-first. */
+export function listMemoryFiles(configDir, projectSlug) {
+  if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
+  const memDir = join(configDir, 'projects', projectSlug, 'memory')
+  if (!existsSync(memDir)) return { files: [], path: memDir }
+  let entries = []
+  try { entries = readdirSync(memDir, { withFileTypes: true }) } catch { return { files: [], path: memDir } }
+  const files = []
+  for (const f of entries) {
+    if (!f.isFile() || !f.name.endsWith('.md')) continue
+    try {
+      const st = statSync(join(memDir, f.name))
+      files.push({ name: f.name, size: st.size, mtime: st.mtimeMs })
+    } catch {}
+  }
+  files.sort((a, b) => b.mtime - a.mtime)
+  return { files, path: memDir }
+}
+
+/** Read a single memory md file. Returns { name, content, size, mtime, path }. */
+export function readMemoryFile(configDir, projectSlug, fileName) {
+  if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
+  if (!isValidMemFile(fileName)) return { error: 'invalid file name' }
+  const filePath = join(configDir, 'projects', projectSlug, 'memory', fileName)
+  if (!existsSync(filePath)) return { error: 'file not found' }
+  try {
+    const content = readFileSync(filePath, 'utf8')
+    const st = statSync(filePath)
+    return { name: fileName, content, size: st.size, mtime: st.mtimeMs, path: filePath }
+  } catch (err) {
+    return { error: err.message }
+  }
+}
+
+/**
+ * Search a keyword across .md files in a memory dir (case-insensitive).
+ * Returns { query, matches: [{ file, line, snippet }] }, capped at 200 hits.
+ */
+export function searchMemory(configDir, projectSlug, query) {
+  if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
+  const q = String(query || '').trim()
+  if (!q) return { query: '', matches: [] }
+  const memDir = join(configDir, 'projects', projectSlug, 'memory')
+  if (!existsSync(memDir)) return { query: q, matches: [] }
+  let entries = []
+  try { entries = readdirSync(memDir, { withFileTypes: true }) } catch { return { query: q, matches: [] } }
+  const lower = q.toLowerCase()
+  const matches = []
+  for (const f of entries) {
+    if (!f.isFile() || !f.name.endsWith('.md')) continue
+    let content = ''
+    try { content = readFileSync(join(memDir, f.name), 'utf8') } catch { continue }
+    const lines = content.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const idx = lines[i].toLowerCase().indexOf(lower)
+      if (idx >= 0) {
+        const start = Math.max(0, idx - 30)
+        const end = Math.min(lines[i].length, idx + q.length + 30)
+        matches.push({ file: f.name, line: i + 1, snippet: lines[i].slice(start, end) })
+        if (matches.length >= 200) return { query: q, matches }
+      }
+    }
+  }
+  return { query: q, matches }
+}
+
+/**
+ * Save (edit) a memory md file. DANGEROUS — the route only calls this after
+ * the UI has confirmed. The original file is copied to a timestamped `.<name>.bak.<ts>`
+ * backup in the same memory dir before writing. If the file is new (not present),
+ * no backup is made. Returns { name, size, mtime, backupPath, path } or { error }.
+ */
+export function saveMemoryFile(configDir, projectSlug, fileName, content) {
+  if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
+  if (!isValidMemFile(fileName)) return { error: 'invalid file name' }
+  const memDir = join(configDir, 'projects', projectSlug, 'memory')
+  const filePath = join(memDir, fileName)
+  if (!existsSync(memDir)) return { error: 'memory dir not found' }
+  let backupPath = null
+  if (existsSync(filePath)) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-')
+    backupPath = join(memDir, `.${fileName}.bak.${ts}`)
+    try { copyFileSync(filePath, backupPath) } catch { backupPath = null }
+  }
+  try {
+    writeFileSync(filePath, String(content ?? ''), 'utf8')
+    const st = statSync(filePath)
+    return { name: fileName, size: st.size, mtime: st.mtimeMs, backupPath, path: filePath }
+  } catch (err) {
+    return { error: err.message }
   }
 }
