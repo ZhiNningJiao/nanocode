@@ -1,0 +1,55 @@
+{
+  "notify_event": {
+    "type": "agent_health",
+    "version": 1,
+    "agent_id": "sess-claude-123",
+    "session_key": "project-1:claude:tab-1",
+    "session_id": "sess-claude-123",
+    "thread_id": null,
+    "project_id": "project-1",
+    "tab_id": "tab-1",
+    "tab_type": "claude",
+    "provider": "claude",
+    "source": "claude-sdk",
+    "state": "approval_needed",
+    "reason": "approval_prompt",
+    "idle_seconds": 27,
+    "last_line": "Press enter to confirm or esc to cancel",
+    "ts": "2026-06-08T10:25:00.000Z",
+    "started_at": "2026-06-08T10:24:10.000Z",
+    "last_activity_at": "2026-06-08T10:24:33.000Z",
+    "wait_seconds": null
+  },
+  "snapshot_response": {
+    "generated_at": "2026-06-08T10:25:00.000Z",
+    "config": {
+      "enabled": true,
+      "probe_interval_sec": 5,
+      "idle_threshold_sec": 20,
+      "background_wait_threshold_sec": 240
+    },
+    "agents": [
+      {
+        "type": "agent_health",
+        "version": 1,
+        "agent_id": "thread-codex-456",
+        "session_key": "project-1:codex:tab-2",
+        "session_id": null,
+        "thread_id": "thread-codex-456",
+        "project_id": "project-1",
+        "tab_id": "tab-2",
+        "tab_type": "codex",
+        "provider": "codex",
+        "source": "codex-sdk",
+        "state": "idle",
+        "reason": "idle_timeout",
+        "idle_seconds": 41,
+        "last_line": "Running: npm test",
+        "ts": "2026-06-08T10:25:00.000Z",
+        "started_at": "2026-06-08T10:24:05.000Z",
+        "last_activity_at": "2026-06-08T10:24:19.000Z",
+        "wait_seconds": null
+      }
+    ]
+  }
+}
