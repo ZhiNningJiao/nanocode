@@ -163,6 +163,19 @@
               </div>
             </div>
 
+            <!-- Render Mode (Fable5 / opencode tabs) — 需求11-C -->
+            <div class="settings-subsection">
+              <div class="settings-label-row"><span data-i18n="settings.rendermode.fable5.label">Render mode (Fable5 / opencode tabs)</span> <span class="settings-hint-inline" data-i18n="settings.rendermode.fable5.hint">block=rich blocks (default) / terminal=opencode TUI raw</span></div>
+              <div class="settings-radio-group" id="fable5-render-mode-group">
+                <label class="settings-radio-label"><input type="radio" name="fable5-render-mode" value="block" checked /> <span data-i18n="settings.rendermode.fable5.block">Block (default, rich text — reuses Claude block UI)</span></label>
+                <label class="settings-radio-label"><input type="radio" name="fable5-render-mode" value="terminal" /> <span data-i18n="settings.rendermode.fable5.terminal">Terminal (opencode TUI raw, PTY/xterm)</span></label>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="btn btn-primary" id="fable5-render-mode-save-btn" data-i18n="btn.save">Save</button>
+                <span class="settings-status" id="fable5-render-mode-status"></span>
+              </div>
+            </div>
+
             <!-- Auto-Resume -->
             <div class="settings-subsection">
               <div class="settings-label-row"><span data-i18n="settings.autoresume.label">Auto-Resume</span> <span class="settings-hint-inline" data-i18n="settings.autoresume.hint">Auto --continue when claude exits</span></div>
