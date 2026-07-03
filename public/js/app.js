@@ -478,6 +478,10 @@ const renderModeStatusEl = document.getElementById('render-mode-status')
 const codexRenderModeGroup = document.getElementById('codex-render-mode-group')
 const codexRenderModeSaveBtn = document.getElementById('codex-render-mode-save-btn')
 const codexRenderModeStatusEl = document.getElementById('codex-render-mode-status')
+// 需求11-C: Fable5 / opencode render mode (Block default, TUI fallback)
+const fable5RenderModeGroup = document.getElementById('fable5-render-mode-group')
+const fable5RenderModeSaveBtn = document.getElementById('fable5-render-mode-save-btn')
+const fable5RenderModeStatusEl = document.getElementById('fable5-render-mode-status')
 
 function loadRenderModeSettings(serverSettings) {
   const mode = (serverSettings?.renderMode) || 'block'
@@ -496,6 +500,15 @@ function loadCodexRenderModeSettings(serverSettings) {
   }
 }
 
+function loadFable5RenderModeSettings(serverSettings) {
+  // 需求11-C: default 'block' — reuse Claude block UI via opencode block driver
+  const mode = (serverSettings?.fable5RenderMode) || 'block'
+  const radios = fable5RenderModeGroup?.querySelectorAll('input[name="fable5-render-mode"]')
+  if (radios) {
+    for (const radio of radios) radio.checked = radio.value === mode
+  }
+}
+
 function loadSettings(serverSettings) {
   if (fontSizeRange && state.fontSize) {
     fontSizeRange.value = state.fontSize
@@ -509,6 +522,7 @@ function loadSettings(serverSettings) {
   loadSubagentVisSettings()
   loadRenderModeSettings(serverSettings)
   loadCodexRenderModeSettings(serverSettings)
+  loadFable5RenderModeSettings(serverSettings)
   loadClaudeModelSettings(serverSettings)
   loadCodexModelSettings(serverSettings)
   loadClaudeEffortSettings(serverSettings)
@@ -568,6 +582,34 @@ if (codexRenderModeSaveBtn) {
 }
 
 // N43-R9: Codex model save handler removed — model is now set via /model command
+
+// ─── Fable5 / opencode render mode save (需求11-C) ───────────────────────────
+
+if (fable5RenderModeSaveBtn) {
+  fable5RenderModeSaveBtn.addEventListener('click', async () => {
+    const selected = fable5RenderModeGroup?.querySelector('input[name="fable5-render-mode"]:checked')
+    if (!selected) return
+    const mode = selected.value === 'terminal' ? 'terminal' : 'block'
+    try {
+      // fable5 + opencode tabs share the same toggle (both use the opencode block driver)
+      await updateSetting('fable5RenderMode', mode)
+      await updateSetting('opencodeRenderMode', mode)
+      state.fable5RenderMode = mode
+      state.opencodeRenderMode = mode
+      if (fable5RenderModeStatusEl) {
+        fable5RenderModeStatusEl.textContent = 'Saved — 新 Fable5/opencode tab 生效'
+        fable5RenderModeStatusEl.className = 'settings-status success'
+        setTimeout(() => { fable5RenderModeStatusEl.textContent = '' }, 3000)
+      }
+    } catch (err) {
+      if (fable5RenderModeStatusEl) {
+        fable5RenderModeStatusEl.textContent = err.message
+        fable5RenderModeStatusEl.className = 'settings-status error'
+        setTimeout(() => { fable5RenderModeStatusEl.textContent = '' }, 3000)
+      }
+    }
+  })
+}
 
 // ─── Tab Types (plugin load/unload) ──────────────────────────────────────────
 
@@ -1355,6 +1397,10 @@ async function init() {
     if (settings.renderMode) state.renderMode = settings.renderMode
     // codexRenderMode defaults to 'terminal' — only override if explicitly set
     if (settings.codexRenderMode) state.codexRenderMode = settings.codexRenderMode
+    // 需求11-C: fable5/opencode render mode (default 'block' → ClaudeBlockRenderer
+    // via opencode block driver; 'terminal' → raw opencode TUI/PTY fallback).
+    if (settings.fable5RenderMode) state.fable5RenderMode = settings.fable5RenderMode
+    if (settings.opencodeRenderMode) state.opencodeRenderMode = settings.opencodeRenderMode
   } catch {}
 
   const backBtn = document.getElementById('back-to-menu')

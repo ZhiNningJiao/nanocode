@@ -586,6 +586,9 @@ export class ClaudeBlockRenderer {
     this.container = container
     this.projectId = opts.projectId
     this.tabId = opts.tabId
+    // tabType hint sent in the WS attach message so the server routes to the
+    // correct bridge (claude stream-json / opencode block). Defaults to 'claude'.
+    this.tabType = opts.tabType || 'claude'
     this.onStatusChange = opts.onStatusChange || (() => {})
 
     this.fitAddon = { fit: () => {} }
@@ -1281,12 +1284,13 @@ export class ClaudeBlockRenderer {
           type: 'attach',
           projectId: this.projectId,
           sessionType: 'bash',
-          // tabType hint: this renderer only ever drives a claude tab. The server
-          // normally reads the tab's stored type, but if the stored tab is missing
-          // (deleted/renamed/deduped while this tab is still open) it would default
-          // to 'bash' and silently drop our claude-input messages. The hint lets the
-          // server route to the claude stream-json bridge even then.
-          tabType: 'claude',
+          // tabType hint: tells the server which bridge to route to. 'claude' →
+          // claude stream-json bridge; 'fable5'/'opencode' → opencode block bridge
+          // (需求11-C). The server normally reads the tab's stored type, but if the
+          // stored tab is missing (deleted/renamed/deduped while this tab is still
+          // open) it would default to 'bash' and silently drop our claude-input
+          // messages. The hint lets the server route correctly even then.
+          tabType: this.tabType,
           tabId: this.tabId,
           cols: 200,
           rows: 50,

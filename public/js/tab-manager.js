@@ -371,13 +371,21 @@ export class TabManager {
     // If the global renderMode setting is 'terminal', use raw PTY instead.
     // Codex tabs: separate codexRenderMode setting, defaults to 'terminal' (xterm raw).
     // Set codexRenderMode to 'block' in Settings to opt into CodexBlockRenderer (experimental).
+    // 需求11-C: Fable5/opencode tabs use ClaudeBlockRenderer (Block mode, default)
+    // via the opencode block driver. fable5RenderMode/opencodeRenderMode='terminal'
+    // falls back to raw opencode TUI (PTY/xterm).
     const renderMode = (() => { try { return window.__nanocodeState?.renderMode || 'block' } catch { return 'block' } })()
     const codexRenderMode = (() => { try { return window.__nanocodeState?.codexRenderMode || 'terminal' } catch { return 'terminal' } })()
-    const useClaudeRenderer = type === 'claude' && renderMode !== 'terminal'
+    const fable5RenderMode = (() => { try { return window.__nanocodeState?.fable5RenderMode || 'block' } catch { return 'block' } })()
+    const opencodeRenderMode = (() => { try { return window.__nanocodeState?.opencodeRenderMode || 'block' } catch { return 'block' } })()
+    const useClaudeRenderer =
+      (type === 'claude' && renderMode !== 'terminal') ||
+      (type === 'fable5' && fable5RenderMode !== 'terminal') ||
+      (type === 'opencode' && opencodeRenderMode !== 'terminal')
     const useCodexRenderer = type === 'codex' && codexRenderMode === 'block'
     let pane
     if (useClaudeRenderer) {
-      pane = new ClaudeBlockRenderer(paneEl, paneOpts)
+      pane = new ClaudeBlockRenderer(paneEl, { ...paneOpts, tabType: type })
     } else if (useCodexRenderer) {
       pane = new CodexBlockRenderer(paneEl, paneOpts)
     } else {

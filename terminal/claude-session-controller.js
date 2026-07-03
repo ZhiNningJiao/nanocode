@@ -8,6 +8,7 @@ import { buildReplaySeed, buildUserReplayId, resolveSessionJsonl, parseJsonlHist
 import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
+import { createOpencodeBlockDriver } from './opencode-block-driver.js'
 import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
 
@@ -329,6 +330,18 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     codexBroadcastEvent,
     codexBroadcastStreamText,
     rerunTurn: (...args) => dispatchCodexTurn(...args),
+  })
+
+  // ── opencode block-mode (Fable5 / opencode tabs, Block render mode) ──────────
+  // 需求11-C: per-turn 'opencode run --format json' subprocess driver. Reuses
+  // claudeBroadcast (sends claude-event WS msgs) so the frontend's
+  // ClaudeBlockRenderer renders opencode turns with the same block UI.
+  const opencodeBlockSessions = new Map()
+  let dispatchOpencodeBlockTurn = null
+  const opencodeBlockDriver = createOpencodeBlockDriver({
+    store,
+    broadcast: claudeBroadcast,
+    rerunTurn: (...args) => dispatchOpencodeBlockTurn(...args),
   })
 
   let _lastGcMs = 0
@@ -1139,6 +1152,69 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     })
   }
 
+  // ── opencode block-mode attach (Fable5/opencode tabs, Block render) ─────────
+  // 需求11-C: mirrors attachCodexSession but uses claudeBroadcast (claude-event
+  // WS msgs) so the frontend ClaudeBlockRenderer renders opencode turns. The
+  // per-turn subprocess is driven by opencodeBlockDriver.runOpencodeTurn.
+  function opencodeBlockSessionKeyFor(projectId, tabId) {
+    return `${projectId}:opencode-block:${tabId}`
+  }
+
+  function attachOpencodeBlockSession(ws, { projectId, tabId, project }) {
+    const sessionKey = opencodeBlockSessionKeyFor(projectId, tabId)
+    let cs = opencodeBlockSessions.get(sessionKey)
+    if (!cs) {
+      const tab = store.getTab ? store.getTab(projectId, tabId) : null
+      cs = {
+        sessionKey,
+        opencodeSessionId: tab?.opencodeSessionId || null,
+        clients: new Set(),
+        history: [],
+        busy: false,
+        turnCount: 0,
+        cwd: project.cwd,
+        currentProc: null,
+        queue: [],
+      }
+      opencodeBlockSessions.set(sessionKey, cs)
+    }
+
+    // Replay history to the newly-attached client (claude-event WS msgs).
+    for (const event of cs.history) {
+      if (ws.readyState === 1) {
+        try { ws.send(JSON.stringify({ type: 'claude-event', event })) } catch {}
+      }
+    }
+
+    cs.clients.add(ws)
+
+    const onMsg = (raw) => {
+      let msg
+      try { msg = JSON.parse(raw) } catch { return }
+      if (msg.type === 'claude-input' && typeof msg.text === 'string' && msg.text.trim()) {
+        // Echo the user message locally (the driver also echoes, but echoing
+        // here keeps the UX snappy and matches the claude tab behaviour).
+        const userEvent = {
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text: msg.text }] },
+        }
+        claudeBroadcast(cs, userEvent)
+        dispatchOpencodeBlockTurn(cs, msg.text, sessionKey, project.cwd)
+      } else if (msg.type === 'ping') {
+        try { ws.send(JSON.stringify({ type: 'pong', id: msg.id })) } catch {}
+      }
+    }
+    ws.on('message', onMsg)
+    ws.on('close', () => {
+      ws.removeListener('message', onMsg)
+      cs.clients.delete(ws)
+    })
+  }
+
+  dispatchOpencodeBlockTurn = function dispatchOpencodeBlockTurn(cs, text, sessionKey, cwd) {
+    opencodeBlockDriver.runOpencodeTurn(cs, text, sessionKey, cwd)
+  }
+
   function handleInterrupt(req, res) {
     const sessionKey = sessionKeyFor(req.params.id, req.params.tabId)
     const cs = claudeSessions.get(sessionKey)
@@ -1292,7 +1368,8 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       // ClaudeBlockRenderer / CodexBlockRenderer know their own kind) when there is
       // no stored tab. Stored metadata still takes precedence when present.
       const clientTabTypeHint =
-        msg.tabType === 'claude' || msg.tabType === 'codex' || msg.tabType === 'bash'
+        msg.tabType === 'claude' || msg.tabType === 'codex' || msg.tabType === 'bash' ||
+        msg.tabType === 'fable5' || msg.tabType === 'opencode'
           ? msg.tabType
           : null
       const tabType = tab?.type || clientTabTypeHint || 'bash'
@@ -1310,6 +1387,20 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
           attachClaudeSession(ws, { projectId, tabId, project })
           return
         }
+      }
+
+      // 需求11-C: Fable5 / opencode tabs — Block render mode (default) uses the
+      // opencode block driver (rich blocks via ClaudeBlockRenderer). TUI mode
+      // (fable5RenderMode/opencodeRenderMode='terminal') falls through to the
+      // PTY launcher below, preserving the original raw-opencode TUI behaviour.
+      if (tabType === 'fable5' || tabType === 'opencode') {
+        const ocRenderMode = store.getSetting(tabType === 'fable5' ? 'fable5RenderMode' : 'opencodeRenderMode') || 'block'
+        if (ocRenderMode === 'block') {
+          console.log(`[ws:attach] routing ${tabType} to opencode block bridge (renderMode=block)`)
+          attachOpencodeBlockSession(ws, { projectId, tabId, project })
+          return
+        }
+        console.log(`[ws:attach] routing ${tabType} to PTY raw (renderMode=terminal)`)
       }
 
       if (tabType === 'codex' && !project.ssh_host && getCodexDriver() === 'sdk') {

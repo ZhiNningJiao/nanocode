@@ -13,6 +13,7 @@ import { scanClaudeUsage, listTeams, listAigwModels, probeAigwCost, effectiveCla
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri } from './remote.js'
+import { exportToEvents } from './opencode-adapter.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -348,8 +349,53 @@ export function createTerminalRoutes(store) {
   })
 
   router.get('/api/projects/:id/tabs/:tabId/history', (req, res) => {
+    // 需求11-C: opencode/fable5 block tabs — history via `opencode export`.
+    // Read-only, no quota cost. Normalises the export JSON to claude-block
+    // events via opencode-adapter.js exportToEvents() so the frontend's
+    // ClaudeBlockRenderer can replay it with the same block UI.
+    const project = store.getProject(req.params.id)
+    if (!project) return res.status(404).json({ error: 'project not found' })
+    const tab = store.getTab ? store.getTab(req.params.id, req.params.tabId) : null
+    if (tab && (tab.type === 'fable5' || tab.type === 'opencode') && tab.opencodeSessionId) {
+      handleOpencodeHistory(req, res, project, tab)
+      return
+    }
+    if (tab && (tab.type === 'fable5' || tab.type === 'opencode') && !tab.opencodeSessionId) {
+      // No session yet (brand-new tab) — return empty history; the first
+      // turn will create a session and persist opencodeSessionId.
+      return res.json({ events: [], sessionId: null })
+    }
     historyService.handleHistory(req, res)
   })
+
+  // opencode export → claude-block events (history replay for Fable5/opencode tabs)
+  function handleOpencodeHistory(req, res, project, tab) {
+    const sessionId = tab.opencodeSessionId
+    const env = { ...process.env }
+    delete env.FORCE_COLOR
+    env.NO_COLOR = '1'
+    env.TERM = 'dumb'
+    // Carry the AIGW key + config so `opencode export` can resolve the session
+    // even when the global opencode.json needs the kimi provider registered.
+    try {
+      const keyFile = join(home, '.config', 'meshy-aigw.key')
+      if (existsSync(keyFile)) env.MESHY_AIGW_KEY = readFileSync(keyFile, 'utf8').trim()
+    } catch { /* best-effort */ }
+    execFile('opencode', ['export', sessionId], { cwd: project.cwd, env, maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => {
+      if (err) {
+        console.warn(`[history:opencode] export failed for session ${sessionId}: ${err.message}`)
+        return res.json({ events: [], sessionId, error: err.message })
+      }
+      let payload
+      try { payload = JSON.parse(stdout) } catch (parseErr) {
+        console.warn(`[history:opencode] export JSON parse failed: ${parseErr.message}`)
+        return res.json({ events: [], sessionId, error: 'parse failed' })
+      }
+      const events = exportToEvents(payload)
+      console.log(`[history:opencode] tab=${req.params.tabId} session=${sessionId} events=${events.length}`)
+      res.json({ events, sessionId })
+    })
+  }
 
   // ── GET /api/claude/slash-commands ──────────────────────────────────────────
   //
