@@ -637,14 +637,49 @@ export class TabManager {
       this.newTab('claude', { fresh: true, label: 'new' })
     })
 
-    // Load recent conversations
-    this._loadRecentConversationsInto(body)
+    // Load recent conversations. 需求5.3: remember the last chosen source
+    // (project/home/all) so cross-team sessions can surface without home
+    // drowning the size-sorted list.
+    this._pickerSource = localStorage.getItem('claudeResumeSource') || 'project'
+    this._renderPickerBody(body)
   }
 
-  async _loadRecentConversationsInto(body) {
+  async _renderPickerBody(body) {
+    const source = this._pickerSource || 'project'
+    body.innerHTML = ''
+
+    // 需求5.3: source switch — This project / Home / All
+    const sourceBar = document.createElement('div')
+    sourceBar.className = 'claude-resume-picker-sources'
+    const sources = [
+      { id: 'project', label: 'This project' },
+      { id: 'home', label: 'Home' },
+      { id: 'all', label: 'All' },
+    ]
+    for (const s of sources) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'claude-resume-picker-source'
+      if (s.id === source) btn.classList.add('active')
+      btn.textContent = s.label
+      btn.title = `Show conversations from ${s.label.toLowerCase()}`
+      btn.addEventListener('click', () => {
+        this._pickerSource = s.id
+        localStorage.setItem('claudeResumeSource', s.id)
+        this._renderPickerBody(body)
+      })
+      sourceBar.appendChild(btn)
+    }
+    body.appendChild(sourceBar)
+
+    const loading = document.createElement('div')
+    loading.className = 'claude-resume-picker-loading'
+    loading.textContent = 'Loading recent conversations…'
+    body.appendChild(loading)
+
     let conversations = []
     try {
-      const resp = await fetch(`/api/projects/${this.projectId}/recent-conversations?limit=5`)
+      const resp = await fetch(`/api/projects/${this.projectId}/recent-conversations?limit=5&source=${encodeURIComponent(source)}`)
       if (resp.ok) {
         const data = await resp.json()
         conversations = data.conversations || []
@@ -653,11 +688,11 @@ export class TabManager {
       console.warn('[claude-resume-picker] failed to load conversations', err)
     }
 
-    body.innerHTML = ''
+    loading.remove()
     if (!conversations.length) {
       const empty = document.createElement('div')
       empty.className = 'claude-resume-picker-empty'
-      empty.textContent = 'No recent conversations in this project. Start a new one below.'
+      empty.textContent = 'No recent conversations in this source. Start a new one below.'
       body.appendChild(empty)
       return
     }
