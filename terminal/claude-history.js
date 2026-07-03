@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { closeSync, existsSync, openSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractSummary, relTimeFromMtime, cwdFromJsonl } from './recent-agents.js'
 import { effectiveClaudeConfigDir, claudeProjectsDir, resolveClaudeConfigDirForTab, resolveClaudeCwdForTab, listTeams } from './usage.js'
