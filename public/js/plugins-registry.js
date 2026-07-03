@@ -73,6 +73,16 @@ export const BUILTIN_PLUGINS = [
     descriptionKey: 'plugin.usage.desc',
     builtin: true,
   },
+  {
+    name: 'memory',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'session',
+    tab: { id: 'memory', labelKey: 'plugin.memory.label' },
+    permissions: ['fs.read', 'fs.write'],
+    descriptionKey: 'plugin.memory.desc',
+    builtin: true,
+  },
 ]
 
 export function builtinPlugin(name) {

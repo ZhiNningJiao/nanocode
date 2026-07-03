@@ -9,7 +9,7 @@ import * as sessions from './sessions.js'
 import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
-import { scanClaudeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir } from './usage.js'
+import { scanClaudeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -730,6 +730,95 @@ export function createTerminalRoutes(store) {
       })
     } catch (err) {
       console.error('[/api/aigw/probe-cost]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── 需求7 memory viewer plugin routes ─────────────────────────────────────
+  //
+  // GET  /api/memory/tree                — teams × projects-with-memory (browse)
+  // GET  /api/memory/files?team=&project= — list .md files in a memory dir
+  // GET  /api/memory/read?team=&project=&file= — read one md file
+  // GET  /api/memory/search?team=&project=&q= — keyword search across .md files
+  // POST /api/memory/save body{team,project,file,content} — edit with backup
+  //
+  // `team` must be a known config dir (validated against listTeams) so no
+  // arbitrary path can be read. `project`/`file` are validated by strict
+  // character classes inside usage.js (no `..` / `/` traversal).
+
+  /** Resolve a team path from the query: default to active team; reject unknown. */
+  function resolveMemoryTeam(teamPath) {
+    const { teams } = listTeams(home, store)
+    if (!teamPath) return effectiveClaudeConfigDir(store, home)
+    return teams.find((t) => t.path === teamPath && t.exists) ? teamPath : null
+  }
+
+  router.get('/api/memory/tree', (req, res) => {
+    try {
+      const activePath = effectiveClaudeConfigDir(store, home)
+      // Mark the current project's slug so the plugin can default to it.
+      // Claude encodes cwd as slug (cwd.replace(/\//g, '-')) — exact, unlike the
+      // lossy reverse decode used for display only.
+      let currentSlug = ''
+      const pid = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : ''
+      if (pid) {
+        const proj = store.getProject(pid)
+        if (proj && proj.cwd) currentSlug = String(proj.cwd).replace(/\//g, '-')
+      }
+      const teams = listMemoryTree(home, store)
+      for (const team of teams) {
+        for (const p of team.projects) p.current = p.slug === currentSlug
+      }
+      res.json({ teams, activePath, currentSlug })
+    } catch (err) {
+      console.error('[/api/memory/tree]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/memory/files', (req, res) => {
+    try {
+      const team = resolveMemoryTeam(req.query.team)
+      if (!team) return res.status(400).json({ error: 'invalid team' })
+      res.json(listMemoryFiles(team, req.query.project))
+    } catch (err) {
+      console.error('[/api/memory/files]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/memory/read', (req, res) => {
+    try {
+      const team = resolveMemoryTeam(req.query.team)
+      if (!team) return res.status(400).json({ error: 'invalid team' })
+      res.json(readMemoryFile(team, req.query.project, req.query.file))
+    } catch (err) {
+      console.error('[/api/memory/read]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/memory/search', (req, res) => {
+    try {
+      const team = resolveMemoryTeam(req.query.team)
+      if (!team) return res.status(400).json({ error: 'invalid team' })
+      res.json(searchMemory(team, req.query.project, req.query.q))
+    } catch (err) {
+      console.error('[/api/memory/search]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.post('/api/memory/save', (req, res) => {
+    try {
+      const team = resolveMemoryTeam(req.body?.team)
+      if (!team) return res.status(400).json({ error: 'invalid team' })
+      const project = typeof req.body?.project === 'string' ? req.body.project : ''
+      const file = typeof req.body?.file === 'string' ? req.body.file : ''
+      const content = typeof req.body?.content === 'string' ? req.body.content : ''
+      res.json(saveMemoryFile(team, project, file, content))
+    } catch (err) {
+      console.error('[/api/memory/save]', err)
       res.status(500).json({ error: err.message })
     }
   })

@@ -22,6 +22,7 @@ import {
   validateManifest,
 } from './plugins-registry.js'
 import { renderTeamModelPane, renderUsagePane, resetPluginLoadState } from './plugins-panel.js'
+import { renderMemoryPane, resetMemoryLoadState } from './memory-panel.js'
 
 const DOMAIN_KEY = 'rightPanel:domain'
 const SUBTAB_KEY = (d) => `rightPanel:subtab:${d}`
@@ -36,6 +37,7 @@ const BUILTIN_TAB_DOMAIN = {
 const PLUGIN_RENDERERS = {
   'team-model': renderTeamModelPane,
   usage: renderUsagePane,
+  memory: renderMemoryPane,
 }
 
 let activeDomain = 'artifacts'
@@ -345,6 +347,7 @@ function hideDomainEmpty(domain) {
 function resetPluginLoadStateFor(name) {
   // Cheap reset: clear shared load state so a re-mounted pane re-fetches.
   if (name === 'team-model' || name === 'usage') resetPluginLoadState()
+  if (name === 'memory') resetMemoryLoadState()
 }
 
 // ── persistence ───────────────────────────────────────────────────────────────

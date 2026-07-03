@@ -25,7 +25,20 @@ describe('plugins-registry (MES-13740 需求6)', () => {
   it('builtinPlugin looks up by name', () => {
     assert.equal(builtinPlugin('team-model').group, 'session')
     assert.equal(builtinPlugin('usage').group, 'ops')
+    assert.equal(builtinPlugin('memory').group, 'session')
     assert.equal(builtinPlugin('nope'), null)
+  })
+
+  it('memory plugin (需求7) declares session group + fs permissions', () => {
+    const m = builtinPlugin('memory')
+    assert.ok(m, 'memory plugin must be registered')
+    assert.equal(m.group, 'session')
+    assert.equal(m.tab.id, 'memory')
+    assert.ok(Array.isArray(m.permissions))
+    assert.ok(m.permissions.includes('fs.read'))
+    assert.ok(m.permissions.includes('fs.write'))
+    const v = validateManifest(m)
+    assert.ok(v.ok, `memory manifest invalid: ${v.errors.join('; ')}`)
   })
 
   it('rejects a non-object manifest', () => {

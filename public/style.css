@@ -1018,6 +1018,220 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .rp-flash.show { opacity: 1; }
 .rp-flash.error { color: var(--warning); }
 
+/* -- Memory viewer plugin (MES-13740 需求7) ------------------------------- */
+
+.right-panel-pane[data-rp-pane="memory"] {
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
+.mem-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.mem-row {
+  display: flex;
+  gap: var(--s-2);
+}
+.mem-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.mem-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mem-search {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+}
+.mem-search-input { flex: 1; min-width: 0; }
+.mem-clear-btn { flex-shrink: 0; }
+
+.mem-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.mem-filelist {
+  width: 38%;
+  min-width: 150px;
+  max-width: 260px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding: var(--s-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+.mem-list-head {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 var(--s-1) var(--s-1);
+}
+.mem-file-row,
+.mem-search-match {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--s-2);
+  cursor: pointer;
+  color: var(--text);
+  font-family: inherit;
+}
+.mem-file-row:hover,
+.mem-search-match:hover { background: var(--bg-hover); }
+.mem-file-row.active {
+  background: var(--bg-card);
+  border-color: var(--border-active, var(--border));
+}
+.mem-file-name {
+  font-size: 12px;
+  font-weight: 500;
+  word-break: break-all;
+}
+.mem-file-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.mem-search-match { gap: var(--s-1); }
+.mem-match-file {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary);
+  word-break: break-all;
+}
+.mem-match-snippet {
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.mem-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.mem-content-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-bottom: var(--s-2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.mem-content-crumb {
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-all;
+}
+.mem-content-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.mem-content-actions {
+  display: flex;
+  gap: var(--s-1);
+  flex-shrink: 0;
+}
+.mem-editor {
+  flex: 1;
+  min-height: 240px;
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-secondary);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--s-2);
+  line-height: 1.5;
+}
+.mem-editor:focus { border-color: var(--border-active); outline: none; }
+.mem-edit-warn { font-size: 10px; color: var(--warning); }
+
+.mem-md {
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.mem-md :is(h1, h2, h3) {
+  margin: var(--s-3) 0 var(--s-1);
+  line-height: 1.3;
+}
+.mem-md h1 { font-size: 16px; }
+.mem-md h2 { font-size: 15px; }
+.mem-md h3 { font-size: 14px; }
+.mem-md p { margin: 0 0 var(--s-2); }
+.mem-md ul, .mem-md ol { margin: 0 0 var(--s-2); padding-left: var(--s-4); }
+.mem-md li { margin: 2px 0; }
+.mem-md pre {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--s-2);
+  overflow-x: auto;
+  margin: 0 0 var(--s-2);
+}
+.mem-md code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.mem-md :not(pre) > code {
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+.mem-md a { color: var(--primary); text-decoration: underline; }
+.mem-md table {
+  border-collapse: collapse;
+  margin: 0 0 var(--s-2);
+  font-size: 12px;
+}
+.mem-md th, .mem-md td {
+  border: 1px solid var(--border);
+  padding: var(--s-1) var(--s-2);
+}
+.mem-md hr { border: none; border-top: 1px solid var(--border); margin: var(--s-3) 0; }
+
+.mem-hint {
+  margin: auto;
+  padding: var(--s-4);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.mem-error { color: var(--warning); }
+
 /* -- Terminal tab strip + stack -------------------------------- */
 
 .terminal-tab-strip {
@@ -2715,6 +2929,25 @@ body.workspace-active .landing-overlay { display: none; }
   .claude-resume-picker-new,
   .claude-resume-picker-secondary { min-height: 44px; }
   .claude-resume-picker-item { min-height: 56px; padding: 12px 8px; }
+
+  /* Memory viewer: stack file list over content, ≥44px touch targets */
+  .mem-body { flex-direction: column; }
+  .mem-filelist {
+    width: 100%;
+    max-width: 100%;
+    max-height: 40%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .mem-file-row,
+  .mem-search-match { min-height: 44px; }
+  .mem-search .rp-btn-sm { min-height: 44px; }
+  #mem-team-select,
+  #mem-project-select { min-height: 44px; }
+  #mem-search-input { min-height: 44px; }
+  .mem-content-actions .rp-btn-sm { min-height: 44px; }
+  .mem-content-meta { display: none; }
+  .mem-editor { min-height: 200px; font-size: 13px; }
 
 }
 
