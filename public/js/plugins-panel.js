@@ -1,14 +1,16 @@
 /**
- * Plugins & Usage panels — MES-13740 需求1.
+ * Plugins & Usage render cores — MES-13740 需求1 (rendered via 需求6 registry).
  *
- * Two right-panel panes are filled here:
- *   - Plugins pane: Team switch (CLAUDE_CONFIG_DIR) + Model switch (AIGW litellm/* list)
- *   - Usage pane:   Claude JSONL token aggregation + AIGW one-shot cost probe
+ * Two render functions are exported, each taking the pane element to fill:
+ *   - renderTeamModelPane(pane): Team switch (CLAUDE_CONFIG_DIR) + Model switch
+ *   - renderUsagePane(pane):    Claude JSONL token aggregation + AIGW cost probe
  *
- * Data is fetched lazily when the user first opens the pane (listens for the
- * `nanocode:right-panel-tab` event from right-panel.js) and refreshed on
- * demand via refresh buttons. All sources are labelled honestly: unavailable
- * sources show "该源无用量接口" instead of pretending.
+ * Data is fetched when the pane is rendered and refreshed on demand via the
+ * refresh buttons. All sources are labelled honestly: unavailable sources show
+ * "该源无用量接口" instead of pretending.
+ *
+ * These are render cores only (the "芯"). The 需求6 right-panel.js registry is
+ * the shell that mounts/unmounts them; their internal logic is unchanged.
  */
 
 import { fetchSettings, updateSetting } from './api.js'
@@ -29,22 +31,13 @@ async function ensureSettings() {
   return settings
 }
 
-export function initPluginsPanel() {
-  document.addEventListener('nanocode:right-panel-tab', (e) => {
-    const tab = e.detail?.tab
-    if (tab === 'plugins') loadPluginsPane()
-    else if (tab === 'usage') loadUsagePane()
-  })
-}
+// ── Team & Model pane (Session domain) ────────────────────────────────────────
 
-// ── Plugins pane: Team switch + Model switch ─────────────────────────────────
-
-async function loadPluginsPane() {
-  const pane = document.querySelector('.right-panel-pane[data-rp-pane="plugins"]')
+export async function renderTeamModelPane(pane) {
   if (!pane) return
   if (!pluginsLoaded) {
     pane.innerHTML = ''
-    pane.appendChild(buildPluginsSkeleton())
+    pane.appendChild(buildSkeleton())
     pluginsLoaded = true
   }
   try {
@@ -53,20 +46,20 @@ async function loadPluginsPane() {
       fetch('/api/teams').then((r) => r.json()),
       fetch('/api/aigw/models').then((r) => r.json()),
     ])
-    renderPluginsPane(pane, teamsRes, modelsRes)
+    renderTeamModelContent(pane, teamsRes, modelsRes)
   } catch (err) {
-    renderPluginsError(pane, err)
+    renderError(pane, err)
   }
 }
 
-function buildPluginsSkeleton() {
+function buildSkeleton() {
   const div = document.createElement('div')
   div.className = 'rp-loading'
   div.textContent = '...'
   return div
 }
 
-function renderPluginsError(pane, err) {
+function renderError(pane, err) {
   pane.innerHTML = ''
   const div = document.createElement('div')
   div.className = 'rp-section rp-error'
@@ -74,13 +67,13 @@ function renderPluginsError(pane, err) {
   pane.appendChild(div)
 }
 
-function renderPluginsPane(pane, teamsRes, modelsRes) {
+function renderTeamModelContent(pane, teamsRes, modelsRes) {
   pane.innerHTML = ''
-  pane.appendChild(renderTeamSection(teamsRes))
+  pane.appendChild(renderTeamSection(pane, teamsRes))
   pane.appendChild(renderModelSection(modelsRes))
 }
 
-function renderTeamSection(teamsRes) {
+function renderTeamSection(pane, teamsRes) {
   const section = document.createElement('div')
   section.className = 'rp-section'
   const title = document.createElement('div')
@@ -111,7 +104,7 @@ function renderTeamSection(teamsRes) {
     radio.name = 'rp-team'
     radio.value = team.path
     radio.checked = team.path === activePath
-    radio.addEventListener('change', () => onTeamChange(team.path))
+    radio.addEventListener('change', () => onTeamChange(pane, team.path))
     const label = document.createElement('span')
     label.className = 'rp-option-label'
     const name = document.createElement('span')
@@ -129,13 +122,13 @@ function renderTeamSection(teamsRes) {
   return section
 }
 
-async function onTeamChange(path) {
+async function onTeamChange(pane, path) {
   try {
     await updateSetting(TEAM_KEY, path)
     settings[TEAM_KEY] = path
-    flashStatus('plugins', t('plugins.team.applied'))
+    flashStatus(pane, t('plugins.team.applied'))
   } catch (err) {
-    flashStatus('plugins', String(err.message || err), true)
+    flashStatus(pane, String(err.message || err), true)
   }
 }
 
@@ -216,9 +209,9 @@ async function onClaudeModelChange(model) {
     const val = (model || '').trim()
     await updateSetting(CLAUDE_MODEL_KEY, val)
     settings[CLAUDE_MODEL_KEY] = val
-    flashStatus('plugins', t('plugins.model.applied'))
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), t('plugins.model.applied'))
   } catch (err) {
-    flashStatus('plugins', String(err.message || err), true)
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), String(err.message || err), true)
   }
 }
 
@@ -226,56 +219,40 @@ async function onAigwModelChange(model) {
   try {
     await updateSetting(AIGW_KEY, model)
     settings[AIGW_KEY] = model
-    flashStatus('plugins', t('plugins.model.applied'))
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), t('plugins.model.applied'))
   } catch (err) {
-    flashStatus('plugins', String(err.message || err), true)
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), String(err.message || err), true)
   }
 }
 
-// ── Usage pane: Claude tokens + AIGW cost probe ──────────────────────────────
+// ── Usage pane (Ops domain) ────────────────────────────────────────────────────
 
-async function loadUsagePane() {
-  const pane = document.querySelector('.right-panel-pane[data-rp-pane="usage"]')
+export async function renderUsagePane(pane) {
   if (!pane) return
   if (!usageLoaded) {
     pane.innerHTML = ''
-    pane.appendChild(buildUsageSkeleton())
+    pane.appendChild(buildSkeleton())
     usageLoaded = true
   }
   try {
     await ensureSettings()
     const usage = await fetch('/api/usage/claude').then((r) => r.json())
-    renderUsagePane(pane, usage)
+    renderUsageContent(pane, usage)
   } catch (err) {
-    renderUsageError(pane, err)
+    renderError(pane, err)
   }
 }
 
-function buildUsageSkeleton() {
-  const div = document.createElement('div')
-  div.className = 'rp-loading'
-  div.textContent = '...'
-  return div
-}
-
-function renderUsageError(pane, err) {
-  pane.innerHTML = ''
-  const div = document.createElement('div')
-  div.className = 'rp-section rp-error'
-  div.textContent = String(err.message || err)
-  pane.appendChild(div)
-}
-
-function renderUsagePane(pane, usage) {
+function renderUsageContent(pane, usage) {
   pane.innerHTML = ''
   const refreshBtn = document.createElement('button')
   refreshBtn.className = 'rp-refresh-btn'
   refreshBtn.textContent = t('usage.refresh')
-  refreshBtn.addEventListener('click', () => { usageLoaded = false; loadUsagePane() })
+  refreshBtn.addEventListener('click', () => { usageLoaded = false; renderUsagePane(pane) })
   pane.appendChild(refreshBtn)
 
   pane.appendChild(renderClaudeUsageSection(usage))
-  pane.appendChild(renderAigwProbeSection())
+  pane.appendChild(renderAigwProbeSection(pane))
 }
 
 function renderClaudeUsageSection(usage) {
@@ -344,7 +321,7 @@ function statCell(label, value) {
   return cell
 }
 
-function renderAigwProbeSection() {
+function renderAigwProbeSection(pane) {
   const section = document.createElement('div')
   section.className = 'rp-section'
   const title = document.createElement('div')
@@ -421,20 +398,25 @@ async function onProbeCost(btn) {
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+export function resetPluginLoadState() {
+  // Used by the registry/tests when a plugin pane is (re)mounted fresh.
+  pluginsLoaded = false
+  usageLoaded = false
+  settings = {}
+}
+
 function fmtNum(n) {
   const v = Number(n) || 0
   return v.toLocaleString()
 }
 
 function flashStatus(pane, msg, isError = false) {
-  let status = document.getElementById(`rp-status-${pane}`)
+  if (!pane) return
+  let status = pane.querySelector('.rp-flash')
   if (!status) {
-    const p = document.querySelector(`.right-panel-pane[data-rp-pane="${pane}"]`)
-    if (!p) return
     status = document.createElement('div')
-    status.id = `rp-status-${pane}`
     status.className = 'rp-flash'
-    p.appendChild(status)
+    pane.appendChild(status)
   }
   status.textContent = msg
   status.classList.toggle('error', isError)
