@@ -11,6 +11,7 @@ import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
 import { scanClaudeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
+import { listBranches, diffOverview, fileDiff } from './compare.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -866,6 +867,61 @@ export function createTerminalRoutes(store) {
       res.json(listSkills(home, store))
     } catch (err) {
       console.error('[/api/skills]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── 需求14 compare plugin routes (read-only git) ───────────────────────────
+  //
+  // GET  /api/compare/branches?projectId=&limit=  — newest-first branch list
+  // GET  /api/compare/diff?projectId=&base=&head= — numstat file list + summary
+  // GET  /api/compare/file-diff?projectId=&base=&head=&file= — unified diff
+  //
+  // All git operations are read-only (no checkout/mutate). base/head are
+  // validated against the real branch list (membership); file is validated by
+  // a strict path regex (no `..`, no leading `/`). cwd comes from the project
+  // record so the user can't diff an arbitrary path.
+
+  function compareCwd(projectId) {
+    const proj = projectId ? store.getProject(projectId) : null
+    return proj && proj.cwd ? proj.cwd : ''
+  }
+
+  router.get('/api/compare/branches', async (req, res) => {
+    try {
+      const cwd = compareCwd(req.query.projectId)
+      if (!cwd) return res.status(400).json({ error: 'project has no cwd' })
+      const limit = parseInt(req.query.limit, 10) || 10
+      res.json(await listBranches(cwd, limit))
+    } catch (err) {
+      console.error('[/api/compare/branches]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/compare/diff', async (req, res) => {
+    try {
+      const cwd = compareCwd(req.query.projectId)
+      if (!cwd) return res.status(400).json({ error: 'project has no cwd' })
+      const base = typeof req.query.base === 'string' ? req.query.base : ''
+      const head = typeof req.query.head === 'string' ? req.query.head : ''
+      res.json(await diffOverview(cwd, base, head))
+    } catch (err) {
+      console.error('[/api/compare/diff]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/compare/file-diff', async (req, res) => {
+    try {
+      const cwd = compareCwd(req.query.projectId)
+      if (!cwd) return res.status(400).json({ error: 'project has no cwd' })
+      const base = typeof req.query.base === 'string' ? req.query.base : ''
+      const head = typeof req.query.head === 'string' ? req.query.head : ''
+      const file = typeof req.query.file === 'string' ? req.query.file : ''
+      res.json(await fileDiff(cwd, base, head, file))
+    } catch (err) {
+      console.error('[/api/compare/file-diff]', err)
       res.status(500).json({ error: err.message })
     }
   })

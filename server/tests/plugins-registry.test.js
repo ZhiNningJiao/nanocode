@@ -55,6 +55,22 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(v.ok, `persona manifest invalid: ${v.errors.join('; ')}`)
   })
 
+  it('compare plugin (需求14) declares artifacts group + git.read/fs.read', () => {
+    const m = builtinPlugin('compare')
+    assert.ok(m, 'compare plugin must be registered')
+    assert.equal(m.group, 'artifacts')
+    assert.equal(m.tab.id, 'compare')
+    assert.equal(m.apiVersion, PLUGIN_API_VERSION)
+    assert.ok(Array.isArray(m.permissions))
+    assert.ok(m.permissions.includes('git.read'))
+    assert.ok(m.permissions.includes('fs.read'))
+    // ecosystem settings field (需求14 补充)
+    assert.ok(m.settings && typeof m.settings === 'object')
+    assert.equal(m.settings.defaultBranches, 10)
+    const v = validateManifest(m)
+    assert.ok(v.ok, `compare manifest invalid: ${v.errors.join('; ')}`)
+  })
+
   it('rejects a non-object manifest', () => {
     const v = validateManifest(null)
     assert.equal(v.ok, false)
@@ -114,6 +130,23 @@ describe('plugins-registry (MES-13740 需求6)', () => {
       name: 'ok', version: '1.0.0', apiVersion: '1.0', group: 'artifacts', tab: { id: 'ok' },
     })
     assert.equal(v.ok, true)
+  })
+
+  it('accepts an optional settings object (需求14 补充 ecosystem field)', () => {
+    const v = validateManifest({
+      name: 'ok', version: '1.0.0', apiVersion: '1.0', group: 'artifacts',
+      tab: { id: 'ok' }, settings: { defaultBranches: 20, foo: 'bar' },
+    })
+    assert.equal(v.ok, true)
+  })
+
+  it('rejects a non-object settings field', () => {
+    const v = validateManifest({
+      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'artifacts',
+      tab: { id: 'bad' }, settings: ['nope'],
+    })
+    assert.equal(v.ok, false)
+    assert.ok(v.errors.some((e) => /settings/.test(e)))
   })
 
   it('built-ins declare permissions as arrays of strings', () => {
