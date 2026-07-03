@@ -854,5 +854,5 @@ export function createClaudeSdkDriver({
     return runPerTurnSdkTurn(cs, userText, sessionKey, cwd)
   }
 
-  return { runSdkTurn }
+  return { runSdkTurn, teardownStreamingSession }
 }

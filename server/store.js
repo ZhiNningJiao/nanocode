@@ -231,13 +231,32 @@ export function createStore(filePath = ':memory:') {
     createProject(name, cwd)
   }
 
-  function close() { /* no-op for JSON store */ }
+  // Shutdown hooks: modules that hold live resources (e.g. the claude session
+  // controller's in-process SDK streaming sessions → child-process handles)
+  // register a teardown here. close() runs them so the process can exit. This
+  // fires ONLY on real server shutdown / test end — never on a WS reload — so
+  // reload-survives behaviour is preserved (the controller's ws.on('close')
+  // does not tear sessions down).
+  const _closeHooks = []
+  function registerCloseHook(fn) {
+    if (typeof fn === 'function') _closeHooks.push(fn)
+  }
+
+  function close() {
+    while (_closeHooks.length) {
+      const fn = _closeHooks.shift()
+      try { fn() } catch (err) {
+        console.warn('[store] close hook failed:', err?.message || err)
+      }
+    }
+  }
 
   return {
     getSetting, setSetting, getAllSettings,
     createProject, getProject, listProjects, removeProject,
     migrateProjectsJson, ensureStarterProject,
     listTabs, createTab, removeTab, renameTab, hasTab, getTab, updateTabMetadata,
+    registerCloseHook,
     close,
   }
 }
