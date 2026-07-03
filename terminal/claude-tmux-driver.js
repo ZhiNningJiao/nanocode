@@ -119,6 +119,16 @@ function launchBridge(sessionKey, opts) {
     // wrapSpawnWithTeamEnv exactly. (This applies the EXISTING team resolution;
     // it does not change dual-team behaviour.)
     ...(opts.configDir ? ['-e', `CLAUDE_CONFIG_DIR=${opts.configDir}`] : []),
+    // ── Pin HOME ────────────────────────────────────────────────────────────
+    // Same frozen-env trap as above, but for HOME: a tmux server first started
+    // inside a Cursor sandbox carried HOME=/home/<user> while the real home is
+    // /storage/home/<user>. claude resolves ~/.claude from HOME, so bridges
+    // inheriting the stale HOME read/write sessions in a DIFFERENT config root
+    // than the nanocode server that indexed them → resume dies with "No
+    // conversation found" while the turn still settles "successfully" (气泡有
+    // 回复无). Always pin to the nanocode server's own HOME so bridge, claude
+    // child, and server agree on where ~/.claude lives.
+    ...(process.env.HOME ? ['-e', `HOME=${process.env.HOME}`] : []),
     '-s', name,
     '-n', 'nanocode-claude',
     // NOTE: no bare 'exec' here. tmux runs the trailing argv directly with
@@ -493,7 +503,16 @@ export function createClaudeTmuxDriver({ store, home, claudeBroadcast, broadcast
         cs.currentProc = procProxy
 
         try {
-          client.send({ type: 'user', text: userText })
+          client.send({
+          type: 'user',
+          text: userText,
+          // Forward the CURRENT model/effort settings with every turn so a
+          // /model switch reaches long-lived bridges (which otherwise froze
+          // --model at launch). The bridge rebuilds its streaming session with
+          // --resume when these change between turns.
+          model: store.getSetting('claude_model') || null,
+          effort: store.getSetting('claude_effort') || null,
+        })
         } catch (err) {
           // Socket already dead when we tried to dispatch — fail fast instead
           // of waiting for a turn-done that can never come.
