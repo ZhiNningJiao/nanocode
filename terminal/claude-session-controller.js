@@ -205,6 +205,27 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     }
   }
 
+  // 需求9: server-owned queue delivery. When the server drains tab.pendingQueue
+  // (queued while busy + persisted immediately) it starts a new turn directly —
+  // bypassing the WS 'claude-input' handler that normally broadcasts the 'user'
+  // echo event. Connected clients (page still open) would never see the user
+  // message render. This helper builds + broadcasts the same 'user' event the WS
+  // handler emits (line ~1001) so all connected clients render the delivered
+  // queued message live. On reconnect, history replay renders it again (no
+  // nonce → no dedup), exactly like the normal send flow.
+  function broadcastUserEcho(cs, text) {
+    if (!cs || typeof text !== 'string' || !text.trim()) return
+    if (!cs._replayUserTextCounts) cs._replayUserTextCounts = new Map()
+    const userEvent = {
+      type: 'user',
+      uuid: randomUUID(),
+      replay_id: buildUserReplayId(text, cs._replayUserTextCounts),
+      message: { role: 'user', content: [{ type: 'text', text }] },
+      _nonce: null,
+    }
+    claudeBroadcast(cs, userEvent)
+  }
+
   function getClaudeDriver() {
     const driver = store.getSetting('claude_driver')
     if (driver === 'cli') return 'cli'
@@ -282,6 +303,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     store,
     home,
     claudeBroadcast,
+    broadcastUserEcho,
     rerunTurn: (...args) => dispatchClaudeTurn(...args),
     runCliFallback: (...args) => runClaudeCliTurn(...args),
     onClaudeSpawn: ({ sessionKey, pid, proxy }) => {
@@ -296,6 +318,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     store,
     home,
     claudeBroadcast,
+    broadcastUserEcho,
     rerunTurn: (...args) => dispatchClaudeTurn(...args),
   })
   let dispatchCodexTurn = null

@@ -483,21 +483,20 @@ function setupChatInput() {
   let _queueTabId = null
 
   // ── Queue persistence helpers ─────────────────────────────────────────────
-  // Debounced PUT so rapid mutations (splice loop) only fire one request.
-  let _persistTimer = null
-  function _schedulePersist() {
+  // 需求9: persist IMMEDIATELY (no debounce) with keepalive so the message
+  // lands on the server before a mobile tab suspend/kill can lose it. The old
+  // 200ms debounce was the loss window — a page closed inside it lost the queue.
+  function _persistQueueNow() {
     if (!_queueProjectId || !_queueTabId) return
-    clearTimeout(_persistTimer)
-    _persistTimer = setTimeout(() => {
-      const pid = _queueProjectId
-      const tid = _queueTabId
-      const snapshot = [..._pendingQueue]
-      fetch(`/api/projects/${pid}/tabs/${tid}/queue`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queue: snapshot }),
-      }).catch(() => { /* non-fatal */ })
-    }, 200)
+    const pid = _queueProjectId
+    const tid = _queueTabId
+    const snapshot = [..._pendingQueue]
+    fetch(`/api/projects/${pid}/tabs/${tid}/queue`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queue: snapshot }),
+      keepalive: true,
+    }).catch(() => { /* non-fatal */ })
   }
 
   async function _hydrateQueue(projectId, tabId) {
@@ -549,7 +548,7 @@ function setupChatInput() {
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
         _pendingQueue.splice(+btn.dataset.idx, 1)
-        _schedulePersist()
+        _persistQueueNow()
         updateQueueTray()
       })
     })
@@ -573,7 +572,7 @@ function setupChatInput() {
         e.stopPropagation()
         if (_pendingQueue.length === 0) return
         _pendingQueue.splice(0)
-        _schedulePersist()
+        _persistQueueNow()
         updateQueueTray()
         chatInput.focus()
       })
@@ -594,7 +593,7 @@ function setupChatInput() {
     }
     if (_pendingQueue.length === 0) return
     const all = _pendingQueue.splice(0)
-    _schedulePersist()
+    _persistQueueNow()
     updateQueueTray()
     const combined = all.join('\n\n')
     // 1) Echo + push the combined message to the backend (lands in the server
@@ -654,19 +653,13 @@ function setupChatInput() {
       stopBtn.hidden = true
       bgBtn.hidden = true
       sendBtn.hidden = false
-      // Auto-flush: when Claude becomes idle, send all pending queued messages
-      // as one combined turn (matches CLI "send all at once when idle" behaviour).
-      // skipFlush=true when called from nanocode:tab-active to prevent premature
-      // flush — flush must only happen on a real WS result event (b67a2b6, P0).
-      if (!thinking && isClaudeTab && _pendingQueue.length > 0 && !skipFlush) {
-        const all = _pendingQueue.splice(0)
-        _schedulePersist()
-        updateQueueTray()
-        const combined = all.join('\n\n')
-        if (activePane) activePane.sendInputWithEcho(combined)
-        pushHistory(combined)
-        resetHistoryNav()
-      }
+      // 需求9: queue delivery is now server-owned. When Claude becomes idle the
+      // server drains tab.pendingQueue itself (terminal/claude-*-driver.js
+      // finally block), so the message is delivered even if this page was
+      // suspended/closed before idle. The client NO LONGER flushes here — doing
+      // so would race the server drain and double-deliver. The local
+      // _pendingQueue mirror is cleared by the 'nanocode:claude-queue-drained'
+      // event the server broadcasts when it drains the queue.
     }
   }
 
@@ -752,6 +745,22 @@ function setupChatInput() {
       sendBtn.title = isCodexThinking ? 'Codex is working… (send to interact)' : 'Send'
     } else {
       updateThinkingState(!!detail.thinking)
+    }
+  })
+
+  // 需求9: the server is now the sole queue delivery path. When it drains
+  // tab.pendingQueue (agent went idle) it broadcasts 'queue-drained'; clear the
+  // local _pendingQueue mirror so the tray doesn't show stale items that the
+  // server already delivered. Only clear for the active claude tab.
+  document.addEventListener('nanocode:claude-queue-drained', (e) => {
+    const detail = e.detail || {}
+    const activeId = tabManager ? tabManager.activeId : null
+    if (!activeId || detail.tabId !== activeId) return
+    if (!isClaudeTab) return
+    if (_pendingQueue.length > 0) {
+      _pendingQueue.splice(0)
+      _persistQueueNow()
+      updateQueueTray()
     }
   })
 
@@ -1448,7 +1457,7 @@ function setupChatInput() {
     // Claude finishes. To interrupt instead, use the Stop button.
     if (isClaudeTab && isClaudeThinking) {
       _pendingQueue.push(text)
-      _schedulePersist()
+      _persistQueueNow()
       chatInput.value = ''
       autoResize()
       hideSuggestions()
@@ -1588,7 +1597,7 @@ function setupChatInput() {
         // Priority 4 (claude tab, idle): clear the pending queue so the user is
         // never stuck with un-cancelable queued messages.
         _pendingQueue.splice(0)
-        _schedulePersist()
+        _persistQueueNow()
         updateQueueTray()
       } else if (chatInput.value) {
         // Priority 5: clear input
@@ -1612,7 +1621,7 @@ function setupChatInput() {
       // Mirrors CLI "press up to edit queued messages" behaviour.
       if (isClaudeTab && _pendingQueue.length > 0 && chatInput.value === '') {
         chatInput.value = _pendingQueue.pop()
-        _schedulePersist()
+        _persistQueueNow()
         updateQueueTray()
         autoResize()
         chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length)
@@ -1705,7 +1714,7 @@ function setupChatInput() {
           // Same as keyboard ↑: pop pending queue first if applicable
           if (isClaudeTab && _pendingQueue.length > 0 && chatInput.value === '') {
             chatInput.value = _pendingQueue.pop()
-            _schedulePersist()
+            _persistQueueNow()
             updateQueueTray()
             autoResize()
             break

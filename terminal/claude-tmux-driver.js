@@ -345,7 +345,7 @@ function buildOptions(cs, cwd, store, home) {
   }
 }
 
-export function createClaudeTmuxDriver({ store, home, claudeBroadcast, rerunTurn }) {
+export function createClaudeTmuxDriver({ store, home, claudeBroadcast, broadcastUserEcho, rerunTurn }) {
   async function runTmuxTurn(cs, userText, sessionKey, cwd) {
     const quietQueue = cs._quietQueueOnce === true
     cs._quietQueueOnce = false
@@ -480,7 +480,8 @@ export function createClaudeTmuxDriver({ store, home, claudeBroadcast, rerunTurn
       const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'
       const forceFlush = cs._forceFlushQueue === true
       cs._forceFlushQueue = false
-      if (cs.queue?.length > 0 && (forceFlush || !wasInterrupted || autoFlushOnInterrupt)) {
+      const flushedCsQueue = cs.queue?.length > 0 && (forceFlush || !wasInterrupted || autoFlushOnInterrupt)
+      if (flushedCsQueue) {
         const allQueued = cs.queue.splice(0)
         const combinedText = allQueued.join('\n\n')
         console.log(`[claude:tmux:queue] sessionKey=${sessionKey} flushing ${allQueued.length} queued message(s) (interrupted=${wasInterrupted}, force=${forceFlush})`)
@@ -488,6 +489,29 @@ export function createClaudeTmuxDriver({ store, home, claudeBroadcast, rerunTurn
           claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
         }
         setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+      } else {
+        // 需求9: server-owned queue delivery. The client no longer flushes its
+        // local _pendingQueue on idle (that raced this drain + could lose the
+        // message if the mobile tab was suspended). Instead it persists queued
+        // messages to tab.pendingQueue IMMEDIATELY on submit, and the server
+        // drains that store here when the turn ends — so the message is
+        // delivered even if the client page was closed/suspended before idle.
+        // Only drain when the cs.queue path above did not fire (avoids double).
+        try {
+          const [pid, , tid] = sessionKey.split(':')
+          const tab = store.getTab ? store.getTab(pid, tid) : null
+          if (tab && Array.isArray(tab.pendingQueue) && tab.pendingQueue.length > 0) {
+            const allQueued = tab.pendingQueue.slice()
+            store.updateTabMetadata(pid, tid, { pendingQueue: [] })
+            const combinedText = allQueued.join('\n\n')
+            console.log(`[claude:tmux:queue] sessionKey=${sessionKey} draining ${allQueued.length} persisted pendingQueue message(s)`)
+            claudeBroadcast(cs, { type: 'system', subtype: 'queue-drained', text: `Delivering ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
+            if (broadcastUserEcho) broadcastUserEcho(cs, combinedText)
+            setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+          }
+        } catch (drainErr) {
+          console.error(`[claude:tmux:queue] sessionKey=${sessionKey} pendingQueue drain error:`, drainErr?.message || drainErr)
+        }
       }
     }
   }

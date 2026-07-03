@@ -306,6 +306,7 @@ export function createClaudeSdkDriver({
   store,
   home,
   claudeBroadcast,
+  broadcastUserEcho,
   rerunTurn,
   runCliFallback,
   queryImpl = defaultQuery,
@@ -508,14 +509,32 @@ export function createClaudeSdkDriver({
       const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'
       const forceFlush = cs._forceFlushQueue === true
       cs._forceFlushQueue = false
-      if (cs.queue.length > 0) {
-        if (forceFlush || !wasInterrupted || autoFlushOnInterrupt) {
-          const allQueued = cs.queue.splice(0)
-          const combinedText = allQueued.join('\n\n')
-          if (wasInterrupted && !forceFlush) {
-            claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
+      const flushedCsQueue = cs.queue.length > 0 && (forceFlush || !wasInterrupted || autoFlushOnInterrupt)
+      if (flushedCsQueue) {
+        const allQueued = cs.queue.splice(0)
+        const combinedText = allQueued.join('\n\n')
+        if (wasInterrupted && !forceFlush) {
+          claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
+        }
+        setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+      } else {
+        // 需求9: server-owned queue delivery — drain the persisted tab.pendingQueue
+        // (client queued while busy and persisted immediately) when the cs.queue
+        // path did not fire, so messages survive a mobile tab suspend/kill.
+        try {
+          const [pid, , tid] = sessionKey.split(':')
+          const tab = store.getTab ? store.getTab(pid, tid) : null
+          if (tab && Array.isArray(tab.pendingQueue) && tab.pendingQueue.length > 0) {
+            const allQueued = tab.pendingQueue.slice()
+            store.updateTabMetadata(pid, tid, { pendingQueue: [] })
+            const combinedText = allQueued.join('\n\n')
+            claudeBroadcast(cs, { type: 'system', subtype: 'queue-drained', text: `Delivering ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
+            console.log(`[claude:sdk:queue] sessionKey=${sessionKey} draining ${allQueued.length} persisted pendingQueue message(s) (per-turn)`)
+            if (broadcastUserEcho) broadcastUserEcho(cs, combinedText)
+            setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
           }
-          setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+        } catch (drainErr) {
+          console.error(`[claude:sdk:queue] sessionKey=${sessionKey} pendingQueue drain error:`, drainErr?.message || drainErr)
         }
       }
     }
@@ -774,14 +793,31 @@ export function createClaudeSdkDriver({
       // flush regardless of the auto-flush setting so the message is never lost.
       const forceFlush = cs._forceFlushQueue === true
       cs._forceFlushQueue = false
-      if (cs.queue.length > 0) {
-        if (forceFlush || !wasInterrupted || autoFlushOnInterrupt) {
-          const allQueued = cs.queue.splice(0)
-          const combinedText = allQueued.join('\n\n')
-          if (wasInterrupted && !forceFlush) {
-            claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
+      const flushedCsQueue = cs.queue.length > 0 && (forceFlush || !wasInterrupted || autoFlushOnInterrupt)
+      if (flushedCsQueue) {
+        const allQueued = cs.queue.splice(0)
+        const combinedText = allQueued.join('\n\n')
+        if (wasInterrupted && !forceFlush) {
+          claudeBroadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
+        }
+        setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+      } else {
+        // 需求9: server-owned queue delivery — drain persisted tab.pendingQueue
+        // so messages survive a mobile tab suspend/kill (see claude-tmux-driver).
+        try {
+          const [pid, , tid] = sessionKey.split(':')
+          const tab = store.getTab ? store.getTab(pid, tid) : null
+          if (tab && Array.isArray(tab.pendingQueue) && tab.pendingQueue.length > 0) {
+            const allQueued = tab.pendingQueue.slice()
+            store.updateTabMetadata(pid, tid, { pendingQueue: [] })
+            const combinedText = allQueued.join('\n\n')
+            claudeBroadcast(cs, { type: 'system', subtype: 'queue-drained', text: `Delivering ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
+            console.log(`[claude:sdk:queue] sessionKey=${sessionKey} draining ${allQueued.length} persisted pendingQueue message(s) (streaming)`)
+            if (broadcastUserEcho) broadcastUserEcho(cs, combinedText)
+            setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
           }
-          setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+        } catch (drainErr) {
+          console.error(`[claude:sdk:queue] sessionKey=${sessionKey} pendingQueue drain error:`, drainErr?.message || drainErr)
         }
       }
     }
