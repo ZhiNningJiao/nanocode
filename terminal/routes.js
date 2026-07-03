@@ -200,6 +200,15 @@ export function createTerminalRoutes(store) {
     const claudeSessionId = typeof req.body?.claudeSessionId === 'string' && req.body.claudeSessionId.trim()
       ? req.body.claudeSessionId.trim()
       : undefined
+    // 需求5: a cross-team/cross-cwd resume carries the session's owning team
+    // (CLAUDE_CONFIG_DIR) and the session's original cwd so the spawned claude
+    // reads the right config and finds the jsonl in the right project slug.
+    const claudeConfigDir = typeof req.body?.claudeConfigDir === 'string' && req.body.claudeConfigDir.trim()
+      ? req.body.claudeConfigDir.trim()
+      : undefined
+    const claudeSessionCwd = typeof req.body?.claudeSessionCwd === 'string' && req.body.claudeSessionCwd.trim()
+      ? req.body.claudeSessionCwd.trim()
+      : undefined
     const tmuxTarget = typeof req.body?.tmuxTarget === 'string' && req.body.tmuxTarget.trim()
       ? req.body.tmuxTarget.trim()
       : undefined
@@ -207,7 +216,7 @@ export function createTerminalRoutes(store) {
     // NOT auto-resume the newest jsonl. Stored as tab.skipAutoResume and honored
     // by resolveSessionJsonl + the first-turn --session-id decision.
     const skipAutoResume = type === 'claude' && req.body?.fresh === true
-    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, tmuxTarget, skipAutoResume })
+    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, claudeConfigDir, claudeSessionCwd, tmuxTarget, skipAutoResume })
     broadcastTabs(req.params.id)
     res.status(201).json(tab)
   })

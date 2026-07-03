@@ -675,7 +675,14 @@ export class TabManager {
       const meta = document.createElement('div')
       meta.className = 'claude-resume-picker-item-meta'
       const sizeKb = c.byteSize > 1024 ? (c.byteSize / 1024).toFixed(0) + ' KB' : c.byteSize + ' B'
-      meta.textContent = `${c.messageCount} msgs · ${sizeKb} · ${c.relTime}`
+      // 需求5: annotate the source team + cwd so the user knows a conversation
+      // belongs to another team (or to the home/secretary cwd) before resuming.
+      const badges = []
+      if (c.teamName) badges.push(c.teamName)
+      if (c.isHome) badges.push('home')
+      else if (c.cwd) badges.push(c.cwd)
+      const badgeText = badges.length ? ` · ${badges.join(' / ')}` : ''
+      meta.textContent = `${c.messageCount} msgs · ${sizeKb} · ${c.relTime}${badgeText}`
       info.appendChild(summary)
       info.appendChild(meta)
       row.appendChild(info)
@@ -687,7 +694,19 @@ export class TabManager {
       resume.title = `Resume session ${c.sessionId}`
       resume.addEventListener('click', () => {
         this._closeClaudeResumePicker()
-        this.newTab('claude', { claudeSessionId: c.sessionId, label: 'resume' })
+        // 需求5: carry the session's owning team (configDir) + original cwd so
+        // the spawned claude resumes under the right CLAUDE_CONFIG_DIR and in
+        // the matching project-slug dir (cross-team / cross-cwd resume).
+        const opts = { claudeSessionId: c.sessionId }
+        // 需求5: annotate the tab label with the source team so cross-team tabs
+        // are distinguishable in the tab strip (e.g. "resume·team2", "resume·home").
+        const tags = []
+        if (c.isCrossTeam && c.teamId) tags.push(c.teamId)
+        else if (c.isHome) tags.push('home')
+        opts.label = tags.length ? `resume·${tags.join('·')}` : 'resume'
+        if (c.configDir) opts.claudeConfigDir = c.configDir
+        if (c.cwd) opts.claudeSessionCwd = c.cwd
+        this.newTab('claude', opts)
       })
       row.appendChild(resume)
 

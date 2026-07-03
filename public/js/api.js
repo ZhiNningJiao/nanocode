@@ -45,6 +45,8 @@ export function createTab(projectId, opts = {}) {
   if (opts.type) body.type = opts.type
   if (opts.tmuxTarget) body.tmuxTarget = opts.tmuxTarget
   if (opts.claudeSessionId) body.claudeSessionId = opts.claudeSessionId
+  if (opts.claudeConfigDir) body.claudeConfigDir = opts.claudeConfigDir
+  if (opts.claudeSessionCwd) body.claudeSessionCwd = opts.claudeSessionCwd
   if (opts.fresh) body.fresh = true
   return request(`/projects/${projectId}/tabs`, {
     method: 'POST',

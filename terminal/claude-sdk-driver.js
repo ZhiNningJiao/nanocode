@@ -1,5 +1,6 @@
 import { query as defaultQuery } from '@anthropic-ai/claude-agent-sdk'
 import { createPersistentSpawnHook } from './claude-persistent-spawn.js'
+import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 
 // One persistent-spawn hook shared across all streaming sessions.
 // createPersistentSpawnHook() registers its process.once('exit') guard at
@@ -303,6 +304,7 @@ class StreamingSession {
 
 export function createClaudeSdkDriver({
   store,
+  home,
   claudeBroadcast,
   rerunTurn,
   runCliFallback,
@@ -316,6 +318,18 @@ export function createClaudeSdkDriver({
   // Watchdog window for force interrupts (ms). Overridable for fast tests.
   forceUnlockMs = FORCE_UNLOCK_MS,
 }) {
+  // 需求1 + 需求5: wrap any spawn hook so CLAUDE_CONFIG_DIR is injected into the
+  // spawned claude's env (per-tab override for cross-team resume, else the
+  // global Team setting, else default ~/.claude). The SDK driver previously
+  // ignored the team config dir entirely — only the CLI driver honoured it —
+  // so Team switch + cross-team resume silently broke under the SDK driver.
+  function wrapSpawnWithTeamEnv(baseSpawn, cs) {
+    return function spawnClaudeCodeProcess(spawnOpts) {
+      const configDir = resolveClaudeConfigDir({ cs, store, home })
+      const teamEnv = buildClaudeSpawnEnv(spawnOpts?.env, { configDir })
+      return baseSpawn({ ...spawnOpts, env: teamEnv })
+    }
+  }
   // Whether to use streaming mode (single persistent query per session).
   // Falls back to per-turn mode when queryImpl is overridden (test mocks),
   // unless forceStreaming is set.
@@ -382,7 +396,7 @@ export function createClaudeSdkDriver({
           // Persistent spawn hook so the main claude process survives nanocode,
           // and so we can record its PID for sub-agent discovery.
           spawnClaudeCodeProcess: (opts) => {
-            const proxy = _persistentSpawnHook(opts)
+            const proxy = wrapSpawnWithTeamEnv(_persistentSpawnHook, cs)(opts)
             if (proxy?.pid) {
               try {
                 onClaudeSpawn?.({ sessionKey, pid: proxy.pid, proxy })
@@ -545,6 +559,10 @@ export function createClaudeSdkDriver({
       // V2 exit handler (which fires on nanocode process 'exit') and turns them
       // into no-ops, preventing the cascade: nanocode dies → V2 → SIGTERM →
       // claude dies → sub-agents die.
+      //
+      // 需求1 + 需求5: the team-env injection (CLAUDE_CONFIG_DIR) is applied in
+      // ensureStreamingSession so the onClaudeSpawn notification wrapper and the
+      // team-env wrapper compose as a single chain (no double-wrapping).
       spawnClaudeCodeProcess: _persistentSpawnHook,
       ...sessionOptions,
     }
@@ -567,7 +585,7 @@ export function createClaudeSdkDriver({
     const options = buildStreamingOptions(cs, cwd)
     const baseSpawn = options.spawnClaudeCodeProcess || _persistentSpawnHook
     options.spawnClaudeCodeProcess = (opts) => {
-      const proxy = baseSpawn(opts)
+      const proxy = wrapSpawnWithTeamEnv(baseSpawn, cs)(opts)
       if (proxy?.pid) {
         try {
           onClaudeSpawn?.({ sessionKey, pid: proxy.pid, proxy })

@@ -128,6 +128,11 @@ export function createStore(filePath = ':memory:') {
       // 需求3: "开启新对话" sets skipAutoResume so the tab starts a fresh
       // conversation instead of falling back to the newest jsonl in the dir.
       if (opts.skipAutoResume) tab.skipAutoResume = true
+      // 需求5: cross-team / cross-cwd resume stores the session's owning team
+      // (CLAUDE_CONFIG_DIR) and original cwd so the spawned claude + history
+      // lookup use the right team/project-slug dir.
+      if (opts.claudeConfigDir) tab.claudeConfigDir = opts.claudeConfigDir
+      if (opts.claudeSessionCwd) tab.claudeSessionCwd = opts.claudeSessionCwd
     } else if (type === 'codex') {
       tab.codexThreadId = opts.codexThreadId || null
     } else if (type === 'tmux') {
@@ -173,7 +178,7 @@ export function createStore(filePath = ':memory:') {
     if (!data.tabs[projectId]) return null
     const tab = data.tabs[projectId].find((t) => t.id === tabId)
     if (!tab) return null
-    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget']
+    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd']
     let changed = false
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {

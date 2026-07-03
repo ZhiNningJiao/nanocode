@@ -24,6 +24,7 @@
 import { createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 
 function parseArgs(argv) {
@@ -36,6 +37,7 @@ function parseArgs(argv) {
     else if (arg === '--cwd') args.cwd = argv[++i]
     else if (arg === '--turn-count') args.turnCount = parseInt(argv[++i], 10)
     else if (arg === '--explicit-session-id') args.explicitSessionId = true
+    else if (arg === '--claude-config-dir') args.claudeConfigDir = argv[++i]
     else if (arg === '--model') args.model = argv[++i]
     else if (arg === '--effort') args.effort = argv[++i]
     else if (arg === '--permission-mode') args.permissionMode = argv[++i]
@@ -70,6 +72,10 @@ const cs = {
   busy: false,
   turnCount,
   explicitSessionId,
+  // 需求1 + 需求5: carry the team config dir forwarded by launchBridge so the
+  // SDK driver's wrapSpawnWithTeamEnv injects CLAUDE_CONFIG_DIR into the
+  // spawned claude (cross-team resume / Team switch under the tmux driver).
+  claudeConfigDir: args.claudeConfigDir || null,
   cwd,
   currentProc: null,
   tabLabel: args.tabLabel || '',
@@ -117,6 +123,7 @@ async function dispatchTurn(text) {
 
 const driver = createClaudeSdkDriver({
   store,
+  home: homedir(),
   claudeBroadcast: (_cs, event) => {
     // Persist any sessionId changes that come from the SDK init event.
     if (event?.type === 'system' && event?.subtype === 'init' && event?.session_id && event.session_id !== sessionId) {

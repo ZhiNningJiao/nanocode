@@ -156,7 +156,7 @@ function setupTabs(projectId) {
 // already handles the jsonl replay via ClaudeBlockRenderer.
 
 document.addEventListener('nanocode:resume-session', async (e) => {
-  const { projectId, sessionId } = e.detail || {}
+  const { projectId, sessionId, configDir, cwd } = e.detail || {}
   if (!projectId || !sessionId) return
 
   // Make sure we are in the right workspace
@@ -185,10 +185,16 @@ document.addEventListener('nanocode:resume-session', async (e) => {
       // ClaudeBlockRenderer to connect and fetch history. This avoids the
       // create+patch two-step race where CBR fetches history with the wrong
       // (freshly-generated) UUID before the PATCH arrives.
+      // 需求5: forward configDir + cwd so a cross-team / cross-cwd resume (from
+      // the resume-trigger event or future cross-team agent list) spawns claude
+      // under the session's owning team + original project slug.
+      const body = { type: 'claude', label: 'resume', claudeSessionId: sessionId }
+      if (configDir) body.claudeConfigDir = configDir
+      if (cwd) body.claudeSessionCwd = cwd
       const newTab = await fetch(`/api/projects/${projectId}/tabs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'claude', label: `resume`, claudeSessionId: sessionId }),
+        body: JSON.stringify(body),
       }).then(r => r.json())
 
       if (newTab?.id) {

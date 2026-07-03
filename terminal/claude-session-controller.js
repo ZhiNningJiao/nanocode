@@ -8,6 +8,7 @@ import { buildReplaySeed, buildUserReplayId, resolveSessionJsonl, parseJsonlHist
 import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
+import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 
 export function createClaudeSessionController({ store, home, recentAgents }) {
   const IS_WIN = platform() === 'win32'
@@ -279,6 +280,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
   let dispatchClaudeTurn = null
   const sdkDriver = createClaudeSdkDriver({
     store,
+    home,
     claudeBroadcast,
     rerunTurn: (...args) => dispatchClaudeTurn(...args),
     runCliFallback: (...args) => runClaudeCliTurn(...args),
@@ -292,6 +294,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
   })
   const tmuxDriver = createClaudeTmuxDriver({
     store,
+    home,
     claudeBroadcast,
     rerunTurn: (...args) => dispatchClaudeTurn(...args),
   })
@@ -328,34 +331,14 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     } catch {}
   }
 
-  function buildClaudeChildEnv() {
-    const STRIP_KEYS = new Set([
-      'CLAUDE_CODE_SESSION_ID',
-      'CLAUDECODE',
-      'CLAUDE_CODE_ENTRYPOINT',
-      'CLAUDE_CODE_EXECPATH',
-      'CLAUDE_CODE_TMPDIR',
-      'AI_AGENT',
-    ])
-    const env = {}
-    for (const [k, v] of Object.entries(process.env)) {
-      if (!STRIP_KEYS.has(k)) env[k] = v
-    }
-    // 需求1 Team switch: honour the selected CLAUDE_CONFIG_DIR so new claude
-    // sessions read their config (~/.claude or ~/.claude-team2) from the team
-    // the user picked in the Plugins tab. We deliberately OVERWRITE any
-    // inherited CLAUDE_CONFIG_DIR so the store setting is the single source of
-    // truth — the nanocode server itself must keep running under its own
-    // config dir, but spawned claude sessions follow the user's team choice.
-    const configDir = store.getSetting('claude_config_dir')
-    if (configDir && typeof configDir === 'string' && configDir.trim()) {
-      env.CLAUDE_CONFIG_DIR = configDir.trim()
-    } else {
-      // No team chosen — make sure a stale inherited CLAUDE_CONFIG_DIR from the
-      // server env doesn't leak into the child (claude would use it silently).
-      delete env.CLAUDE_CONFIG_DIR
-    }
-    return env
+  function buildClaudeChildEnv(cs) {
+    // 需求1 Team switch + 需求5 cross-team resume: honour a per-tab configDir
+    // (cs.claudeConfigDir, set when resuming a session from another team) over
+    // the global store setting, and strip nanocode-self identifiers. The same
+    // shared helper is used by the SDK driver so every driver honours the team
+    // config dir consistently.
+    const configDir = resolveClaudeConfigDir({ cs, store, home })
+    return buildClaudeSpawnEnv(process.env, { configDir })
   }
 
   // ── Layer 2: --continue fallback ─────────────────────────────────────────────
@@ -401,7 +384,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     console.log(`[claude:continue-fallback:spawn] sessionKey=${sessionKey}`)
     const proc = spawn('bash', ['-lc', launchCmd], {
       cwd,
-      env: buildClaudeChildEnv(),
+      env: buildClaudeChildEnv(cs),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     })
@@ -584,7 +567,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     console.log(`[claude:spawn] sessionKey=${sessionKey} turn=${cs.turnCount} len=${userText.length}`)
     const proc = spawn('bash', ['-lc', launchCmd], {
       cwd,
-      env: buildClaudeChildEnv(),
+      env: buildClaudeChildEnv(cs),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     })
@@ -891,7 +874,13 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         // 需求3: tab opened via "开启新对话" — forces a truly-new --session-id first
         // turn (Layer 3) instead of --resume on the not-yet-existing jsonl.
         skipAutoResume: !!tab?.skipAutoResume,
-        cwd: project.cwd,
+        // 需求5: cross-team resume stores the session's owning team (CLAUDE_CONFIG_DIR)
+        // on the tab; carry it on cs so buildClaudeChildEnv spawns claude under that
+        // team. cwd follows the session's original cwd (tab.claudeSessionCwd) so
+        // claude --resume finds the jsonl in the matching project-slug dir and keeps
+        // the conversation's file context — falling back to the project cwd.
+        claudeConfigDir: tab?.claudeConfigDir || null,
+        cwd: (tab?.claudeSessionCwd && typeof tab.claudeSessionCwd === 'string' && tab.claudeSessionCwd.trim()) ? tab.claudeSessionCwd.trim() : project.cwd,
         currentProc: null,
         tabLabel: tab?.label || '',
         queue: [],

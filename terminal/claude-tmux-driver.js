@@ -14,6 +14,7 @@ import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { resolveClaudeConfigDir } from './claude-env.js'
 
 const TMUX_BIN = process.env.NANOCODE_TMUX_BIN || '/usr/bin/tmux'
 const SOCKET_DIR = `${process.env.HOME}/.nanocode/tmux-sessions`
@@ -120,6 +121,9 @@ function launchBridge(sessionKey, opts) {
   ]
 
   if (opts.explicitSessionId) args.push('--explicit-session-id')
+  // 需求1 + 需求5: forward the resolved team config dir to the bridge so the
+  // SDK driver inside tmux spawns claude under the right CLAUDE_CONFIG_DIR.
+  if (opts.claudeConfigDir) args.push(...formatArg('--claude-config-dir', opts.claudeConfigDir))
   if (opts.model) args.push(...formatArg('--model', opts.model))
   if (opts.effort) args.push(...formatArg('--effort', opts.effort))
   if (opts.permissionMode) args.push(...formatArg('--permission-mode', opts.permissionMode))
@@ -313,12 +317,16 @@ function getBridgeClient(sessionKey, opts) {
   return client
 }
 
-function buildOptions(cs, cwd, store) {
+function buildOptions(cs, cwd, store, home) {
   return {
     sessionId: cs.claudeSessionId,
     turnCount: cs.turnCount,
     explicitSessionId: cs.explicitSessionId,
     cwd,
+    // 需求1 + 需求5: resolve the team config dir (per-tab cross-team override
+    // → global Team setting → default ~/.claude) and forward it to the bridge
+    // so the SDK driver running inside tmux honours CLAUDE_CONFIG_DIR too.
+    claudeConfigDir: resolveClaudeConfigDir({ cs, store, home }),
     model: store.getSetting('claude_model') || undefined,
     effort: store.getSetting('claude_effort') || undefined,
     permissionMode: resolvePermissionMode(store),
@@ -337,7 +345,7 @@ function buildOptions(cs, cwd, store) {
   }
 }
 
-export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
+export function createClaudeTmuxDriver({ store, home, claudeBroadcast, rerunTurn }) {
   async function runTmuxTurn(cs, userText, sessionKey, cwd) {
     const quietQueue = cs._quietQueueOnce === true
     cs._quietQueueOnce = false
@@ -358,7 +366,7 @@ export function createClaudeTmuxDriver({ store, claudeBroadcast, rerunTurn }) {
     cs.currentProc = null
     cs.turnCount += 1
 
-    const opts = buildOptions(cs, cwd, store)
+    const opts = buildOptions(cs, cwd, store, home)
     const client = getBridgeClient(sessionKey, opts)
     await client.ensureConnected()
 
