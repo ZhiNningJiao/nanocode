@@ -8,6 +8,7 @@
 import { initSplitPane } from './terminal-pane.js'
 import { TabManager, TYPE_ICON_SVG } from './tab-manager.js'
 import { createExplorer } from './explorer.js'
+import { initRightPanel, showRightPanelTab } from './right-panel.js'
 
 const mobileQuery = window.matchMedia('(max-width: 768px)')
 const isMobile = () => mobileQuery.matches
@@ -93,12 +94,14 @@ function setupExplorer(projectId) {
   const root = document.getElementById('explorer-root')
   if (!root) return
   explorer = createExplorer(root, projectId)
+  initRightPanel()
 
   // Feature 2: listen for path-click events from chat bubble renderer
   // The event bubbles up from wherever in the DOM the clicked span lives.
   document.addEventListener('nanocode:open-in-explorer', (e) => {
     const path = e.detail?.path
     if (!path || !explorer) return
+    showRightPanelTab('files')
     explorer.openPath(path).catch(() => {})
   })
 
