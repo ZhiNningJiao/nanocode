@@ -172,16 +172,20 @@ export function createTerminalRoutes(store) {
   })
 
   // ── GET /api/projects/:id/recent-conversations ──────────────────────────────
-  // Returns up to `limit` (default 5, max 20) recent Claude conversations for the
+  // Returns up to `limit` (default 5, max 50) recent Claude conversations for the
   // project's cwd, sorted by length (byte size) so the Claude Code tab picker
   // (需求3 Auto Resume) can offer the "longer" conversations to 继续 / 开启新对话.
+  // 需求5.3: `source` switches the project-directory source — 'project' (current
+  // project slug, all teams), 'home' (home slug, all teams), or 'all' (both,
+  // default) so cross-team sessions can surface without home drowning.
   router.get('/api/projects/:id/recent-conversations', async (req, res) => {
     try {
       const project = store.getProject(req.params.id)
       if (!project) return res.status(404).json({ error: 'project not found' })
-      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 20)
-      const conversations = historyService.recentConversations(project.cwd, limit)
-      res.json({ conversations })
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 50)
+      const source = ['project', 'home', 'all'].includes(req.query.source) ? req.query.source : 'all'
+      const conversations = historyService.recentConversations(project.cwd, limit, source)
+      res.json({ conversations, source })
     } catch (err) {
       console.error('[/api/recent-conversations]', err)
       res.status(500).json({ error: err.message })

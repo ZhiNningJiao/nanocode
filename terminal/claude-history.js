@@ -560,12 +560,18 @@ function _scanProjectDirEntries(projectDir, teamMeta, sourceCwd, activeConfigDir
  * Returns an array sorted by byte size desc (the "较长" criterion), capped
  * at `limit`.
  */
-export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = Date.now()) {
+export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = Date.now(), source = 'all') {
   const { teams } = listTeams(home, store)
   const activeConfigDir = effectiveClaudeConfigDir(store, home)
-  // Scan the project cwd AND home (cwd dimension). When the project IS home,
-  // the two collapse to a single scan (no duplicates).
-  const cwdSources = cwd === home ? [cwd] : [cwd, home]
+  // 需求5.3: allow switching the project-directory source ("允许切换项目目录来源")
+  // so cross-team PROJECT sessions can surface without being drowned by the
+  // (often huge) home/secretary sessions. 'project' = current project slug only
+  // (all teams); 'home' = home slug only (all teams); 'all' = both (default —
+  // home stays listable from any project tab, the 需求5.3 "至少" minimum).
+  let cwdSources
+  if (source === 'project') cwdSources = [cwd]
+  else if (source === 'home') cwdSources = [home]
+  else cwdSources = cwd === home ? [cwd] : [cwd, home]
   const seen = new Set()
   const entries = []
   for (const team of teams) {
@@ -796,7 +802,8 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     findMostRecentClaudeTab,
     handleHistory,
     // 需求5: aggregate across all known teams + the home cwd so the picker can
-    // list & resume cross-team / cross-cwd (home) conversations.
-    recentConversations: (cwd, limit) => scanRecentConversationsMulti(home, cwd, store, limit),
+    // list & resume cross-team / cross-cwd (home) conversations. 需求5.3: `source`
+    // switches the project-directory source (project/home/all).
+    recentConversations: (cwd, limit, source) => scanRecentConversationsMulti(home, cwd, store, limit, Date.now(), source),
   }
 }

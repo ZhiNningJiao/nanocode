@@ -310,4 +310,58 @@ describe('claude-history: scanRecentConversationsMulti (cross-team aggregation)'
     const result = scanRecentConversationsMulti(tmp, '/tmp/noproj', store, 5)
     assert.deepEqual(result, [])
   })
+
+  // 需求5.3: source switch (project/home/all) so cross-team PROJECT sessions
+  // surface without home secretary sessions drowning the size-sorted list.
+  it('source=project scans only the project slug across all teams', () => {
+    const { team1Dir, team2Dir } = setupTeams()
+    const projCwd = '/tmp/myproj'
+    const homeCwd = tmp
+    writeSession(team1Dir, projCwd, 't1-proj', 'team1 project')
+    writeSession(team2Dir, projCwd, 't2-proj', 'team2 project')
+    writeSession(team1Dir, homeCwd, 't1-home', 'team1 home secretary')
+
+    const store = createStore(':memory:')
+    const result = scanRecentConversationsMulti(tmp, projCwd, store, 50, Date.now(), 'project')
+
+    const ids = result.map((r) => r.sessionId)
+    assert.ok(ids.includes('t1-proj'), 'team1 project session present')
+    assert.ok(ids.includes('t2-proj'), 'team2 project session present (cross-team)')
+    assert.ok(!ids.includes('t1-home'), 'home session excluded in project mode')
+    const t2 = result.find((r) => r.sessionId === 't2-proj')
+    assert.equal(t2.isCrossTeam, true, 'team2 is cross-team while team1 active')
+  })
+
+  it('source=home scans only the home slug across all teams', () => {
+    const { team1Dir, team2Dir } = setupTeams()
+    const projCwd = '/tmp/myproj'
+    const homeCwd = tmp
+    writeSession(team1Dir, projCwd, 't1-proj', 'team1 project')
+    writeSession(team1Dir, homeCwd, 't1-home', 'team1 home')
+    writeSession(team2Dir, homeCwd, 't2-home', 'team2 home')
+
+    const store = createStore(':memory:')
+    const result = scanRecentConversationsMulti(tmp, projCwd, store, 50, Date.now(), 'home')
+
+    const ids = result.map((r) => r.sessionId)
+    assert.ok(ids.includes('t1-home'), 'team1 home present')
+    assert.ok(ids.includes('t2-home'), 'team2 home present (cross-team)')
+    assert.ok(!ids.includes('t1-proj'), 'project session excluded in home mode')
+  })
+
+  it('source=all (default) scans both project and home', () => {
+    const { team1Dir } = setupTeams()
+    const projCwd = '/tmp/myproj'
+    const homeCwd = tmp
+    writeSession(team1Dir, projCwd, 't1-proj', 'team1 project')
+    writeSession(team1Dir, homeCwd, 't1-home', 'team1 home')
+
+    const store = createStore(':memory:')
+    const all = scanRecentConversationsMulti(tmp, projCwd, store, 50, Date.now(), 'all')
+    const def = scanRecentConversationsMulti(tmp, projCwd, store, 50)
+    const allIds = all.map((r) => r.sessionId)
+    const defIds = def.map((r) => r.sessionId)
+    assert.ok(allIds.includes('t1-proj') && allIds.includes('t1-home'), 'all includes both')
+    assert.deepEqual(defIds, allIds, 'default equals all')
+  })
 })

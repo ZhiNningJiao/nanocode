@@ -1703,6 +1703,31 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   overflow-y: auto;
   flex: 1;
 }
+.claude-resume-picker-sources {
+  display: flex;
+  gap: 4px;
+  padding: 0 4px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.claude-resume-picker-source {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.claude-resume-picker-source:hover { background: var(--bg-hover); color: var(--text); }
+.claude-resume-picker-source.active {
+  background: var(--bg-active, var(--bg-hover));
+  color: var(--text);
+  border-color: var(--border);
+  font-weight: 600;
+}
 .claude-resume-picker-loading,
 .claude-resume-picker-empty {
   padding: 24px 16px;
