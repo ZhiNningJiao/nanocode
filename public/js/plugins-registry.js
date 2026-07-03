@@ -117,6 +117,22 @@ export const BUILTIN_PLUGINS = [
     descriptionKey: 'plugin.compare.desc',
     builtin: true,
   },
+  {
+    // 需求10 — Remote machines: address book that launches the user's *local*
+    // native RustDesk client via the `rustdesk://` URI scheme. The server only
+    // stores the book (core settings); it bundles no RustDesk code, so AGPL is
+    // not triggered for internal use. Placed in ops (remote machine = external
+    // resource, not the current agent). The heavier web-client-iframe approach
+    // (needs a self-hosted hbbs/hbbr relay) is documented in REPORT and deferred.
+    name: 'remote',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'ops',
+    tab: { id: 'remote', labelKey: 'plugin.remote.label' },
+    permissions: ['network'],
+    descriptionKey: 'plugin.remote.desc',
+    builtin: true,
+  },
 ]
 
 export function builtinPlugin(name) {

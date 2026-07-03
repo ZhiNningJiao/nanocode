@@ -1368,6 +1368,134 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   tab-size: 4;
 }
 
+/* -- Remote machines plugin (MES-13740 需求10) ------------------- */
+
+.rm-info {
+  margin-bottom: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset, var(--bg-hover));
+}
+.rm-info-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--s-2);
+}
+.rm-info-item {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: var(--s-2);
+  align-items: start;
+  font-size: 12px;
+}
+.rm-info-k {
+  font-weight: 600;
+  color: var(--text-dim, var(--text));
+}
+.rm-info-v {
+  color: var(--text);
+  word-break: break-word;
+}
+.rm-info-v code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg, var(--bg-inset));
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.rm-info-sub {
+  color: var(--text-dim, var(--text));
+  font-size: 11px;
+}
+
+.rm-form-wrap { margin-bottom: var(--s-3); }
+.rm-form-card {
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card, var(--bg));
+}
+.rm-form-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: var(--s-2);
+}
+.rm-field {
+  display: block;
+  margin-bottom: var(--s-2);
+}
+.rm-field-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim, var(--text));
+  margin-bottom: 2px;
+}
+.rm-check {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+  font-size: 13px;
+}
+.rm-form-error {
+  color: var(--warning);
+  font-size: 12px;
+  margin-bottom: var(--s-2);
+}
+.rm-form-actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.rm-list-wrap { }
+.rm-list-head {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-dim, var(--text));
+  margin-bottom: var(--s-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rm-hint {
+  color: var(--text-dim, var(--text));
+  font-size: 13px;
+  padding: var(--s-2);
+}
+.rm-error { color: var(--warning); }
+.rm-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.rm-row-head { min-width: 0; flex: 1; }
+.rm-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rm-meta {
+  font-size: 12px;
+  color: var(--text-dim, var(--text));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rm-row-actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.rm-connect { text-decoration: none; }
+
 /* -- Persona library + skills browser (MES-13740 需求8) ---------- */
 
 .persona-preview {
@@ -3185,6 +3313,18 @@ body.workspace-active .landing-overlay { display: none; }
   .cmp-diff-bar .rp-btn-sm { min-height: 44px; }
   .cmp-diff-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .cmp-diff { font-size: 12px; }
+
+  /* Remote machines plugin: ≥44px touch targets, stacked form (需求10) */
+  .rm-info-item { grid-template-columns: 1fr; gap: 2px; }
+  .rm-field .rp-input { min-height: 44px; }
+  .rm-check { min-height: 44px; }
+  .rm-form-actions .rp-btn,
+  .rm-form-actions .rp-btn-sm { min-height: 44px; flex: 1 1 auto; }
+  .rm-row { flex-wrap: wrap; }
+  .rm-row-actions { width: 100%; justify-content: flex-start; }
+  .rm-row-actions .rp-btn,
+  .rm-row-actions .rp-btn-sm { min-height: 44px; flex: 1 1 auto; }
+  .rm-connect { min-width: 0; }
 
 }
 
