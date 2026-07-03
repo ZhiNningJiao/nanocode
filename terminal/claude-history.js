@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { extractSummary, relTimeFromMtime } from './recent-agents.js'
-import { effectiveClaudeConfigDir, claudeProjectsDir } from './usage.js'
+import { extractSummary, relTimeFromMtime, cwdFromJsonl } from './recent-agents.js'
+import { effectiveClaudeConfigDir, claudeProjectsDir, resolveClaudeConfigDirForTab, resolveClaudeCwdForTab, listTeams } from './usage.js'
 
 export function cwdToClaudeProjectDir(home, cwd) {
   // Backward-compatible: defaults to ~/.claude. Kept for existing tests/callers
@@ -504,6 +504,104 @@ export function scanRecentConversations(home, cwd, limit = 5, now = Date.now(), 
 }
 
 /**
+ * Scan a single (configDir, cwd) project-slug dir for jsonl conversations.
+ * Internal helper used by scanRecentConversationsMulti so each (team, cwd)
+ * pair is scanned exactly once with the same byte-size sort criteria.
+ *
+ * Returns an array of raw entries (with fullPath/mtimeMs/byteSize/sessionId)
+ * enriched with the team + source-cwd metadata the multi-team aggregator
+ * needs. Files < 200 bytes (brand-new sessions) are skipped.
+ */
+function _scanProjectDirEntries(projectDir, teamMeta, sourceCwd, activeConfigDir) {
+  if (!existsSync(projectDir)) return []
+  let files
+  try { files = readdirSync(projectDir) } catch { return [] }
+  const out = []
+  for (const f of files) {
+    if (!f.endsWith('.jsonl')) continue
+    const fullPath = join(projectDir, f)
+    try {
+      const st = statSync(fullPath)
+      if (st.size < 200) continue
+      out.push({
+        sessionId: f.replace(/\.jsonl$/, ''),
+        fullPath,
+        mtimeMs: st.mtimeMs,
+        byteSize: st.size,
+        teamId: teamMeta.id,
+        teamName: teamMeta.name,
+        configDir: teamMeta.path,
+        sourceCwd,
+        isCrossTeam: teamMeta.path !== activeConfigDir,
+      })
+    } catch {}
+  }
+  return out
+}
+
+/**
+ * List the most recent "longer" conversations for the Claude Code tab picker,
+ * aggregated across ALL known teams (需求5 跨 team 会话延续).
+ *
+ * Aggregation dimensions:
+ *   1. Team  — every known CLAUDE_CONFIG_DIR (~/.claude plus ~/.claude-team*)
+ *              is scanned, so a session from team2 is visible while the active
+ *              team is team1. Each entry is labelled with its source team.
+ *   2. cwd   — both the current project's cwd AND the home dir (cwd=~) are
+ *              scanned, so home/secretary sessions are listable from any
+ *              project tab (主人常在 home 跑秘书会话). Home entries are
+ *              flagged `isHome=true`.
+ *
+ * Each entry carries the fields scanRecentConversations returns plus:
+ *   teamId, teamName, configDir, cwd (the session's real cwd from the jsonl),
+ *   isCrossTeam, isHome — everything the picker needs to resume the session
+ *   with the owning team's CLAUDE_CONFIG_DIR and the session's original cwd.
+ *
+ * Returns an array sorted by byte size desc (the "较长" criterion), capped
+ * at `limit`.
+ */
+export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = Date.now()) {
+  const { teams } = listTeams(home, store)
+  const activeConfigDir = effectiveClaudeConfigDir(store, home)
+  // Scan the project cwd AND home (cwd dimension). When the project IS home,
+  // the two collapse to a single scan (no duplicates).
+  const cwdSources = cwd === home ? [cwd] : [cwd, home]
+  const seen = new Set()
+  const entries = []
+  for (const team of teams) {
+    if (!team.exists) continue
+    const teamMeta = { id: team.id, name: team.name, path: team.path }
+    for (const sourceCwd of cwdSources) {
+      const projectDir = claudeProjectsDir(team.path, sourceCwd)
+      const found = _scanProjectDirEntries(projectDir, teamMeta, sourceCwd, activeConfigDir)
+      for (const e of found) {
+        if (seen.has(e.fullPath)) continue
+        seen.add(e.fullPath)
+        entries.push(e)
+      }
+    }
+  }
+  entries.sort((a, b) => b.byteSize - a.byteSize || b.mtimeMs - a.mtimeMs)
+  const top = entries.slice(0, limit)
+  return top.map((e) => ({
+    sessionId: e.sessionId,
+    summary: extractSummary(e.fullPath),
+    messageCount: countUserMessages(e.fullPath),
+    byteSize: e.byteSize,
+    mtime: new Date(e.mtimeMs).toISOString(),
+    relTime: relTimeFromMtime(e.mtimeMs, now),
+    teamId: e.teamId,
+    teamName: e.teamName,
+    configDir: e.configDir,
+    // The session's real cwd (read from the jsonl) — used as the spawn cwd on
+    // resume so claude --resume finds the jsonl in the matching project slug.
+    cwd: cwdFromJsonl(e.fullPath) || e.sourceCwd,
+    isCrossTeam: e.isCrossTeam,
+    isHome: e.sourceCwd === home && e.sourceCwd !== cwd,
+  }))
+}
+
+/**
  * Resolve the jsonl file and sessionId for a claude tab by directory.
  *
  * Reads from the same source as block-mode history replay
@@ -521,8 +619,13 @@ export function scanRecentConversations(home, cwd, limit = 5, now = Date.now(), 
  *   freshSessionId    - the fresh UUID assigned when skipped, otherwise null
  */
 export function resolveSessionJsonl({ store, home, project, tab }) {
-  const configDir = effectiveClaudeConfigDir(store, home)
-  const projectDir = claudeProjectsDir(configDir, project.cwd)
+  // 需求5: a cross-team/cross-cwd tab stores its own configDir + session cwd so
+  // the jsonl is located in the session's owning team + original project slug,
+  // not the global Team setting / the current project cwd. Falls back to the
+  // global setting (需求1) and project.cwd for normal tabs.
+  const configDir = resolveClaudeConfigDirForTab(tab, store, home)
+  const sessionCwd = resolveClaudeCwdForTab(tab, project)
+  const projectDir = claudeProjectsDir(configDir, sessionCwd)
   const sessionId = tab?.claudeSessionId || null
   const jsonlPath = sessionId ? join(projectDir, `${sessionId}.jsonl`) : null
 
@@ -591,13 +694,17 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     const tabs = store.listTabs(project.id).filter((t) => t.type === 'claude')
     if (!tabs.length) return null
 
-    const configDir = effectiveClaudeConfigDir(store, home)
-    const projectDir = claudeProjectsDir(configDir, project.cwd)
     let bestTabId = null
     let bestMtime = 0
 
     for (const tab of tabs) {
       if (!tab.claudeSessionId) continue
+      // 需求5: each claude tab may carry its own configDir + session cwd
+      // (cross-team / cross-cwd resume). Look up the jsonl in the tab's own
+      // team/project-slug dir rather than a single global config dir.
+      const configDir = resolveClaudeConfigDirForTab(tab, store, home)
+      const sessionCwd = resolveClaudeCwdForTab(tab, project)
+      const projectDir = claudeProjectsDir(configDir, sessionCwd)
       const jsonlPath = join(projectDir, `${tab.claudeSessionId}.jsonl`)
       try {
         if (existsSync(jsonlPath)) {
@@ -688,6 +795,8 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     cwdToClaudeProjectDir: (cwd) => claudeProjectsDir(effectiveClaudeConfigDir(store, home), cwd),
     findMostRecentClaudeTab,
     handleHistory,
-    recentConversations: (cwd, limit) => scanRecentConversations(home, cwd, limit, Date.now(), effectiveClaudeConfigDir(store, home)),
+    // 需求5: aggregate across all known teams + the home cwd so the picker can
+    // list & resume cross-team / cross-cwd (home) conversations.
+    recentConversations: (cwd, limit) => scanRecentConversationsMulti(home, cwd, store, limit),
   }
 }

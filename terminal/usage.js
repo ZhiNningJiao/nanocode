@@ -47,6 +47,34 @@ export function effectiveClaudeConfigDir(store, home) {
 }
 
 /**
+ * Resolve the CLAUDE_CONFIG_DIR that a given claude TAB should use.
+ *
+ * 需求5 cross-team resume: a tab that resumes a session from another team
+ * stores `claudeConfigDir` on the tab and must read its jsonl from that
+ * team's dir — not the global store setting. Falls back to the global
+ * Team-switch setting (需求1) and then ~/.claude.
+ */
+export function resolveClaudeConfigDirForTab(tab, store, home) {
+  const dir = tab?.claudeConfigDir
+  if (dir && typeof dir === 'string' && dir.trim()) return dir.trim()
+  return effectiveClaudeConfigDir(store, home)
+}
+
+/**
+ * Resolve the cwd a given claude TAB should spawn into.
+ *
+ * 需求5: a cross-cwd resume (e.g. resuming a home/secretary session from a
+ * project tab) stores `claudeSessionCwd` so claude --resume finds the jsonl
+ * in the matching project-slug dir and keeps the conversation's file context.
+ * Falls back to the project's cwd.
+ */
+export function resolveClaudeCwdForTab(tab, project) {
+  const c = tab?.claudeSessionCwd
+  if (c && typeof c === 'string' && c.trim()) return c.trim()
+  return project?.cwd
+}
+
+/**
  * Encode a cwd the way Claude does for its per-project jsonl directory:
  * every '/' becomes '-'. (`cwdToClaudeProjectDir` equivalent that takes an
  * explicit config dir instead of home, so Team switch (CLAUDE_CONFIG_DIR)
