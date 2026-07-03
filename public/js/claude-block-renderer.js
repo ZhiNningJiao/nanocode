@@ -1607,6 +1607,13 @@ export class ClaudeBlockRenderer {
     } else if (event.subtype === 'queued') {
       // Message was queued while server was busy — show feedback inline
       this._addSystemBlock(`[queued: ${event.text}]`)
+    } else if (event.subtype === 'queue-drained') {
+      // 需求9: server drained tab.pendingQueue and is delivering the queued
+      // messages as the next turn. Tell terminal-view to clear its local
+      // _pendingQueue mirror (the server already owns delivery now).
+      document.dispatchEvent(new CustomEvent('nanocode:claude-queue-drained', {
+        detail: { tabId: this.tabId },
+      }))
     } else if (event.subtype === 'info') {
       this._addSystemBlock(`[${event.text}]`)
     } else if (event.subtype === 'resume-trigger') {

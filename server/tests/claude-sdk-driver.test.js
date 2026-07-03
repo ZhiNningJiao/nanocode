@@ -378,4 +378,162 @@ describe('claude sdk driver', () => {
     // Resume-miss → CLI fallback IS triggered
     assert.equal(fallbacks.length, 1, 'CLI fallback must be triggered for resume-miss errors')
   })
+
+  // ── 需求9: server-owned queue delivery ───────────────────────────────────
+  // The client persists queued-while-busy messages to tab.pendingQueue
+  // IMMEDIATELY (no debounce, keepalive) and the server drains that store in the
+  // turn's finally block when the in-memory cs.queue path did not fire — so the
+  // message is delivered even if the browser page was closed/suspended before
+  // the agent went idle (the mobile message-loss bug).
+
+  it('drains persisted tab.pendingQueue as a follow-up turn when cs.queue is empty (需求9 server-owned delivery)', async () => {
+    const calls = []
+    const broadcasted = []
+    const reruns = []
+    const userEchos = []
+    const metadataUpdates = []
+    const store = {
+      getSetting() { return null },
+      getTab(projectId, tabId) {
+        return { id: tabId, pendingQueue: ['QMSG_ONE', 'QMSG_TWO'] }
+      },
+      updateTabMetadata(projectId, tabId, patch) {
+        metadataUpdates.push({ projectId, tabId, patch })
+      },
+    }
+    const queryImpl = makeQueryFromPlan([
+      {
+        events: [
+          { type: 'system', subtype: 'init', session_id: 'sdk-session-9', tools: [] },
+          { type: 'result', subtype: 'success', session_id: 'sdk-session-9', result: 'first' },
+        ],
+      },
+    ], calls)
+
+    const driver = createClaudeSdkDriver({
+      store,
+      claudeBroadcast: (_cs, event) => { broadcasted.push(event) },
+      broadcastUserEcho: (_cs, text) => { userEchos.push(text) },
+      rerunTurn: (...args) => { reruns.push(args) },
+      queryImpl,
+    })
+
+    const cs = {
+      sessionKey: 'proj9:claude:tab9',
+      claudeSessionId: 'sdk-session-9',
+      busy: false,
+      turnCount: 1,
+      queue: [],
+      history: [],
+      clients: new Set(),
+    }
+
+    await driver.runSdkTurn(cs, 'first turn', 'proj9:claude:tab9', '/tmp/ws9')
+    // The drain dispatches rerunTurn via setImmediate; let it fire.
+    await new Promise((resolve) => setImmediate(resolve))
+
+    // The server delivered the persisted queue as the next turn.
+    assert.equal(reruns.length, 1, 'persisted pendingQueue must be drained as one follow-up turn')
+    assert.equal(reruns[0][0], cs, 'rerunTurn receives the same cs')
+    assert.equal(reruns[0][1], 'QMSG_ONE\n\nQMSG_TWO', 'queued messages are combined with double-newline')
+    assert.equal(reruns[0][2], 'proj9:claude:tab9', 'sessionKey is passed through')
+    assert.equal(reruns[0][3], '/tmp/ws9', 'cwd is passed through')
+
+    // The store was cleared so the message can never be re-delivered.
+    assert.ok(
+      metadataUpdates.some((u) => u.projectId === 'proj9' && u.tabId === 'tab9' && Array.isArray(u.patch.pendingQueue) && u.patch.pendingQueue.length === 0),
+      'store.updateTabMetadata must clear tab.pendingQueue after draining'
+    )
+
+    // A queue-drained system event was broadcast so live clients clear their tray.
+    assert.ok(
+      broadcasted.some((e) => e.type === 'system' && e.subtype === 'queue-drained'),
+      'a queue-drained system event must be broadcast'
+    )
+
+    // The user echo was broadcast so connected clients render the delivered message live.
+    assert.deepEqual(userEchos, ['QMSG_ONE\n\nQMSG_TWO'], 'broadcastUserEcho receives the combined text')
+
+    // cs.queue was never touched (it was empty — the else branch owns this path).
+    assert.equal(cs.queue.length, 0)
+    assert.equal(cs.busy, false)
+  })
+
+  it('does not drain tab.pendingQueue when cs.queue already has items (no double delivery)', async () => {
+    const reruns = []
+    const broadcasted = []
+    const userEchos = []
+    const metadataUpdates = []
+    const store = {
+      getSetting() { return null },
+      getTab() { return { pendingQueue: ['PENDING_ONLY'] } },
+      updateTabMetadata(projectId, tabId, patch) { metadataUpdates.push({ projectId, tabId, patch }) },
+    }
+    const queryImpl = makeQueryFromPlan([
+      { events: [
+        { type: 'system', subtype: 'init', session_id: 'sdk-session-x', tools: [] },
+        { type: 'result', subtype: 'success', session_id: 'sdk-session-x' },
+      ] },
+    ], [])
+    const driver = createClaudeSdkDriver({
+      store,
+      claudeBroadcast: (_cs, event) => { broadcasted.push(event) },
+      broadcastUserEcho: (_cs, text) => { userEchos.push(text) },
+      rerunTurn: (...args) => { reruns.push(args) },
+      queryImpl,
+    })
+    const cs = {
+      sessionKey: 'projX:claude:tabX',
+      claudeSessionId: 'sdk-session-x',
+      busy: false, turnCount: 1,
+      queue: ['CSQ_MSG'], history: [], clients: new Set(),
+    }
+
+    await driver.runSdkTurn(cs, 'turn', 'projX:claude:tabX', '/tmp/wsX')
+    await new Promise((resolve) => setImmediate(resolve))
+
+    // The in-memory cs.queue path fired (NOT the persisted pendingQueue drain).
+    assert.equal(reruns.length, 1, 'cs.queue path fires exactly one follow-up')
+    assert.equal(reruns[0][1], 'CSQ_MSG', 'cs.queue message is delivered, not tab.pendingQueue')
+    // tab.pendingQueue was NOT cleared this turn (left for the next idle drain).
+    assert.equal(metadataUpdates.length, 0, 'tab.pendingQueue must not be cleared when cs.queue path fired')
+    // No queue-drained event (that is only for the persisted-drain path).
+    assert.ok(!broadcasted.some((e) => e.subtype === 'queue-drained'), 'no queue-drained event when cs.queue fired')
+    assert.equal(userEchos.length, 0, 'no user echo when cs.queue fired (cs.queue path uses rerunTurn only)')
+    assert.equal(cs.queue.length, 0)
+  })
+
+  it('does not fire a follow-up turn when both cs.queue and tab.pendingQueue are empty', async () => {
+    const reruns = []
+    const broadcasted = []
+    const store = {
+      getSetting() { return null },
+      getTab() { return { pendingQueue: [] } },
+      updateTabMetadata() {},
+    }
+    const queryImpl = makeQueryFromPlan([
+      { events: [
+        { type: 'system', subtype: 'init', session_id: 'sdk-session-e', tools: [] },
+        { type: 'result', subtype: 'success', session_id: 'sdk-session-e' },
+      ] },
+    ], [])
+    const driver = createClaudeSdkDriver({
+      store,
+      claudeBroadcast: (_cs, event) => { broadcasted.push(event) },
+      broadcastUserEcho: () => { throw new Error('should not echo') },
+      rerunTurn: (...args) => { reruns.push(args) },
+      queryImpl,
+    })
+    const cs = {
+      sessionKey: 'projE:claude:tabE',
+      claudeSessionId: 'sdk-session-e',
+      busy: false, turnCount: 1,
+      queue: [], history: [], clients: new Set(),
+    }
+    await driver.runSdkTurn(cs, 'turn', 'projE:claude:tabE', '/tmp/wsE')
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.equal(reruns.length, 0, 'no follow-up turn when nothing is queued')
+    assert.ok(!broadcasted.some((e) => e.subtype === 'queue-drained'), 'no queue-drained event when nothing queued')
+  })
 })
