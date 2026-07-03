@@ -75,7 +75,7 @@ function writeJsonlEvents(projectDir, sessionId, events) {
  * Build a minimal session controller with mocked store/recentAgents.
  * Returns { controller, claudeSessions, getCs }.
  */
-function makeController({ tabClaudeSessionId, mainSessionId, hasSeedHistory = false, withDiskHistory = null }) {
+function makeController({ tabClaudeSessionId, mainSessionId, hasSeedHistory = false, withDiskHistory = null, tabSkipAutoResume = false }) {
   const projectId = 'proj-1'
   const tabId = 'tab-1'
   const projectCwd = mkdtempSync('/tmp/nanocode-resume-')
@@ -102,7 +102,7 @@ function makeController({ tabClaudeSessionId, mainSessionId, hasSeedHistory = fa
     },
     getTab(pid, tid) {
       if (pid !== projectId || tid !== tabId) return null
-      return { id: tabId, type: 'claude', claudeSessionId: tabClaudeSessionId || null, label: 'Test' }
+      return { id: tabId, type: 'claude', claudeSessionId: tabClaudeSessionId || null, label: 'Test', skipAutoResume: tabSkipAutoResume }
     },
     updateTabMetadata(pid, tid, meta) {
       metadataUpdates.push({ pid, tid, meta })
@@ -286,6 +286,31 @@ describe('claude session auto-recovery from jsonl', () => {
         (u) => u.pid === projectId && u.tid === tabId && u.meta.claudeSessionId === 'fallback-session-xyz'
       )
       assert.ok(metaUpdate, 'tab metadata should be updated to fallback sessionId')
+    } finally {
+      restoreEnv()
+      cleanup()
+    }
+  })
+
+  it('skipAutoResume tab skips jsonl fallback and starts fresh (需求3 开启新对话)', async () => {
+    // Scenario: user picked "开启新对话" in the Claude Code tab picker.
+    // store.createTab set skipAutoResume=true, so resolveSessionJsonl must NOT
+    // fall back to the newest jsonl even though no claudeSessionId is stored.
+    // The tab should start a brand new session (turnCount=0, empty history).
+    const { triggerAttach, restoreEnv, cleanup, store, projectId, tabId } = makeController({
+      tabClaudeSessionId: null,
+      mainSessionId: 'other-main',
+      hasSeedHistory: false,
+      withDiskHistory: { sessionId: 'fallback-session-xyz', events: diskEvents },
+      tabSkipAutoResume: true,
+    })
+    try {
+      const cs = await triggerAttach()
+      assert.ok(cs, 'claude session should be created')
+      assert.notEqual(cs.claudeSessionId, 'fallback-session-xyz', 'skipAutoResume must NOT resolve to jsonl sessionId')
+      assert.equal(cs.turnCount, 0, 'skipAutoResume should start fresh (new-session path)')
+      assert.equal(cs.history.length, 0, 'no history should be loaded from disk')
+      assert.equal(cs.skipAutoResume, true, 'skipAutoResume flag should propagate to claude session')
     } finally {
       restoreEnv()
       cleanup()

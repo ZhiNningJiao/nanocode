@@ -496,7 +496,7 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     // before history-fetch primed the seed), turnCount reset to 0, and we opened a brand
     // new conversation instead of resuming the stored one.
     const sessionFallback = store.getSetting('claude_session_fallback') || 'continue'
-    const useResumeOnFirstTurn = !isFirstTurn || cs.explicitSessionId
+    const useResumeOnFirstTurn = !isFirstTurn || (cs.explicitSessionId && !cs.skipAutoResume)
     let sessionArg
     if (useResumeOnFirstTurn) {
       sessionArg = `--resume=${cs.claudeSessionId}`
@@ -843,6 +843,9 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         // Carries the "try --resume on first turn" flag (store-chosen or disk-recovered).
         // Reset to false by fallback paths once --resume has been attempted.
         explicitSessionId: resolvedExplicit || diskRecovered,
+        // 需求3: tab opened via "开启新对话" — forces a truly-new --session-id first
+        // turn (Layer 3) instead of --resume on the not-yet-existing jsonl.
+        skipAutoResume: !!tab?.skipAutoResume,
         cwd: project.cwd,
         currentProc: null,
         tabLabel: tab?.label || '',
