@@ -505,32 +505,39 @@
             <div class="split-divider" id="split-divider"></div>
             <div class="pane pane-right">
               <div class="right-panel" id="right-panel">
-                <div class="right-panel-tabs" id="right-panel-tabs" role="tablist">
-                  <button type="button" class="right-panel-tab active" data-rp-tab="files" role="tab" data-i18n="rightpanel.files">Files</button>
-                  <button type="button" class="right-panel-tab" data-rp-tab="compare" role="tab" data-i18n="rightpanel.compare">Compare</button>
-                  <button type="button" class="right-panel-tab" data-rp-tab="plugins" role="tab" data-i18n="rightpanel.plugins">Plugins</button>
-                  <button type="button" class="right-panel-tab" data-rp-tab="usage" role="tab" data-i18n="rightpanel.usage">Usage</button>
+                <div class="right-domain-strip" id="right-domain-strip" role="tablist">
+                  <button type="button" class="right-domain-btn active" data-domain="session" role="tab" data-i18n="domain.session">Session</button>
+                  <button type="button" class="right-domain-btn" data-domain="ops" role="tab" data-i18n="domain.ops">Ops</button>
+                  <button type="button" class="right-domain-btn" data-domain="artifacts" role="tab" data-i18n="domain.artifacts">Artifacts</button>
                 </div>
-                <div class="right-panel-body">
-                  <div class="right-panel-pane active" data-rp-pane="files">
-                    <div class="explorer-root" id="explorer-root"></div>
+                <div class="right-domain-body" id="right-domain-body">
+                  <div class="right-domain active" data-domain="session">
+                    <div class="right-sub-tabs" data-domain-tabs="session" role="tablist"></div>
+                    <div class="right-sub-body" data-domain-body="session"></div>
                   </div>
-                  <div class="right-panel-pane" data-rp-pane="compare">
-                    <div class="right-panel-placeholder">
-                      <div class="right-panel-placeholder-title" data-i18n="rightpanel.compare.title">Compare</div>
-                      <div class="right-panel-placeholder-desc" data-i18n="rightpanel.compare.desc">Diff and compare views will appear here.</div>
+                  <div class="right-domain" data-domain="ops">
+                    <div class="right-sub-tabs" data-domain-tabs="ops" role="tablist">
+                      <button type="button" class="right-sub-tab" data-rp-tab="plugin-manager" role="tab" data-i18n="plugin.manager.label">Plugins</button>
+                    </div>
+                    <div class="right-sub-body" data-domain-body="ops">
+                      <div class="right-panel-pane" data-rp-pane="plugin-manager" id="plugin-manager-pane"></div>
                     </div>
                   </div>
-                  <div class="right-panel-pane" data-rp-pane="plugins">
-                    <div class="right-panel-placeholder">
-                      <div class="right-panel-placeholder-title" data-i18n="rightpanel.plugins.title">Plugins</div>
-                      <div class="right-panel-placeholder-desc" data-i18n="rightpanel.plugins.desc">Team and model plugins will appear here.</div>
+                  <div class="right-domain" data-domain="artifacts">
+                    <div class="right-sub-tabs" data-domain-tabs="artifacts" role="tablist">
+                      <button type="button" class="right-sub-tab active" data-rp-tab="files" role="tab" data-i18n="rightpanel.files">Files</button>
+                      <button type="button" class="right-sub-tab" data-rp-tab="compare" role="tab" data-i18n="rightpanel.compare">Compare</button>
                     </div>
-                  </div>
-                  <div class="right-panel-pane" data-rp-pane="usage">
-                    <div class="right-panel-placeholder">
-                      <div class="right-panel-placeholder-title" data-i18n="rightpanel.usage.title">Usage</div>
-                      <div class="right-panel-placeholder-desc" data-i18n="rightpanel.usage.desc">Token and cost usage stats will appear here.</div>
+                    <div class="right-sub-body" data-domain-body="artifacts">
+                      <div class="right-panel-pane active" data-rp-pane="files">
+                        <div class="explorer-root" id="explorer-root"></div>
+                      </div>
+                      <div class="right-panel-pane" data-rp-pane="compare">
+                        <div class="right-panel-placeholder">
+                          <div class="right-panel-placeholder-title" data-i18n="rightpanel.compare.title">Compare</div>
+                          <div class="right-panel-placeholder-desc" data-i18n="rightpanel.compare.desc">Diff and compare views will appear here.</div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -539,8 +546,8 @@
           </div>
 
           <div class="mobile-pane-switch" id="mobile-pane-switch">
-            <button type="button" class="mobile-pane-btn active" data-pane="left">Terminal</button>
-            <button type="button" class="mobile-pane-btn" data-pane="right">Files</button>
+            <button type="button" class="mobile-pane-btn active" data-pane="left" data-i18n="mobile.terminal">Terminal</button>
+            <button type="button" class="mobile-pane-btn" data-pane="right" data-i18n="mobile.panel">Panel</button>
           </div>
 
           <div class="chat-input-bar" id="chat-input-bar">
