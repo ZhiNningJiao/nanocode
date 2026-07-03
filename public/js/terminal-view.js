@@ -9,6 +9,7 @@ import { initSplitPane } from './terminal-pane.js'
 import { TabManager, TYPE_ICON_SVG } from './tab-manager.js'
 import { createExplorer } from './explorer.js'
 import { initRightPanel, showRightPanelTab } from './right-panel.js'
+import { initPluginsPanel } from './plugins-panel.js'
 
 const mobileQuery = window.matchMedia('(max-width: 768px)')
 const isMobile = () => mobileQuery.matches
@@ -95,6 +96,7 @@ function setupExplorer(projectId) {
   if (!root) return
   explorer = createExplorer(root, projectId)
   initRightPanel()
+  initPluginsPanel()
 
   // Feature 2: listen for path-click events from chat bubble renderer
   // The event bubbles up from wherever in the DOM the clicked span lives.

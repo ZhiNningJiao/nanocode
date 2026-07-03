@@ -3,10 +3,12 @@ import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractSummary, relTimeFromMtime } from './recent-agents.js'
+import { effectiveClaudeConfigDir, claudeProjectsDir } from './usage.js'
 
 export function cwdToClaudeProjectDir(home, cwd) {
-  const encoded = cwd.replace(/\//g, '-')
-  return join(home, '.claude', 'projects', encoded)
+  // Backward-compatible: defaults to ~/.claude. Kept for existing tests/callers
+  // that don't know about the Team switch (CLAUDE_CONFIG_DIR) setting.
+  return claudeProjectsDir(join(home, '.claude'), cwd)
 }
 
 function hashReplayText(text) {
@@ -465,8 +467,8 @@ export function countUserMessages(jsonlPath, capBytes = COUNT_CAP_BYTES) {
  *
  * Returns an array of { sessionId, summary, messageCount, byteSize, mtime, relTime }.
  */
-export function scanRecentConversations(home, cwd, limit = 5, now = Date.now()) {
-  const projectDir = cwdToClaudeProjectDir(home, cwd)
+export function scanRecentConversations(home, cwd, limit = 5, now = Date.now(), configDir = null) {
+  const projectDir = claudeProjectsDir(configDir || join(home, '.claude'), cwd)
   if (!existsSync(projectDir)) return []
   let files
   try { files = readdirSync(projectDir) } catch { return [] }
@@ -519,7 +521,8 @@ export function scanRecentConversations(home, cwd, limit = 5, now = Date.now()) 
  *   freshSessionId    - the fresh UUID assigned when skipped, otherwise null
  */
 export function resolveSessionJsonl({ store, home, project, tab }) {
-  const projectDir = cwdToClaudeProjectDir(home, project.cwd)
+  const configDir = effectiveClaudeConfigDir(store, home)
+  const projectDir = claudeProjectsDir(configDir, project.cwd)
   const sessionId = tab?.claudeSessionId || null
   const jsonlPath = sessionId ? join(projectDir, `${sessionId}.jsonl`) : null
 
@@ -588,7 +591,8 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     const tabs = store.listTabs(project.id).filter((t) => t.type === 'claude')
     if (!tabs.length) return null
 
-    const projectDir = cwdToClaudeProjectDir(home, project.cwd)
+    const configDir = effectiveClaudeConfigDir(store, home)
+    const projectDir = claudeProjectsDir(configDir, project.cwd)
     let bestTabId = null
     let bestMtime = 0
 
@@ -681,9 +685,9 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
   }
 
   return {
-    cwdToClaudeProjectDir: (cwd) => cwdToClaudeProjectDir(home, cwd),
+    cwdToClaudeProjectDir: (cwd) => claudeProjectsDir(effectiveClaudeConfigDir(store, home), cwd),
     findMostRecentClaudeTab,
     handleHistory,
-    recentConversations: (cwd, limit) => scanRecentConversations(home, cwd, limit),
+    recentConversations: (cwd, limit) => scanRecentConversations(home, cwd, limit, Date.now(), effectiveClaudeConfigDir(store, home)),
   }
 }

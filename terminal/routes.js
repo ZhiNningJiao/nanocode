@@ -9,6 +9,7 @@ import * as sessions from './sessions.js'
 import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
+import { scanClaudeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir } from './usage.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -643,6 +644,81 @@ export function createTerminalRoutes(store) {
       console.warn('[codex/config] failed to read config.toml:', err.message)
     }
     res.json({ model })
+  })
+
+  // ── 需求1 plugin routes ────────────────────────────────────────────────────
+  //
+  // GET  /api/teams            — list Claude "teams" (CLAUDE_CONFIG_DIR dirs)
+  // GET  /api/usage/claude     — aggregate message.usage tokens from jsonl
+  // GET  /api/aigw/models      — proxy AIGW /v1/models, filter to litellm/*
+  // POST /api/aigw/probe-cost  — one AIGW chat call, read x-litellm-response-cost
+  //
+  // All are wrapped in try/catch (Express 4 does not propagate async rejections)
+  // and never throw on missing data — the UI labels unavailable sources honestly.
+
+  router.get('/api/teams', (_req, res) => {
+    try {
+      res.json(listTeams(home, store))
+    } catch (err) {
+      console.error('[/api/teams]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/usage/claude', (req, res) => {
+    try {
+      const configDir = effectiveClaudeConfigDir(store, home)
+      const days = parseInt(req.query.days, 10)
+      const opts = {}
+      if (Number.isFinite(days) && days > 0) opts.days = days
+      const result = scanClaudeUsage(configDir, opts)
+      res.json(result)
+    } catch (err) {
+      console.error('[/api/usage/claude]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/aigw/models', async (req, res) => {
+    try {
+      const result = await listAigwModels({})
+      res.json(result)
+    } catch (err) {
+      console.error('[/api/aigw/models]', err)
+      res.json({ models: [], raw: 0, base: null, keyPresent: false, error: err.message })
+    }
+  })
+
+  router.post('/api/aigw/probe-cost', async (req, res) => {
+    try {
+      const model = typeof req.body?.model === 'string' && req.body.model.trim()
+        ? req.body.model.trim()
+        : 'litellm/SGLang-GLM-latest'
+      const prompt = typeof req.body?.prompt === 'string' && req.body.prompt.trim()
+        ? req.body.prompt.trim().slice(0, 200)
+        : 'Reply with the single word: ok'
+      const result = await probeAigwCost({ model, prompt })
+      // Accumulate probed cost in a store setting so the UI can show a running
+      // total of nanocode-initiated AIGW probes (honest: only probes, not
+      // opencode session traffic which is not proxied). Count every probe even
+      // when the cost header was absent, so the user sees the probe ran.
+      try {
+        if (result && result.cost != null) {
+          const prev = Number(store.getSetting('aigw_probe_cost_total')) || 0
+          store.setSetting('aigw_probe_cost_total', Number((prev + result.cost).toFixed(6)))
+        }
+        const count = Number(store.getSetting('aigw_probe_count')) || 0
+        store.setSetting('aigw_probe_count', count + 1)
+      } catch {}
+      res.json({
+        ...result,
+        accumulatedCost: Number(store.getSetting('aigw_probe_cost_total')) || 0,
+        probeCount: Number(store.getSetting('aigw_probe_count')) || 0,
+      })
+    } catch (err) {
+      console.error('[/api/aigw/probe-cost]', err)
+      res.status(500).json({ error: err.message })
+    }
   })
 
   // ── GET /api/recent-agents ────────────────────────────────────────────────

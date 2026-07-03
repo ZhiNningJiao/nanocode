@@ -79,15 +79,26 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     // Config lives in ~/.config/opencode/opencode.json (kimi provider, model kimi/litellm/SGLang-Kimi-K2.7-Code)
     // MESHY_AIGW_KEY is injected from ~/.config/meshy-aigw.key at launch time so the child shell
     // picks it up without permanently polluting the nanocode server environment.
+    // 需求1: if the user picked an AIGW model in the Plugins tab (aigw_model
+    // setting), use it via -m kimi/<model> + an inline config override that
+    // registers the model under the kimi provider (same mechanism as fable5).
     'meshy-aigw': () => {
       const keyFile = join(home || process.env.HOME, '.config', 'meshy-aigw.key')
-      const keyExists = existsSync(keyFile)
-      if (keyExists) {
-        // Read key at launch time so the PTY env has it
-        return `export MESHY_AIGW_KEY=$(cat ${keyFile}); opencode .; exec bash -l`
+      const aigwModel = store.getSetting('aigw_model')
+      const parts = []
+      if (existsSync(keyFile)) {
+        parts.push(`export MESHY_AIGW_KEY=$(cat ${keyFile})`)
       }
-      // Fallback: assume MESHY_AIGW_KEY already in env
-      return 'opencode .; exec bash -l'
+      if (aigwModel && typeof aigwModel === 'string' && aigwModel.trim()) {
+        const m = aigwModel.trim()
+        const cfg = JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { kimi: { models: { [m]: { name: m } } } } })
+        parts.push(`export OPENCODE_CONFIG_CONTENT='${cfg}'`)
+        parts.push(`opencode -m kimi/${m} .`)
+      } else {
+        parts.push('opencode .')
+      }
+      parts.push('exec bash -l')
+      return parts.join('; ')
     },
     // fable5: opencode with Claude Fable 5 (litellm/claude-fable-5) via Meshy AIGW.
     // The kimi provider in the global opencode.json already has the AIGW baseURL +
@@ -95,10 +106,15 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     // registered, so opencode rejects it with ProviderModelNotFoundError.
     // OPENCODE_CONFIG_CONTENT is an inline runtime override (merged, not replacing)
     // that adds litellm/claude-fable-5 to the kimi provider, reusing its AIGW baseURL.
+    // 需求1: aigw_model setting overrides the hardcoded fable-5 model.
     'fable5': () => {
       const keyFile = join(home || process.env.HOME, '.config', 'meshy-aigw.key')
-      const cfg = '{"$schema":"https://opencode.ai/config.json","provider":{"kimi":{"models":{"litellm/claude-fable-5":{"name":"Claude Fable 5"}}}}}'
-      const launch = `export OPENCODE_CONFIG_CONTENT='${cfg}'; opencode -m kimi/litellm/claude-fable-5 .; exec bash -l`
+      const aigwModel = store.getSetting('aigw_model')
+      const model = (aigwModel && typeof aigwModel === 'string' && aigwModel.trim())
+        ? aigwModel.trim()
+        : 'litellm/claude-fable-5'
+      const cfg = JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { kimi: { models: { [model]: { name: model } } } } })
+      const launch = `export OPENCODE_CONFIG_CONTENT='${cfg}'; opencode -m kimi/${model} .; exec bash -l`
       if (existsSync(keyFile)) {
         return `export MESHY_AIGW_KEY=$(cat ${keyFile}); ${launch}`
       }
@@ -324,6 +340,20 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     const env = {}
     for (const [k, v] of Object.entries(process.env)) {
       if (!STRIP_KEYS.has(k)) env[k] = v
+    }
+    // 需求1 Team switch: honour the selected CLAUDE_CONFIG_DIR so new claude
+    // sessions read their config (~/.claude or ~/.claude-team2) from the team
+    // the user picked in the Plugins tab. We deliberately OVERWRITE any
+    // inherited CLAUDE_CONFIG_DIR so the store setting is the single source of
+    // truth — the nanocode server itself must keep running under its own
+    // config dir, but spawned claude sessions follow the user's team choice.
+    const configDir = store.getSetting('claude_config_dir')
+    if (configDir && typeof configDir === 'string' && configDir.trim()) {
+      env.CLAUDE_CONFIG_DIR = configDir.trim()
+    } else {
+      // No team chosen — make sure a stale inherited CLAUDE_CONFIG_DIR from the
+      // server env doesn't leak into the child (claude would use it silently).
+      delete env.CLAUDE_CONFIG_DIR
     }
     return env
   }
