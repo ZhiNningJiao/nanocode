@@ -47,6 +47,16 @@ export function validateManifest(m) {
       }
     }
   }
+  // `settings` is optional (需求14 补充: ecosystem field for per-plugin config).
+  // If present it must be a plain object — the values are plugin-defined.
+  // NOTE (gap, recorded in REPORT): the plugin manager does not yet render a
+  // per-plugin settings panel (that's 需求13's scope); declaring it here is the
+  // forward-compatible ground for the future settings UI.
+  if (m.settings != null) {
+    if (typeof m.settings !== 'object' || Array.isArray(m.settings)) {
+      errors.push('settings must be a plain object')
+    }
+  }
   return { ok: errors.length === 0, errors }
 }
 
@@ -91,6 +101,20 @@ export const BUILTIN_PLUGINS = [
     tab: { id: 'persona', labelKey: 'plugin.persona.label' },
     permissions: ['fs.read'],
     descriptionKey: 'plugin.persona.desc',
+    builtin: true,
+  },
+  {
+    // 需求14 — Compare: recent-branches diff. The first "heavy feature plugin"
+    // sample for the registry: it replaces the 需求6 built-in Compare placeholder
+    // with a dynamically registered Artifacts tab.
+    name: 'compare',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'artifacts',
+    tab: { id: 'compare', labelKey: 'plugin.compare.label' },
+    permissions: ['git.read', 'fs.read'],
+    settings: { defaultBranches: 10 },
+    descriptionKey: 'plugin.compare.desc',
     builtin: true,
   },
 ]

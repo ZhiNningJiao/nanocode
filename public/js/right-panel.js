@@ -24,15 +24,18 @@ import {
 import { renderTeamModelPane, renderUsagePane, resetPluginLoadState } from './plugins-panel.js'
 import { renderMemoryPane, resetMemoryLoadState } from './memory-panel.js'
 import { renderPersonaPane, resetPersonaLoadState } from './persona-panel.js'
+import { renderComparePane, resetCompareLoadState } from './compare-panel.js'
 
 const DOMAIN_KEY = 'rightPanel:domain'
 const SUBTAB_KEY = (d) => `rightPanel:subtab:${d}`
 const ENABLED_KEY = 'rightPanel:plugins:enabled'
 
 const DOMAINS = ['session', 'ops', 'artifacts']
+// Built-in HTML tabs and their domain. NOTE: `compare` is now a plugin (需求14),
+// not a built-in HTML tab — it mounts/unmounts via the registry. Only `files`
+// (the explorer) and `plugin-manager` remain built-in.
 const BUILTIN_TAB_DOMAIN = {
   files: 'artifacts',
-  compare: 'artifacts',
   'plugin-manager': 'ops',
 }
 const PLUGIN_RENDERERS = {
@@ -40,6 +43,7 @@ const PLUGIN_RENDERERS = {
   usage: renderUsagePane,
   memory: renderMemoryPane,
   persona: renderPersonaPane,
+  compare: renderComparePane,
 }
 
 let activeDomain = 'artifacts'
@@ -273,7 +277,10 @@ function applySubTab(domain) {
     const entry = mountedEntryByTab(domain, tabId)
     if (entry && !entry.rendered) {
       const render = PLUGIN_RENDERERS[entry.plugin.name]
-      if (render) render(entry.pane)
+      // Pass the plugin manifest as the 2nd arg so renderers can read
+      // `plugin.settings` (需求14 compare reads settings.defaultBranches).
+      // Existing renderers take (pane) and ignore the extra arg — backward-compatible.
+      if (render) render(entry.pane, entry.plugin)
       entry.rendered = true
     }
     if (tabId === 'plugin-manager') {
@@ -351,6 +358,7 @@ function resetPluginLoadStateFor(name) {
   if (name === 'team-model' || name === 'usage') resetPluginLoadState()
   if (name === 'memory') resetMemoryLoadState()
   if (name === 'persona') resetPersonaLoadState()
+  if (name === 'compare') resetCompareLoadState()
 }
 
 // ── persistence ───────────────────────────────────────────────────────────────

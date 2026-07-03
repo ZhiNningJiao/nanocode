@@ -1232,6 +1232,142 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 }
 .mem-error { color: var(--warning); }
 
+/* -- Compare plugin (MES-13740 需求14) ---------------------------- */
+
+.cmp-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.cmp-row {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-end;
+}
+.cmp-row-2 {
+  align-items: center;
+}
+.cmp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.cmp-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cmp-limit { flex: 0 0 auto; max-width: 120px; }
+.cmp-swap { flex-shrink: 0; min-height: 32px; line-height: 1; }
+
+.cmp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.cmp-hint {
+  margin: auto;
+  padding: var(--s-4);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.cmp-error { color: var(--warning); }
+
+.cmp-summary {
+  padding: var(--s-2) var(--s-3);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.cmp-list-head {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: var(--s-2) var(--s-3) var(--s-1);
+  flex-shrink: 0;
+}
+.cmp-filelist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: 0 var(--s-2) var(--s-3);
+}
+.cmp-file-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--s-2);
+  cursor: pointer;
+  color: var(--text);
+  font-family: inherit;
+}
+.cmp-file-row:hover { background: var(--bg-hover); }
+.cmp-file-row.active {
+  background: var(--bg-card);
+  border-color: var(--border-active, var(--border));
+}
+.cmp-file-name {
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+.cmp-file-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.cmp-diff-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.cmp-diff-crumb {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  word-break: break-all;
+  min-width: 0;
+}
+.cmp-diff-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s-2) var(--s-3);
+}
+.cmp-diff {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  margin: 0;
+  tab-size: 4;
+}
+
 /* -- Persona library + skills browser (MES-13740 需求8) ---------- */
 
 .persona-preview {
@@ -3037,6 +3173,18 @@ body.workspace-active .landing-overlay { display: none; }
   #persona-select { min-height: 44px; }
   .persona-skill-group-head { min-height: 44px; }
   .claude-resume-picker-persona-select { min-height: 44px; max-width: 100%; }
+
+  /* Compare plugin: ≥44px touch targets, diff scrolls horizontally (需求14) */
+  #cmp-base-select,
+  #cmp-head-select { min-height: 44px; }
+  .cmp-swap { min-height: 44px; min-width: 44px; }
+  .cmp-controls .rp-btn-sm { min-height: 44px; }
+  .cmp-limit .rp-select { min-height: 44px; }
+  .cmp-file-row { min-height: 44px; }
+  .cmp-diff-bar { flex-wrap: wrap; }
+  .cmp-diff-bar .rp-btn-sm { min-height: 44px; }
+  .cmp-diff-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .cmp-diff { font-size: 12px; }
 
 }
 
