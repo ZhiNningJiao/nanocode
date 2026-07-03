@@ -710,10 +710,11 @@ const NEW_TAB_OPTIONS = [
   { type: 'agent', label: 'Cursor Agent', hint: 'agent' },
   { type: 'opencode', label: 'OpenCode', hint: 'opencode' },
   { type: 'meshy-aigw', label: 'Meshy AIGW', hint: 'Kimi K2.7 Code' },
+  { type: 'fable5', label: 'Fable 5', hint: 'OpenCode AIGW' },
   { type: 'tmux', label: 'Tmux Session', hint: 'attach' },
 ]
 
-const DEFAULT_ENABLED_TYPES = ['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw', 'tmux']
+const DEFAULT_ENABLED_TYPES = ['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw', 'fable5', 'tmux']
 const ENABLED_TYPES_KEY = 'nanocodeEnabledTabTypes'
 
 export function getEnabledTabTypes() {
@@ -738,6 +739,8 @@ const TYPE_ICON_SVG = {
   opencode: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 9l-3 3 3 3M16 9l3 3-3 3"/></svg>`,
   // Meshy AIGW: lightning bolt icon (fast Kimi model via internal proxy)
   'meshy-aigw': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
+  // Fable 5: sparkles icon (Claude Fable 5 via OpenCode AIGW)
+  'fable5': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/></svg>`,
   // Tmux: terminal split icon
   tmux: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>`,
 }

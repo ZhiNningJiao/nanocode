@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 
-const TAB_TYPES = new Set(['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw', 'tmux'])
+const TAB_TYPES = new Set(['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw', 'fable5', 'tmux'])
 
 function emptyData() {
   return { projects: [], settings: {}, tabs: {} }
