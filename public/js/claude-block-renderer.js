@@ -2045,7 +2045,14 @@ export class ClaudeBlockRenderer {
         }
       }
     } else if (event.subtype === 'error') {
-      this._addSystemBlock(`[Error: ${event.error?.message || 'unknown error'}]`)
+      // 需求15 item7: opencode driver sends `error` as a plain string (stderr
+      // text, opencode-block-driver.js:197/223); claude SDK sends an Error-like
+      // object with `.message`; claude tmux/controller send no `error` field.
+      // Handle all three forms so the stderr crash info actually reaches the
+      // error block — previously only `.message` was read, so the opencode
+      // string-form error was dropped and rendered as '[Error: unknown error]'.
+      const errText = event.error?.message || event.error || 'unknown error'
+      this._addSystemBlock(`[Error: ${errText}]`)
     }
   }
 
