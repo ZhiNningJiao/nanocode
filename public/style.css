@@ -3454,6 +3454,15 @@ body.workspace-active .landing-overlay { display: none; }
   .rm-row-actions .rp-btn-sm { min-height: 44px; flex: 1 1 auto; }
   .rm-connect { min-width: 0; }
 
+  /* Team & Model plugin: ≥44px touch targets for the model/effort selectors
+     migrated out of Settings + team radio rows (MES-13740 R2 Block A). */
+  #rp-aigw-model,
+  #rp-claude-model,
+  #rp-codex-model,
+  #rp-claude-effort { min-height: 44px; }
+  .right-panel-pane[data-rp-pane="team-model"] .rp-btn-sm { min-height: 44px; }
+  .right-panel-pane[data-rp-pane="team-model"] .rp-option { min-height: 44px; }
+
 }
 
 /* -- Reduced motion -------------------------------------------- */
