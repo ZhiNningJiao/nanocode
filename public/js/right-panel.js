@@ -141,6 +141,13 @@ function setEnabled(name, on) {
   persistEnabled()
   // Reflect toggle states without losing the manager's scroll.
   renderPluginManager(getPane('plugin-manager'))
+  // B-1: when a plugin is enabled via the toggle, jump to its tab so the
+  // user immediately sees what they just turned on. Settings-only plugins
+  // (no tab) have nothing to jump to.
+  if (on && plugin.tab) {
+    setDomain(plugin.group)
+    setSubTab(plugin.group, plugin.tab.id)
+  }
 }
 
 function mountPlugin(plugin, opts = {}) {
