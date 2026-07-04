@@ -14,6 +14,7 @@ import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri } from './remote.js'
 import { exportToEvents } from './opencode-adapter.js'
+import { listOpencodeSessions } from './opencode-sessions.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -203,6 +204,25 @@ export function createTerminalRoutes(store) {
     }
   })
 
+  // ── GET /api/projects/:id/opencode-sessions ─────────────────────────────────
+  // 需求15 item1: lists recent opencode sessions (scoped to the project cwd by
+  // the opencode CLI) for the Fable5/opencode AutoResume picker — the opencode
+  // analogue of /recent-conversations. Read-only, no quota cost.
+  router.get('/api/projects/:id/opencode-sessions', (req, res) => {
+    const project = store.getProject(req.params.id)
+    if (!project) return res.status(404).json({ error: 'project not found' })
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 50)
+    listOpencodeSessions(home, project.cwd, limit, (err, data) => {
+      if (err) {
+        console.warn('[/api/opencode-sessions]', err.message)
+        // Degrade to an empty list (picker shows "no sessions") rather than 500
+        // — opencode may be absent or the db unreadable on a given host.
+        return res.json({ conversations: [], error: err.message })
+      }
+      res.json(data)
+    })
+  })
+
   router.post('/api/projects/:id/tabs', (req, res) => {
     const project = store.getProject(req.params.id)
     if (!project) return res.status(404).json({ error: 'project not found' })
@@ -227,6 +247,12 @@ export function createTerminalRoutes(store) {
     const tmuxTarget = typeof req.body?.tmuxTarget === 'string' && req.body.tmuxTarget.trim()
       ? req.body.tmuxTarget.trim()
       : undefined
+    // 需求15 item1: a Fable5/opencode tab opened via the resume picker carries
+    // the chosen opencode session id so the driver passes --session <id>
+    // (resumes the conversation) and the history route replays it immediately.
+    const opencodeSessionId = typeof req.body?.opencodeSessionId === 'string' && req.body.opencodeSessionId.trim()
+      ? req.body.opencodeSessionId.trim()
+      : undefined
     // 需求3: `fresh: true` marks a Claude tab opened via "开启新对话" — it must
     // NOT auto-resume the newest jsonl. Stored as tab.skipAutoResume and honored
     // by resolveSessionJsonl + the first-turn --session-id decision.
@@ -238,7 +264,7 @@ export function createTerminalRoutes(store) {
     // stored — resolvePersonaPrompt would no-op anyway, but we keep the tab clean.
     const _personaRaw = typeof req.body?.persona === 'string' ? req.body.persona.trim() : ''
     const persona = _personaRaw && /^[A-Za-z0-9._-]+$/.test(_personaRaw) ? _personaRaw : undefined
-    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, claudeConfigDir, claudeSessionCwd, tmuxTarget, skipAutoResume, persona })
+    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, claudeConfigDir, claudeSessionCwd, tmuxTarget, skipAutoResume, persona, opencodeSessionId })
     broadcastTabs(req.params.id)
     res.status(201).json(tab)
   })
