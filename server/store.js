@@ -143,6 +143,15 @@ export function createStore(filePath = ':memory:') {
       tab.codexThreadId = opts.codexThreadId || null
     } else if (type === 'tmux') {
       tab.tmuxTarget = opts.tmuxTarget || null
+    } else if (type === 'fable5' || type === 'opencode') {
+      // 需求15 item1: a Fable5/opencode tab opened via the resume picker carries
+      // the chosen opencode session id so the block driver passes --session <id>
+      // (resumes the conversation) and the history route replays it. null = a
+      // brand-new tab; the driver captures the id from the first turn's stdout
+      // and persists it via updateTabMetadata (see allow-list below).
+      tab.opencodeSessionId = typeof opts.opencodeSessionId === 'string' && opts.opencodeSessionId.trim()
+        ? opts.opencodeSessionId.trim()
+        : null
     }
     existing.push(tab)
     save()
@@ -184,7 +193,7 @@ export function createStore(filePath = ':memory:') {
     if (!data.tabs[projectId]) return null
     const tab = data.tabs[projectId].find((t) => t.id === tabId)
     if (!tab) return null
-    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona']
+    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona', 'opencodeSessionId']
     let changed = false
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {

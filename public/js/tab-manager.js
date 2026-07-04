@@ -543,6 +543,13 @@ export class TabManager {
           this._showClaudeResumePicker()
           return
         }
+        // 需求15 item1: Fable5/opencode tabs get the same resume picker, backed
+        // by `opencode session list` instead of claude jsonl — 继续 resumes an
+        // opencode session (--session <id>), 开启新对话 starts a fresh one.
+        if (opt.type === 'fable5' || opt.type === 'opencode') {
+          this._showOpencodeResumePicker(opt.type)
+          return
+        }
         this.newTab(opt.type)
       })
       menu.appendChild(item)
@@ -811,6 +818,141 @@ export class TabManager {
     if (this._pickerEl) {
       this._pickerEl.remove()
       this._pickerEl = null
+    }
+  }
+
+  // ── 需求15 item1: Fable5/opencode tab picker ───────────────────────────────
+  // Mirrors _showClaudeResumePicker but the data source is `opencode session
+  // list` (via GET /opencode-sessions) instead of claude jsonl. 继续 creates a
+  // fable5/opencode tab pre-seeded with opencodeSessionId (the block driver
+  // passes --session <id>); 开启新对话 creates a fresh tab (driver allocates a
+  // new session on the first turn). Reuses the .claude-resume-picker-* CSS so
+  // the picker looks identical to the claude one (no new CSS needed). Persona
+  // selection is deferred to item5 (opencode injection differs from claude).
+  _showOpencodeResumePicker(type) {
+    this._closeClaudeResumePicker()
+    const typeLabel = type === 'fable5' ? 'Fable 5' : 'OpenCode'
+    const overlay = document.createElement('div')
+    overlay.className = 'claude-resume-picker'
+
+    const card = document.createElement('div')
+    card.className = 'claude-resume-picker-card'
+    overlay.appendChild(card)
+
+    const header = document.createElement('div')
+    header.className = 'claude-resume-picker-header'
+    const title = document.createElement('div')
+    title.className = 'claude-resume-picker-title'
+    title.textContent = `${typeLabel} — resume or start new`
+    const closeBtn = document.createElement('button')
+    closeBtn.type = 'button'
+    closeBtn.className = 'claude-resume-picker-close'
+    closeBtn.textContent = '×'
+    closeBtn.title = 'Close'
+    header.appendChild(title)
+    header.appendChild(closeBtn)
+    card.appendChild(header)
+
+    const body = document.createElement('div')
+    body.className = 'claude-resume-picker-body'
+    const loading = document.createElement('div')
+    loading.className = 'claude-resume-picker-loading'
+    loading.textContent = 'Loading recent OpenCode sessions…'
+    body.appendChild(loading)
+    card.appendChild(body)
+
+    const footer = document.createElement('div')
+    footer.className = 'claude-resume-picker-footer'
+    const newBtn = document.createElement('button')
+    newBtn.type = 'button'
+    newBtn.className = 'claude-resume-picker-new'
+    newBtn.textContent = '＋ 开启新对话'
+    newBtn.title = `Start a brand new ${typeLabel} conversation`
+    const cancelBtn = document.createElement('button')
+    cancelBtn.type = 'button'
+    cancelBtn.className = 'claude-resume-picker-secondary'
+    cancelBtn.textContent = 'Cancel'
+    footer.appendChild(cancelBtn)
+    footer.appendChild(newBtn)
+    card.appendChild(footer)
+
+    document.body.appendChild(overlay)
+    this._pickerEl = overlay
+
+    const dismiss = () => this._closeClaudeResumePicker()
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss() })
+    closeBtn.addEventListener('click', dismiss)
+    cancelBtn.addEventListener('click', dismiss)
+    const onKey = (e) => { if (e.key === 'Escape') { dismiss(); document.removeEventListener('keydown', onKey, true) } }
+    document.addEventListener('keydown', onKey, true)
+
+    newBtn.addEventListener('click', () => {
+      dismiss()
+      this.newTab(type, { label: 'new' })
+    })
+
+    this._renderOpencodePickerBody(body, type)
+  }
+
+  async _renderOpencodePickerBody(body, type) {
+    body.innerHTML = ''
+    const loading = document.createElement('div')
+    loading.className = 'claude-resume-picker-loading'
+    loading.textContent = 'Loading recent OpenCode sessions…'
+    body.appendChild(loading)
+
+    let conversations = []
+    try {
+      const resp = await fetch(`/api/projects/${this.projectId}/opencode-sessions?limit=5`)
+      if (resp.ok) {
+        const data = await resp.json()
+        conversations = data.conversations || []
+      }
+    } catch (err) {
+      console.warn('[opencode-resume-picker] failed to load sessions', err)
+    }
+
+    loading.remove()
+    if (!conversations.length) {
+      const empty = document.createElement('div')
+      empty.className = 'claude-resume-picker-empty'
+      empty.textContent = 'No recent OpenCode sessions. Start a new one below.'
+      body.appendChild(empty)
+      return
+    }
+
+    for (const c of conversations) {
+      const row = document.createElement('div')
+      row.className = 'claude-resume-picker-item'
+
+      const info = document.createElement('div')
+      info.className = 'claude-resume-picker-item-info'
+      const summary = document.createElement('div')
+      summary.className = 'claude-resume-picker-item-summary'
+      summary.textContent = c.title || '(untitled)'
+      summary.title = c.title || ''
+      const meta = document.createElement('div')
+      meta.className = 'claude-resume-picker-item-meta'
+      // opencode sessions are cwd-scoped; show the dir basename so the user can
+      // tell apart sessions from sibling project dirs if the CLI returns any.
+      const dirName = c.directory ? c.directory.replace(/\/$/, '').split('/').pop() : ''
+      meta.textContent = `${c.relTime || ''}${dirName ? ' · ' + dirName : ''}`
+      info.appendChild(summary)
+      info.appendChild(meta)
+      row.appendChild(info)
+
+      const resume = document.createElement('button')
+      resume.type = 'button'
+      resume.className = 'claude-resume-picker-resume'
+      resume.textContent = '继续'
+      resume.title = `Resume session ${c.sessionId}`
+      resume.addEventListener('click', () => {
+        this._closeClaudeResumePicker()
+        this.newTab(type, { opencodeSessionId: c.sessionId, label: 'resume' })
+      })
+      row.appendChild(resume)
+
+      body.appendChild(row)
     }
   }
 }
