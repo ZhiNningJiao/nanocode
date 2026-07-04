@@ -609,6 +609,12 @@ function setupChatInput() {
   // ── State ─────────────────────────────────────────────────────────────────
   let isClaudeTab = false      // is the active tab a claude tab?
   let isCodexTab = false       // is the active tab a codex tab? (N43: slash passthrough)
+  // 需求15 keystone: block-mode fable5/opencode tabs reuse ClaudeBlockRenderer
+  // and dispatch the same claude-thinking/claude-model events, so they deserve
+  // the same "shell" (stop button, model badge, busy/thinking UI). isBlockAgentTab
+  // = claude OR block-mode fable5/opencode. Kept claude-only: /model + slash menu
+  // (claude REPL specifics) — opencode model switching is via the store setting.
+  let isBlockAgentTab = false
   let isClaudeThinking = false // is claude currently thinking?
   let isCodexThinking = false  // is codex currently thinking? (P2: visual feedback)
   let claudeSlashOpen = false  // is the slash commands dropdown open?
@@ -617,27 +623,39 @@ function setupChatInput() {
     const tabType = _activeTabType
     isClaudeTab = tabType === 'claude'
     isCodexTab = tabType === 'codex'
+    // 需求15 keystone: block-mode fable5/opencode reuse ClaudeBlockRenderer and
+    // share the claude shell (stop/badge/thinking). Mirror tab-manager.js's
+    // useClaudeRenderer condition so renderMode toggles stay in sync.
+    const fable5RenderMode = (() => { try { return window.__nanocodeState?.fable5RenderMode || 'block' } catch { return 'block' } })()
+    const opencodeRenderMode = (() => { try { return window.__nanocodeState?.opencodeRenderMode || 'block' } catch { return 'block' } })()
+    isBlockAgentTab = isClaudeTab ||
+      (tabType === 'fable5' && fable5RenderMode !== 'terminal') ||
+      (tabType === 'opencode' && opencodeRenderMode !== 'terminal')
     if (isClaudeTab) {
       chatInput.placeholder = 'Message Claude… (/ for commands)'
+    } else if (tabType === 'fable5' && fable5RenderMode !== 'terminal') {
+      chatInput.placeholder = 'Message Fable 5… (/ for commands)'
+    } else if (tabType === 'opencode' && opencodeRenderMode !== 'terminal') {
+      chatInput.placeholder = 'Message OpenCode… (/ for commands)'
     } else if (isCodexTab) {
       // N43: codex tab — "/" should pass through to codex, not trigger nanocode slash menu
       chatInput.placeholder = 'Send to Codex… (/ for codex commands)'
     } else {
       chatInput.placeholder = 'Type a command...'
     }
-    // Stop btn only visible when claude is thinking
-    updateThinkingState(isClaudeThinking && isClaudeTab, { skipFlush })
+    // Stop btn only visible when a block agent (claude/fable5/opencode-block) is thinking
+    updateThinkingState(isClaudeThinking && isBlockAgentTab, { skipFlush })
   }
 
   function updateThinkingState(thinking, { skipFlush = false } = {}) {
     isClaudeThinking = thinking
     const activeTabId = tabManager ? tabManager.activeId : null
     const isActiveBg = activeTabId && _bgTabIds.has(activeTabId)
-    if (isClaudeTab && thinking && !isActiveBg) {
+    if (isBlockAgentTab && thinking && !isActiveBg) {
       chatInput.classList.add('claude-thinking')
       // Restore stop button to default icon/state
       stopBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>`
-      stopBtn.title = 'Stop Claude (interrupt)'
+      stopBtn.title = 'Stop (interrupt)'
       stopBtn.disabled = false
       stopBtn.hidden = false
       bgBtn.hidden = false
@@ -691,9 +709,11 @@ function setupChatInput() {
     // happen when the WS 'result' event arrives confirming Claude is truly idle.
     updateInputBarForTabType({ skipFlush: true })
 
-    // If switching to a claude tab that was sent to background and is still running,
-    // restore the thinking UI (stop + bg buttons) so the user can interact again.
-    if (newTabId && _activeTabType === 'claude' && _bgTabIds.has(newTabId)) {
+    // If switching to a block-agent tab (claude/fable5/opencode-block) that was
+    // sent to background and is still running, restore the thinking UI (stop +
+    // bg buttons) so the user can interact again. 需求15 keystone: widen to
+    // isBlockAgentTab so fable5/opencode Block tabs restore too.
+    if (newTabId && isBlockAgentTab && _bgTabIds.has(newTabId)) {
       const tabEntry = tabManager ? tabManager.tabs.find((t) => t.id === newTabId) : null
       const pane = tabEntry?.pane
       const stillRunning = pane && typeof pane.isThinking === 'function' && pane.isThinking()
@@ -773,7 +793,7 @@ function setupChatInput() {
   function _updateModelBadge() {
     if (!modelBadgeEl) return
     const activeId = tabManager ? tabManager.activeId : null
-    const model = (isClaudeTab && activeId) ? _modelByTab.get(activeId) : null
+    const model = (isBlockAgentTab && activeId) ? _modelByTab.get(activeId) : null
     if (model) {
       // "claude-fable-5" → "fable-5": keep the pill short (mobile-friendly).
       modelBadgeEl.textContent = model.replace(/^claude-/, '')

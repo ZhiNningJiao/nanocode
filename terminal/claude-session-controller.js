@@ -1239,9 +1239,25 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     const sessionKey = sessionKeyFor(req.params.id, req.params.tabId)
     const cs = claudeSessions.get(sessionKey)
     if (!cs) {
+      // 需求15 keystone (item3): opencode block-mode (Fable5/opencode Block tabs).
+      // The opencode block driver runs each turn as a subprocess with a
+      // makeInterruptHandle() on cs.currentProc (.kill(SIGINT) + _nanocodeInterrupted
+      // flag). Key format is distinct from claude/codex so there is no collision.
+      const openKey = opencodeBlockSessionKeyFor(req.params.id, req.params.tabId)
+      const openCs = opencodeBlockSessions.get(openKey)
+      if (openCs) {
+        if (!openCs.busy || !openCs.currentProc) return res.json({ ok: false, reason: 'not busy' })
+        try {
+          openCs.currentProc._nanocodeInterrupted = true
+          openCs.currentProc.kill('SIGINT')
+          return res.json({ ok: true, force: false })
+        } catch (err) {
+          return res.status(500).json({ error: err.message })
+        }
+      }
       const codexSessionKey = codexSessionKeyFor(req.params.id, req.params.tabId)
       const codexSession = codexSessions.get(codexSessionKey)
-      if (!codexSession) return res.status(404).json({ error: 'no claude or codex session' })
+      if (!codexSession) return res.status(404).json({ error: 'no claude, opencode, or codex session' })
       if (!codexSession.busy || !codexSession.currentProc) return res.json({ ok: false, reason: 'not busy' })
       try {
         codexSession.currentProc._nanocodeInterrupted = true
