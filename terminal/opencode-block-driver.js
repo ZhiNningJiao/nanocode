@@ -216,21 +216,51 @@ export function createOpencodeBlockDriver({
           sawResult = true
         }
 
-        // Queue drain (matches codex driver finally-block semantics)
+        // Queue drain — mirrors the claude SDK/tmux driver finally-block semantics
+        // (需求15 item2 / 需求9 server-owned queue). Two sources, in priority order:
+        //   1. cs.queue (in-memory): messages that arrived via WS while a turn was
+        //      already running (e.g. "send now" flush, or a second client). On
+        //      interrupt these are auto-flushed as the next turn unless the user
+        //      disabled auto_flush_queue_on_interrupt — aligned with claude.
+        //   2. tab.pendingQueue (persisted to disk): messages the client queued
+        //      while busy and persisted immediately via PUT /queue (keepalive) so
+        //      they survive a mobile tab suspend/kill. Drained when the cs.queue
+        //      path did not fire, exactly like claude-sdk-driver.js / -tmux-driver.
         if (!Array.isArray(cs.queue)) cs.queue = []
-        if (wasInterrupted) {
-          if (cs.queue.length > 0) {
-            const discarded = cs.queue.length
-            cs.queue = []
-            broadcast(cs, {
-              type: 'system',
-              subtype: 'info',
-              text: `[Queue cleared (${discarded} pending message${discarded > 1 ? 's' : ''} discarded after interrupt).]`,
-            })
+        const autoFlushOnInterrupt = store?.getSetting
+          ? store.getSetting('auto_flush_queue_on_interrupt') !== '0'
+          : true
+        const forceFlush = cs._forceFlushQueue === true
+        cs._forceFlushQueue = false
+        const flushedCsQueue = cs.queue.length > 0 && (forceFlush || !wasInterrupted || autoFlushOnInterrupt)
+        if (flushedCsQueue) {
+          const allQueued = cs.queue.splice(0)
+          const combinedText = allQueued.join('\n\n')
+          if (wasInterrupted && !forceFlush) {
+            broadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
           }
-        } else if (cs.queue.length > 0) {
-          const nextPrompt = cs.queue.shift()
-          setImmediate(() => rerunTurn(cs, nextPrompt, sessionKey, cwd))
+          console.log(`[opencode:block:queue] sessionKey=${sessionKey} flushing ${allQueued.length} in-memory queued message(s) (interrupted=${wasInterrupted}, force=${forceFlush})`)
+          setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+        } else {
+          // 需求9/需求15-item2: server-owned queue delivery — drain the persisted
+          // tab.pendingQueue so messages queued while busy (and persisted before
+          // a mobile tab suspend/kill could lose them) are delivered as the next
+          // turn. runOpencodeTurn echoes the user message itself (above), so no
+          // separate broadcastUserEcho is needed (unlike claude SDK/tmux drivers).
+          try {
+            const [pid, , tid] = sessionKey.split(':')
+            const tab = store?.getTab ? store.getTab(pid, tid) : null
+            if (tab && Array.isArray(tab.pendingQueue) && tab.pendingQueue.length > 0) {
+              const allQueued = tab.pendingQueue.slice()
+              store?.updateTabMetadata?.(pid, tid, { pendingQueue: [] })
+              const combinedText = allQueued.join('\n\n')
+              broadcast(cs, { type: 'system', subtype: 'queue-drained', text: `Delivering ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
+              console.log(`[opencode:block:queue] sessionKey=${sessionKey} draining ${allQueued.length} persisted pendingQueue message(s)`)
+              setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+            }
+          } catch (drainErr) {
+            log.error?.(`[opencode:block:queue] sessionKey=${sessionKey} pendingQueue drain error: ${drainErr?.message || drainErr}`)
+          }
         }
         finishTurn(resolve)
       })

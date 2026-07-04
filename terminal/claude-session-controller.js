@@ -1248,9 +1248,15 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       if (openCs) {
         if (!openCs.busy || !openCs.currentProc) return res.json({ ok: false, reason: 'not busy' })
         try {
+          // 需求15 item2: honour andFlush (set by the client "send now" flush) so
+          // the opencode driver's exit handler force-flushes the in-memory queue
+          // as the next turn regardless of the auto_flush_queue_on_interrupt setting
+          // — mirrors the claude path (cs._forceFlushQueue, controller line ~1274).
+          const andFlush = req.query.flush === '1' || req.body?.andFlush === true
+          if (andFlush) openCs._forceFlushQueue = true
           openCs.currentProc._nanocodeInterrupted = true
           openCs.currentProc.kill('SIGINT')
-          return res.json({ ok: true, force: false })
+          return res.json({ ok: true, force: false, andFlush })
         } catch (err) {
           return res.status(500).json({ error: err.message })
         }
