@@ -21,6 +21,15 @@ import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, cl
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
+
+// node:sqlite is experimental (Node 22+). Guarded require so an unavailable /
+// older runtime degrades to an honest "source unavailable" instead of crashing
+// the server at boot. The opencode session-table usage reader (需求15 item6) is
+// the only consumer; if it is null the route returns an honest error shape.
+const _require = createRequire(import.meta.url)
+let _DatabaseSync = null
+try { ({ DatabaseSync: _DatabaseSync } = _require('node:sqlite')) } catch { /* node:sqlite unavailable */ }
 
 const AIGW_BASE = process.env.MESHY_AIGW_BASE || 'https://aigw.meshy.team'
 const AIGW_KEY_FILE = join(homedir(), '.config', 'meshy-aigw.key')
@@ -537,4 +546,180 @@ export function saveMemoryFile(configDir, projectSlug, fileName, content) {
   } catch (err) {
     return { error: err.message }
   }
+}
+
+// ── opencode SQLite session usage (MES-13740 需求15 item6) ────────────────────
+//
+// opencode stores sessions in a SQLite DB (`$XDG_DATA_HOME/opencode/opencode.db`,
+// default ~/.local/share/opencode/opencode.db). The `session` table has
+// per-session token columns (tokens_input/output/reasoning/cache_read/cache_write)
+// + a `cost` column + model/directory/time_created/time_updated. We read it
+// read-only and aggregate — honest labelling: AIGW-routed sessions report cost=0
+// (the provider does not report per-session cost to opencode); the token counts
+// are real and authoritative. This mirrors the claude jsonl aggregation (需求1)
+// for the Fable5/opencode side so the Ops usage pane shows both sources.
+
+/** Empty opencode usage shape (kept consistent for the UI on every error path). */
+export function opencodeUsageEmpty() {
+  return {
+    totals: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    byModel: [],
+    byDay: [],
+    byDirectory: [],
+    sessionCount: 0,
+    costTotal: 0,
+  }
+}
+
+/**
+ * opencode stores the `model` column as a JSON string like
+ * {"id":"litellm/SGLang-GLM-latest","providerID":"kimi","variant":"default"}.
+ * Parse it and return the clean model id; fall back to the raw string when it
+ * is not JSON (some older/odd rows), and to '(unknown)' when empty.
+ */
+export function parseOpencodeModel(raw) {
+  if (typeof raw !== 'string' || !raw) return '(unknown)'
+  try {
+    const o = JSON.parse(raw)
+    if (o && typeof o.id === 'string' && o.id) return o.id
+  } catch { /* not JSON — use raw */ }
+  return raw
+}
+
+/**
+ * Pure: aggregate an array of opencode `session` rows (as read from SQLite)
+ * into a usage summary. Each row shape:
+ *   { model, cost, tokens_input, tokens_output, tokens_reasoning,
+ *     tokens_cache_read, tokens_cache_write, time_created, time_updated, directory }
+ * Null / missing fields are treated as 0. `time_*` are epoch MILLISECONDS
+ * (verified against a live DB: 1783133879857 -> 2026-07-04T02:57:59Z).
+ *
+ * Returns { totals, byModel, byDay, byDirectory, sessionCount, costTotal }.
+ * `costTotal` is kept separate — opencode populates `cost` only when the
+ * provider reports it; AIGW-routed sessions report 0 (the UI labels honestly).
+ *
+ * This is a PURE function (no SQLite / no subprocess) so it is unit-tested
+ * without a DB — mirrors the aggregateJsonlUsage / normalizeOpencodeSessions
+ * pattern.
+ */
+export function aggregateOpencodeSessions(rows) {
+  const totals = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
+  let costTotal = 0
+  let sessionCount = 0
+  const modelMap = new Map()
+  const dayMap = new Map()
+  const dirMap = new Map()
+  if (!Array.isArray(rows)) return { ...opencodeUsageEmpty() }
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue
+    const input = Number(r.tokens_input) || 0
+    const output = Number(r.tokens_output) || 0
+    const reasoning = Number(r.tokens_reasoning) || 0
+    const cacheRead = Number(r.tokens_cache_read) || 0
+    const cacheWrite = Number(r.tokens_cache_write) || 0
+    const cost = Number(r.cost) || 0
+    const model = parseOpencodeModel(r.model)
+    const updated = Number(r.time_updated) || (Number(r.time_created) || 0)
+    const dir = typeof r.directory === 'string' && r.directory ? r.directory : '(unknown)'
+    totals.input += input
+    totals.output += output
+    totals.reasoning += reasoning
+    totals.cacheRead += cacheRead
+    totals.cacheWrite += cacheWrite
+    costTotal += cost
+    sessionCount++
+    let m = modelMap.get(model)
+    if (!m) { m = { model, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, sessions: 0 }; modelMap.set(model, m) }
+    m.input += input; m.output += output; m.reasoning += reasoning; m.cacheRead += cacheRead; m.cacheWrite += cacheWrite; m.cost += cost; m.sessions++
+    if (updated > 0) {
+      const day = new Date(updated).toISOString().slice(0, 10)
+      let d = dayMap.get(day)
+      if (!d) { d = { day, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, sessions: 0 }; dayMap.set(day, d) }
+      d.input += input; d.output += output; d.reasoning += reasoning; d.cacheRead += cacheRead; d.cacheWrite += cacheWrite; d.cost += cost; d.sessions++
+    }
+    let di = dirMap.get(dir)
+    if (!di) { di = { directory: dir, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, sessions: 0 }; dirMap.set(dir, di) }
+    di.input += input; di.output += output; di.reasoning += reasoning; di.cacheRead += cacheRead; di.cacheWrite += cacheWrite; di.cost += cost; di.sessions++
+  }
+  const byModel = [...modelMap.values()].sort((a, b) => (b.input + b.output + b.reasoning + b.cacheRead + b.cacheWrite) - (a.input + a.output + a.reasoning + a.cacheRead + a.cacheWrite))
+  const byDay = [...dayMap.values()].sort((a, b) => (a.day < b.day ? 1 : -1))
+  const byDirectory = [...dirMap.values()].sort((a, b) => b.sessions - a.sessions)
+  return { totals, byModel, byDay, byDirectory, sessionCount, costTotal }
+}
+
+/**
+ * Resolve candidate opencode SQLite DB paths. opencode stores sessions under
+ * `$XDG_DATA_HOME/opencode/opencode.db` (default ~/.local/share/opencode/).
+ * The GLM worker may set GLM_XDG_DATA_HOME to a separate dir — include it as a
+ * candidate too (honest: aggregate every DB that exists). An explicit
+ * OPENCODE_DB_PATH env overrides everything (used by tests + power users).
+ *
+ * Returns string[] of EXISTING non-empty files (de-duplicated, order preserved).
+ */
+export function resolveOpencodeDbPaths(home) {
+  const homeDir = home || homedir()
+  const candidates = []
+  if (process.env.OPENCODE_DB_PATH) candidates.push(process.env.OPENCODE_DB_PATH)
+  const xdg = process.env.XDG_DATA_HOME || join(homeDir, '.local', 'share')
+  candidates.push(join(xdg, 'opencode', 'opencode.db'))
+  if (process.env.GLM_XDG_DATA_HOME) candidates.push(join(process.env.GLM_XDG_DATA_HOME, 'opencode', 'opencode.db'))
+  const seen = new Set()
+  const out = []
+  for (const c of candidates) {
+    if (!c || seen.has(c)) continue
+    seen.add(c)
+    try { if (existsSync(c) && statSync(c).size > 0) out.push(c) } catch {}
+  }
+  return out
+}
+
+/**
+ * Query raw session rows from ONE opencode SQLite DB (read-only). Returns
+ * { rows, dbPath } on success or { error, dbPath, rows: [] } on failure — never
+ * throws so the route can 200 with a clear reason.
+ */
+function queryOpencodeSessionRows(dbPath) {
+  if (!_DatabaseSync) return { error: 'node:sqlite unavailable (Node 22+ required)', dbPath, rows: [] }
+  if (!dbPath || !existsSync(dbPath)) return { error: 'opencode DB not found', dbPath, rows: [] }
+  let db
+  try {
+    db = new _DatabaseSync(dbPath, { readOnly: true })
+    const rows = db.prepare(
+      'SELECT model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, time_updated, directory FROM session'
+    ).all()
+    return { rows, dbPath }
+  } catch (err) {
+    return { error: String(err.message || err), dbPath, rows: [] }
+  } finally {
+    try { db && db.close() } catch {}
+  }
+}
+
+/**
+ * Scan ONE opencode SQLite DB and aggregate its session rows. Returns the
+ * aggregate shape plus `dbPath` and `source`; on failure returns the empty
+ * shape plus `error` + `dbPath` (never throws).
+ */
+export function scanOpencodeUsage(dbPath) {
+  const { rows, error } = queryOpencodeSessionRows(dbPath)
+  if (error) return { ...opencodeUsageEmpty(), dbPath, error }
+  return { ...aggregateOpencodeSessions(rows), dbPath, source: 'opencode SQLite session table' }
+}
+
+/**
+ * Scan ALL discovered opencode DBs (standard XDG + GLM_XDG_DATA_HOME + explicit
+ * override) and merge their session rows into one aggregate. This is the
+ * entry point the route calls. Returns the aggregate plus `dbPaths` (every
+ * candidate that existed) and `errors` (per-DB failures, if any). When every
+ * DB is unreadable, returns the empty shape + the first error.
+ */
+export function scanAllOpencodeUsage(home) {
+  const dbPaths = resolveOpencodeDbPaths(home)
+  if (!dbPaths.length) return { ...opencodeUsageEmpty(), dbPaths: [], error: 'opencode DB not found (no $XDG_DATA_HOME/opencode/opencode.db)' }
+  const perDb = dbPaths.map(queryOpencodeSessionRows)
+  const errors = perDb.filter((r) => r.error).map((r) => ({ dbPath: r.dbPath, error: r.error }))
+  const allRows = perDb.filter((r) => !r.error).flatMap((r) => r.rows)
+  if (!allRows.length) return { ...opencodeUsageEmpty(), dbPaths, errors, error: errors[0]?.error || 'no readable opencode DB' }
+  const agg = aggregateOpencodeSessions(allRows)
+  return { ...agg, dbPaths, errors, source: 'opencode SQLite session table' }
 }
