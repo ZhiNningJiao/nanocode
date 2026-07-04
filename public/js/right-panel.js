@@ -1,15 +1,18 @@
 /**
- * Right panel — three-domain container (MES-13740 需求6).
+ * Right panel — dual-domain container (MES-13740 R2 B-2).
  *
- * Top-level domains (按"你在对谁做事"):
- *   - Session  — control the current agent (team/model plugin, resume selector)
- *   - Ops      — all agents & resources (usage plugin, plugin manager)
- *   - Artifacts— outputs (Files, Compare)
+ * Top-level groups (按"监视 AI 放一起 / Claude Code 相关放一起", 主人 2026-07-04):
+ *   - Work     — operate the current Claude agent + its outputs
+ *                (team-model, memory, persona, files, compare)
+ *   - Monitor  — watch all agents & resources
+ *                (usage, remote, services, plugin-manager; notify/tts settings)
  *
- * Each domain has its own second-level tab strip. Built-in tabs (Files, Compare,
- * plugin-manager) live in HTML; plugin tabs (team-model, usage) are mounted/
- * unmounted dynamically by the plugin registry. Enabling a plugin mounts its
- * tab in the plugin's declared `group` domain; disabling removes it.
+ * R2 B-2 collapsed the previous session/ops/artifacts tri-domain into this
+ * dual-group partition. Each group has its own second-level tab strip. Built-in
+ * tabs (Files, plugin-manager) live in HTML; plugin tabs (team-model, usage)
+ * are mounted/unmounted dynamically by the plugin registry. Enabling a plugin
+ * mounts its tab in the plugin's declared `group` domain; disabling removes it.
+ * B-1: enabling a plugin auto-activates its tab so the user sees what they turned on.
  *
  * This is the shell only — render cores (plugins-panel.js) and the file explorer
  * (explorer.js) are not rewritten. 壳动芯不动.
@@ -34,13 +37,14 @@ const DOMAIN_KEY = 'rightPanel:domain'
 const SUBTAB_KEY = (d) => `rightPanel:subtab:${d}`
 const ENABLED_KEY = 'rightPanel:plugins:enabled'
 
-const DOMAINS = ['session', 'ops', 'artifacts']
-// Built-in HTML tabs and their domain. NOTE: `compare` is now a plugin (需求14),
+const DOMAINS = ['work', 'monitor']
+// Built-in HTML tabs and their group. NOTE: `compare` is a plugin (需求14),
 // not a built-in HTML tab — it mounts/unmounts via the registry. Only `files`
-// (the explorer) and `plugin-manager` remain built-in.
+// (the explorer) and `plugin-manager` remain built-in. R2 B-2: files moved
+// from the old `artifacts` domain into `work` (it's a Claude Code output).
 const BUILTIN_TAB_DOMAIN = {
-  files: 'artifacts',
-  'plugin-manager': 'ops',
+  files: 'work',
+  'plugin-manager': 'monitor',
 }
 const PLUGIN_RENDERERS = {
   'team-model': renderTeamModelPane,
@@ -59,8 +63,8 @@ const PLUGIN_SETTINGS_RENDERERS = {
   tts: renderTtsSettings,
 }
 
-let activeDomain = 'artifacts'
-let activeSubTab = { session: null, ops: 'plugin-manager', artifacts: 'files' }
+let activeDomain = 'work'
+let activeSubTab = { work: 'files', monitor: 'plugin-manager' }
 let enabledNames = new Set()
 let mounted = new Map() // name -> { plugin, btn, pane, rendered }
 let initialized = false
@@ -176,7 +180,7 @@ function mountPlugin(plugin, opts = {}) {
   pane.className = 'right-panel-pane'
   pane.dataset.rpPane = plugin.tab.id
 
-  // Keep the built-in plugin-manager tab last in Ops.
+  // Keep the built-in plugin-manager tab last in Monitor.
   const managerBtn = tabsEl.querySelector('[data-rp-tab="plugin-manager"]')
   if (managerBtn) tabsEl.insertBefore(btn, managerBtn)
   else tabsEl.appendChild(btn)
@@ -208,7 +212,7 @@ function unmountPlugin(plugin) {
   if (countTabsInDomain(domain) === 0) showDomainEmpty(domain)
 }
 
-// ── plugin manager (built-in Ops tab) ─────────────────────────────────────────
+// ── plugin manager (built-in Monitor tab) ────────────────────────────────────
 
 function renderPluginManager(pane) {
   if (!pane) return
@@ -421,7 +425,11 @@ function resetPluginLoadStateFor(name) {
 function loadPersisted() {
   try {
     const d = localStorage.getItem(DOMAIN_KEY)
-    if (d && DOMAINS.includes(d)) activeDomain = d
+    // R2 B-2 migration: old tri-domain (session/ops/artifacts) → dual-group.
+    // session/artifacts were "operate the agent + outputs" → work; ops → monitor.
+    const migrated = d === 'session' || d === 'artifacts' ? 'work'
+      : d === 'ops' ? 'monitor' : d
+    if (migrated && DOMAINS.includes(migrated)) activeDomain = migrated
   } catch {}
   for (const d of DOMAINS) {
     try {

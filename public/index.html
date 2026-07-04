@@ -356,31 +356,26 @@
             <div class="pane pane-right">
               <div class="right-panel" id="right-panel">
                 <div class="right-domain-strip" id="right-domain-strip" role="tablist">
-                  <button type="button" class="right-domain-btn active" data-domain="session" role="tab" data-i18n="domain.session">Session</button>
-                  <button type="button" class="right-domain-btn" data-domain="ops" role="tab" data-i18n="domain.ops">Ops</button>
-                  <button type="button" class="right-domain-btn" data-domain="artifacts" role="tab" data-i18n="domain.artifacts">Artifacts</button>
+                  <button type="button" class="right-domain-btn active" data-domain="work" role="tab" data-i18n="domain.work">Work</button>
+                  <button type="button" class="right-domain-btn" data-domain="monitor" role="tab" data-i18n="domain.monitor">Monitor</button>
                 </div>
                 <div class="right-domain-body" id="right-domain-body">
-                  <div class="right-domain active" data-domain="session">
-                    <div class="right-sub-tabs" data-domain-tabs="session" role="tablist"></div>
-                    <div class="right-sub-body" data-domain-body="session"></div>
-                  </div>
-                  <div class="right-domain" data-domain="ops">
-                    <div class="right-sub-tabs" data-domain-tabs="ops" role="tablist">
-                      <button type="button" class="right-sub-tab" data-rp-tab="plugin-manager" role="tab" data-i18n="plugin.manager.label">Plugins</button>
-                    </div>
-                    <div class="right-sub-body" data-domain-body="ops">
-                      <div class="right-panel-pane" data-rp-pane="plugin-manager" id="plugin-manager-pane"></div>
-                    </div>
-                  </div>
-                  <div class="right-domain" data-domain="artifacts">
-                    <div class="right-sub-tabs" data-domain-tabs="artifacts" role="tablist">
+                  <div class="right-domain active" data-domain="work">
+                    <div class="right-sub-tabs" data-domain-tabs="work" role="tablist">
                       <button type="button" class="right-sub-tab active" data-rp-tab="files" role="tab" data-i18n="rightpanel.files">Files</button>
                     </div>
-                    <div class="right-sub-body" data-domain-body="artifacts">
+                    <div class="right-sub-body" data-domain-body="work">
                       <div class="right-panel-pane active" data-rp-pane="files">
                         <div class="explorer-root" id="explorer-root"></div>
                       </div>
+                    </div>
+                  </div>
+                  <div class="right-domain" data-domain="monitor">
+                    <div class="right-sub-tabs" data-domain-tabs="monitor" role="tablist">
+                      <button type="button" class="right-sub-tab" data-rp-tab="plugin-manager" role="tab" data-i18n="plugin.manager.label">Plugins</button>
+                    </div>
+                    <div class="right-sub-body" data-domain-body="monitor">
+                      <div class="right-panel-pane" data-rp-pane="plugin-manager" id="plugin-manager-pane"></div>
                     </div>
                   </div>
                 </div>
