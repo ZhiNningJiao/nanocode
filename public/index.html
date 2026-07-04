@@ -197,50 +197,10 @@
               <div id="auth-status-display" style="font-size:13px;color:var(--text-secondary,#aaa);padding:4px 0" data-i18n="settings.auth.loading">Loading…</div>
             </div>
 
-            <!-- Claude Model selector -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.claude.model.label">Claude Model</span> <span class="settings-hint-inline" data-i18n="settings.claude.model.hint">Empty = CLI default</span></div>
-              <div class="settings-field">
-                <input type="text" id="claude-model-select" class="settings-input" placeholder="e.g. claude-fable-5 (empty = CLI default)">
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="claude-model-save-btn" data-i18n="btn.save">Save</button>
-                <span class="settings-status" id="claude-model-status"></span>
-              </div>
-            </div>
-
-            <!-- Codex Model selector (restored) -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.codex.model.label">Codex Model</span> <span class="settings-hint-inline" data-i18n="settings.codex.model.hint">Empty = Codex default</span></div>
-              <div class="settings-field">
-                <select id="codex-model-select" class="settings-input">
-                  <option value="" data-i18n="settings.codex.model.default">Default (Codex decides)</option>
-                </select>
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="codex-model-save-btn" data-i18n="btn.save">Save</button>
-                <span class="settings-status" id="codex-model-status"></span>
-              </div>
-            </div>
-
-            <!-- Effort selector -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.effort.label">Effort Level</span> <span class="settings-hint-inline" data-i18n="settings.effort.hint">Empty = CLI default</span></div>
-              <div class="settings-field">
-                <select id="claude-effort-select" class="settings-input">
-                  <option value="" data-i18n="settings.effort.default">Default</option>
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                  <option value="xhigh">xhigh</option>
-                  <option value="max">max</option>
-                </select>
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="claude-effort-save-btn" data-i18n="btn.save">Save</button>
-                <span class="settings-status" id="claude-effort-status"></span>
-              </div>
-            </div>
+            <!-- Claude Model / Codex Model / Effort Level selectors have migrated
+                 to the team-model plugin (Session → Team & Model tab). Storage keys
+                 are unchanged (claude_model / codex_model / claude_effort) so
+                 existing configs carry over with no migration step. MES-13740 R2. -->
 
             <!-- Global Permission mode (drives both Claude and Codex) -->
             <div class="settings-subsection">
