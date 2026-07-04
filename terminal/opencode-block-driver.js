@@ -68,7 +68,19 @@ function buildEnv(home, model) {
 function buildArgs(cs, model, prompt) {
   const args = ['run', '--format', 'json', '--auto', '-m', `kimi/${model}`]
   if (cs.opencodeSessionId) args.push('--session', cs.opencodeSessionId)
-  args.push(prompt)
+  // 需求15 item5: opencode has no --append-system-prompt flag (unlike claude),
+  // and OPENCODE_CONFIG_CONTENT agent.prompt REPLACES the built-in agent system
+  // prompt (would break the coding-agent tool/format instructions). So the
+  // framed persona instruction is PREPENDED to the user prompt arg instead —
+  // re-applied every turn (each `opencode run` is a fresh subprocess, mirroring
+  // claude's per-turn --append-system-prompt). The UI echo (broadcast above)
+  // uses the raw prompt, so this stays invisible to the user; only the
+  // subprocess receives the framed persona. Limitation noted in REPORT:
+  // persona is user-message-level (no system-prompt-append surface in opencode),
+  // and the framing becomes part of the stored user message — accepted tradeoff
+  // for robustness (survives compaction, re-applied each turn).
+  const personaPrompt = typeof cs.personaPrompt === 'string' ? cs.personaPrompt.trim() : ''
+  args.push(personaPrompt ? `${personaPrompt}\n\n${prompt}` : prompt)
   return args
 }
 

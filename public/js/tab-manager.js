@@ -827,8 +827,10 @@ export class TabManager {
   // fable5/opencode tab pre-seeded with opencodeSessionId (the block driver
   // passes --session <id>); 开启新对话 creates a fresh tab (driver allocates a
   // new session on the first turn). Reuses the .claude-resume-picker-* CSS so
-  // the picker looks identical to the claude one (no new CSS needed). Persona
-  // selection is deferred to item5 (opencode injection differs from claude).
+  // the picker looks identical to the claude one (no new CSS needed). 需求15
+  // item5: a Persona selector is wired into the footer (same as claude); the
+  // chosen persona is prepended to the prompt every turn by the block driver
+  // (opencode has no --append-system-prompt flag — see buildArgs).
   _showOpencodeResumePicker(type) {
     this._closeClaudeResumePicker()
     const typeLabel = type === 'fable5' ? 'Fable 5' : 'OpenCode'
@@ -863,6 +865,37 @@ export class TabManager {
 
     const footer = document.createElement('div')
     footer.className = 'claude-resume-picker-footer'
+
+    // 需求15 item5: persona selector — mirrors the claude picker. opencode has
+    // no --append-system-prompt flag, so the driver prepends the framed persona
+    // to the user prompt every turn (see opencode-block-driver buildArgs). The
+    // chosen persona applies to BOTH 继续 (resume) and 开启新对话.
+    const personaField = document.createElement('label')
+    personaField.className = 'claude-resume-picker-persona'
+    const personaLab = document.createElement('span')
+    personaLab.className = 'claude-resume-picker-persona-label'
+    personaLab.textContent = 'Persona'
+    const personaSel = document.createElement('select')
+    personaSel.className = 'rp-select claude-resume-picker-persona-select'
+    personaSel.id = 'opencode-resume-persona'
+    const personaNone = document.createElement('option')
+    personaNone.value = ''
+    personaNone.textContent = '(none)'
+    personaSel.appendChild(personaNone)
+    personaField.appendChild(personaLab)
+    personaField.appendChild(personaSel)
+    footer.appendChild(personaField)
+    // Populate personas async (non-blocking — picker stays usable if empty).
+    fetch('/api/personas').then((r) => r.json()).then((data) => {
+      if (!data || !Array.isArray(data.personas)) return
+      for (const p of data.personas) {
+        const opt = document.createElement('option')
+        opt.value = p.id
+        opt.textContent = p.name
+        personaSel.appendChild(opt)
+      }
+    }).catch(() => {})
+
     const newBtn = document.createElement('button')
     newBtn.type = 'button'
     newBtn.className = 'claude-resume-picker-new'
@@ -887,8 +920,9 @@ export class TabManager {
     document.addEventListener('keydown', onKey, true)
 
     newBtn.addEventListener('click', () => {
+      const persona = personaSel.value || ''
       dismiss()
-      this.newTab(type, { label: 'new' })
+      this.newTab(type, { label: 'new', ...(persona ? { persona } : {}) })
     })
 
     this._renderOpencodePickerBody(body, type)
@@ -947,8 +981,17 @@ export class TabManager {
       resume.textContent = '继续'
       resume.title = `Resume session ${c.sessionId}`
       resume.addEventListener('click', () => {
+        // 需求15 item5: read persona BEFORE close — _closeClaudeResumePicker
+        // removes the overlay (and #opencode-resume-persona) from the DOM, so
+        // reading it after the close would always yield '' and drop the persona.
+        // Applying the persona to a resumed session re-injects it every turn
+        // (mirrors claude's resume+persona behaviour).
+        const personaEl = document.getElementById('opencode-resume-persona')
+        const personaVal = personaEl ? personaEl.value : ''
         this._closeClaudeResumePicker()
-        this.newTab(type, { opencodeSessionId: c.sessionId, label: 'resume' })
+        const opts = { opencodeSessionId: c.sessionId, label: 'resume' }
+        if (personaVal) opts.persona = personaVal
+        this.newTab(type, opts)
       })
       row.appendChild(resume)
 
