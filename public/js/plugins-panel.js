@@ -236,14 +236,20 @@ export async function renderUsagePane(pane) {
   }
   try {
     await ensureSettings()
-    const usage = await fetch('/api/usage/claude').then((r) => r.json())
-    renderUsageContent(pane, usage)
+    // Fetch both usage sources in parallel. Each endpoint degrades to
+    // { error } on failure (never rejects) so a missing opencode DB does not
+    // hide the claude panel, and vice-versa.
+    const [usage, opencode] = await Promise.all([
+      fetch('/api/usage/claude').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+      fetch('/api/usage/opencode').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+    ])
+    renderUsageContent(pane, usage, opencode)
   } catch (err) {
     renderError(pane, err)
   }
 }
 
-function renderUsageContent(pane, usage) {
+function renderUsageContent(pane, usage, opencode) {
   pane.innerHTML = ''
   const refreshBtn = document.createElement('button')
   refreshBtn.className = 'rp-refresh-btn'
@@ -252,6 +258,7 @@ function renderUsageContent(pane, usage) {
   pane.appendChild(refreshBtn)
 
   pane.appendChild(renderClaudeUsageSection(usage))
+  pane.appendChild(renderOpencodeUsageSection(opencode))
   pane.appendChild(renderAigwProbeSection(pane))
 }
 
@@ -319,6 +326,99 @@ function statCell(label, value) {
   cell.appendChild(lab)
   cell.appendChild(val)
   return cell
+}
+
+// OpenCode/Fable5 token usage — 需求15 item6. Reads the opencode SQLite
+// session table (tokens_input/output/reasoning/cache_read/cache_write + cost).
+// Honest: AIGW-routed sessions report cost=0; tokens are real.
+function renderOpencodeUsageSection(opencode) {
+  const section = document.createElement('div')
+  section.className = 'rp-section'
+  const title = document.createElement('div')
+  title.className = 'rp-section-title'
+  title.textContent = t('usage.opencode.title')
+  section.appendChild(title)
+
+  if (!opencode || opencode.error) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = opencode?.error || t('usage.opencode.none')
+    section.appendChild(empty)
+    return section
+  }
+
+  const totals = opencode.totals || {}
+  const stats = document.createElement('div')
+  stats.className = 'rp-stats-grid'
+  stats.appendChild(statCell(t('usage.opencode.input'), totals.input))
+  stats.appendChild(statCell(t('usage.opencode.output'), totals.output))
+  stats.appendChild(statCell(t('usage.opencode.reasoning'), totals.reasoning))
+  stats.appendChild(statCell(t('usage.opencode.cacheRead'), totals.cacheRead))
+  stats.appendChild(statCell(t('usage.opencode.cacheWrite'), totals.cacheWrite))
+  stats.appendChild(statCell(t('usage.opencode.sessions'), opencode.sessionCount))
+  section.appendChild(stats)
+
+  // Cost: shown honestly. AIGW-routed sessions report cost=0.
+  const costRow = document.createElement('div')
+  costRow.className = 'rp-hint'
+  const costTotal = Number(opencode.costTotal) || 0
+  costRow.textContent = `${t('usage.opencode.cost')}: $${costTotal.toFixed(6)}`
+  section.appendChild(costRow)
+  const costNote = document.createElement('div')
+  costNote.className = 'rp-hint'
+  costNote.textContent = t('usage.opencode.costNote')
+  section.appendChild(costNote)
+
+  if (opencode.byModel?.length) {
+    const sub = document.createElement('div')
+    sub.className = 'rp-subtitle'
+    sub.textContent = t('usage.opencode.byModel')
+    section.appendChild(sub)
+    const list = document.createElement('div')
+    list.className = 'rp-list'
+    for (const m of opencode.byModel.slice(0, 10)) {
+      const row = document.createElement('div')
+      row.className = 'rp-list-row'
+      const name = document.createElement('span')
+      name.className = 'rp-list-name'
+      name.textContent = m.model
+      const val = document.createElement('span')
+      val.className = 'rp-list-val'
+      val.textContent = `${fmtNum((m.input || 0) + (m.output || 0) + (m.reasoning || 0) + (m.cacheRead || 0) + (m.cacheWrite || 0))} (${m.sessions})`
+      row.appendChild(name)
+      row.appendChild(val)
+      list.appendChild(row)
+    }
+    section.appendChild(list)
+  }
+
+  if (opencode.byDirectory?.length) {
+    const sub = document.createElement('div')
+    sub.className = 'rp-subtitle'
+    sub.textContent = t('usage.opencode.byDir')
+    section.appendChild(sub)
+    const list = document.createElement('div')
+    list.className = 'rp-list'
+    for (const d of opencode.byDirectory.slice(0, 5)) {
+      const row = document.createElement('div')
+      row.className = 'rp-list-row'
+      const name = document.createElement('span')
+      name.className = 'rp-list-name'
+      // Show the directory basename for compactness (full path in title).
+      const base = String(d.directory || '').split('/').filter(Boolean).pop() || d.directory || '(unknown)'
+      name.textContent = base
+      name.title = d.directory
+      const val = document.createElement('span')
+      val.className = 'rp-list-val'
+      val.textContent = `${fmtNum((d.input || 0) + (d.output || 0) + (d.reasoning || 0) + (d.cacheRead || 0) + (d.cacheWrite || 0))} (${d.sessions})`
+      row.appendChild(name)
+      row.appendChild(val)
+      list.appendChild(row)
+    }
+    section.appendChild(list)
+  }
+
+  return section
 }
 
 function renderAigwProbeSection(pane) {

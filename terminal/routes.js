@@ -9,7 +9,7 @@ import * as sessions from './sessions.js'
 import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
-import { scanClaudeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
+import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri } from './remote.js'
@@ -777,6 +777,22 @@ export function createTerminalRoutes(store) {
       res.json(result)
     } catch (err) {
       console.error('[/api/usage/claude]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // GET /api/usage/opencode — aggregate opencode SQLite session-table tokens/cost.
+  // 需求15 item6: gives the Fable5/opencode side the same usage source the claude
+  // jsonl aggregation gives the Claude side. Read-only, no subprocess. Honest:
+  // AIGW-routed sessions report cost=0 (provider doesn't report per-session cost
+  // to opencode); tokens are real. Degrades to { error } when the DB or
+  // node:sqlite is unavailable so the UI labels the source honestly.
+  router.get('/api/usage/opencode', (_req, res) => {
+    try {
+      const result = scanAllOpencodeUsage(home)
+      res.json(result)
+    } catch (err) {
+      console.error('[/api/usage/opencode]', err)
       res.status(500).json({ error: err.message })
     }
   })

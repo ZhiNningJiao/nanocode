@@ -15,8 +15,16 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams } from '../../terminal/usage.js'
+import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty } from '../../terminal/usage.js'
 import { createStore } from '../store.js'
+
+// node:sqlite is experimental (Node 22+). Guard so the temp-DB scan test is
+// skipped (not failed) on a runtime without it.
+import { createRequire } from 'node:module'
+const _require = createRequire(import.meta.url)
+let _DatabaseSync = null
+try { ({ DatabaseSync: _DatabaseSync } = _require('node:sqlite')) } catch {}
+const itSqlite = _DatabaseSync ? it : it.skip
 
 function makeJsonlRow(overrides = {}) {
   return JSON.stringify({
@@ -160,5 +168,127 @@ describe('usage: CLAUDE_CONFIG_DIR / teams', () => {
     store.setSetting('claude_config_dir', join(tmp, '.claude-team2'))
     const { activePath: active2 } = listTeams(tmp, store)
     assert.equal(active2, join(tmp, '.claude-team2'))
+  })
+})
+
+// ── opencode SQLite session usage (需求15 item6) ──────────────────────────────
+
+describe('usage: aggregateOpencodeSessions (pure)', () => {
+  it('sums tokens, parses JSON model ids, buckets by model/day/directory', () => {
+    const ms = 1783133879857 // 2026-07-04T02:57:59Z (live DB epoch ms)
+    const rows = [
+      { model: '{"id":"litellm/SGLang-GLM-latest","providerID":"kimi"}', cost: 0, tokens_input: 100, tokens_output: 10, tokens_reasoning: 5, tokens_cache_read: 200, tokens_cache_write: 50, time_created: ms, time_updated: ms, directory: '/home/me/proj' },
+      { model: '{"id":"litellm/claude-fable-5","providerID":"kimi"}', cost: 0, tokens_input: 50, tokens_output: 5, tokens_reasoning: 0, tokens_cache_read: 0, tokens_cache_write: 0, time_created: ms, time_updated: ms, directory: '/home/me/proj' },
+      { model: 'plain-model', cost: 0, tokens_input: 7, tokens_output: 0, tokens_reasoning: 0, tokens_cache_read: 0, tokens_cache_write: 0, time_created: ms, time_updated: ms, directory: '/other' },
+    ]
+    const r = aggregateOpencodeSessions(rows)
+    assert.equal(r.totals.input, 157)
+    assert.equal(r.totals.output, 15)
+    assert.equal(r.totals.reasoning, 5)
+    assert.equal(r.totals.cacheRead, 200)
+    assert.equal(r.totals.cacheWrite, 50)
+    assert.equal(r.sessionCount, 3)
+    assert.equal(r.costTotal, 0)
+    const ids = r.byModel.map((m) => m.model)
+    assert.ok(ids.includes('litellm/SGLang-GLM-latest'))
+    assert.ok(ids.includes('litellm/claude-fable-5'))
+    assert.ok(ids.includes('plain-model'))
+    // byDirectory: /home/me/proj has 2 sessions
+    const proj = r.byDirectory.find((d) => d.directory === '/home/me/proj')
+    assert.equal(proj.sessions, 2)
+    assert.equal(proj.input, 150)
+    // byDay has the 2026-07-04 bucket
+    assert.ok(r.byDay.some((d) => d.day === '2026-07-04'))
+  })
+
+  it('returns the empty shape for non-array / empty input', () => {
+    assert.equal(aggregateOpencodeSessions(null).sessionCount, 0)
+    assert.equal(aggregateOpencodeSessions([]).sessionCount, 0)
+    assert.deepEqual(aggregateOpencodeSessions([]).byModel, [])
+  })
+
+  it('tolerates null / non-object / missing-field rows', () => {
+    const r = aggregateOpencodeSessions([null, 'x', {}, { model: '', tokens_input: 3 }])
+    assert.equal(r.sessionCount, 2) // {} and the last row count; null/'x' skipped
+    assert.equal(r.totals.input, 3)
+    // empty model -> (unknown)
+    assert.ok(r.byModel.some((m) => m.model === '(unknown)'))
+  })
+
+  it('parseOpencodeModel extracts id from JSON, falls back to raw / (unknown)', () => {
+    assert.equal(parseOpencodeModel('{"id":"litellm/x","providerID":"kimi"}'), 'litellm/x')
+    assert.equal(parseOpencodeModel('plain-string'), 'plain-string')
+    assert.equal(parseOpencodeModel(''), '(unknown)')
+    assert.equal(parseOpencodeModel(null), '(unknown)')
+    assert.equal(parseOpencodeModel('not-json'), 'not-json')
+  })
+})
+
+describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
+  let tmp
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-opc-')) })
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
+
+  it('resolveOpencodeDbPaths honours OPENCODE_DB_PATH override and filters missing', () => {
+    const dbPath = join(tmp, 'opencode.db')
+    writeFileSync(dbPath, 'x') // non-empty placeholder so existsSync+size passes
+    const prev = process.env.OPENCODE_DB_PATH
+    process.env.OPENCODE_DB_PATH = dbPath
+    try {
+      // point XDG somewhere empty so only the override survives
+      const paths = resolveOpencodeDbPaths(join(tmp, 'fake-home'))
+      assert.deepEqual(paths, [dbPath])
+    } finally {
+      if (prev === undefined) delete process.env.OPENCODE_DB_PATH
+      else process.env.OPENCODE_DB_PATH = prev
+    }
+  })
+
+  it('opencodeUsageEmpty returns a consistent zeroed shape', () => {
+    const e = opencodeUsageEmpty()
+    assert.equal(e.sessionCount, 0)
+    assert.equal(e.costTotal, 0)
+    assert.deepEqual(e.byModel, [])
+    assert.deepEqual(e.totals.input, 0)
+  })
+
+  itSqlite('scanOpencodeUsage reads a temp SQLite DB and aggregates tokens', () => {
+    const dbPath = join(tmp, 'opencode.db')
+    const db = new _DatabaseSync(dbPath)
+    db.exec(`
+      CREATE TABLE session (
+        id TEXT, model TEXT, cost REAL,
+        tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+        tokens_cache_read INTEGER, tokens_cache_write INTEGER,
+        time_created INTEGER, time_updated INTEGER, directory TEXT
+      )
+    `)
+    const ins = db.prepare(
+      'INSERT INTO session (id, model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, time_updated, directory) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    )
+    const ms = 1783133879857
+    ins.run('s1', '{"id":"litellm/SGLang-GLM-latest"}', 0, 1000, 100, 50, 200, 30, ms, ms, '/home/me/proj')
+    ins.run('s2', '{"id":"litellm/claude-fable-5"}', 0, 500, 50, 0, 0, 0, ms, ms, '/home/me/proj')
+    db.close()
+
+    const r = scanOpencodeUsage(dbPath)
+    assert.equal(r.error, undefined)
+    assert.equal(r.sessionCount, 2)
+    assert.equal(r.totals.input, 1500)
+    assert.equal(r.totals.output, 150)
+    assert.equal(r.totals.reasoning, 50)
+    assert.equal(r.totals.cacheRead, 200)
+    assert.equal(r.totals.cacheWrite, 30)
+    assert.equal(r.dbPath, dbPath)
+    assert.equal(r.source, 'opencode SQLite session table')
+    const ids = r.byModel.map((m) => m.model)
+    assert.ok(ids.includes('litellm/SGLang-GLM-latest'))
+    assert.ok(ids.includes('litellm/claude-fable-5'))
+  })
+
+  itSqlite('scanOpencodeUsage returns error for a missing DB path', () => {
+    const r = scanOpencodeUsage(join(tmp, 'nope.db'))
+    assert.ok(r.error)
+    assert.equal(r.sessionCount, 0)
   })
 })
