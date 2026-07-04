@@ -522,7 +522,7 @@ function setupChatInput() {
   inputRow.parentNode.insertBefore(queueTray, inputRow)
 
   function updateQueueTray() {
-    const visible = _pendingQueue.length > 0 && isClaudeTab
+    const visible = _pendingQueue.length > 0 && isBlockAgentTab
     queueTray.hidden = !visible
     if (!visible) { queueTray.innerHTML = ''; return }
     queueTray.innerHTML =
@@ -733,11 +733,14 @@ function setupChatInput() {
 
     // Start async hydrate AFTER the sync flush-guard above.  _hydrateQueue will
     // only overwrite _pendingQueue when it is still empty (problem-4 hydrate race).
-    if (switchedTab && _activeTabType === 'claude' && newProjectId && newTabId) {
+    // 需求15 item2: hydrate the persisted queue for any block-agent tab
+    // (claude OR block-mode fable5/opencode) — isBlockAgentTab is already updated
+    // to the new tab by updateInputBarForTabType() above.
+    if (switchedTab && isBlockAgentTab && newProjectId && newTabId) {
       _hydrateQueue(newProjectId, newTabId)
     }
 
-    updateQueueTray()           // then update tray with fresh isClaudeTab
+    updateQueueTray()           // then update tray with fresh isBlockAgentTab
     _updateBgBadges()         // refresh background-turn badges on tab slots
   })
 
@@ -774,7 +777,7 @@ function setupChatInput() {
     const detail = e.detail || {}
     const activeId = tabManager ? tabManager.activeId : null
     if (!activeId || detail.tabId !== activeId) return
-    if (!isClaudeTab) return
+    if (!isBlockAgentTab) return
     if (_pendingQueue.length > 0) {
       _pendingQueue.splice(0)
       _persistQueueNow()
@@ -1502,7 +1505,7 @@ function setupChatInput() {
     // compact tray showing position. User can ↑ to take back the last item,
     // or click × on any item to remove it. All items flush automatically when
     // Claude finishes. To interrupt instead, use the Stop button.
-    if (isClaudeTab && isClaudeThinking) {
+    if (isBlockAgentTab && isClaudeThinking) {
       _pendingQueue.push(text)
       _persistQueueNow()
       chatInput.value = ''
@@ -1576,7 +1579,7 @@ function setupChatInput() {
 
     // Ctrl/Cmd+Enter on a claude tab = "send now": force-interrupt the running
     // turn and submit immediately (composer text + any queued messages).
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && isClaudeTab) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && isBlockAgentTab) {
       if (e.isComposing || _isComposing || e.keyCode === 229) return
       e.preventDefault()
       hideSuggestions()
@@ -1635,13 +1638,13 @@ function setupChatInput() {
       } else if (suggestionsOpen) {
         // Priority 2: close suggestions
         hideSuggestions()
-      } else if (isClaudeTab && isClaudeThinking) {
-        // Priority 3 (claude tab): interrupt running turn.
+      } else if (isBlockAgentTab && isClaudeThinking) {
+        // Priority 3 (block-agent tab): interrupt running turn.
         // First Esc = soft interrupt; a quick 2nd Esc escalates to force-stop
         // (only the main turn — background sub-agents are never killed).
         doInterrupt()
-      } else if (isClaudeTab && !chatInput.value && _pendingQueue.length > 0) {
-        // Priority 4 (claude tab, idle): clear the pending queue so the user is
+      } else if (isBlockAgentTab && !chatInput.value && _pendingQueue.length > 0) {
+        // Priority 4 (block-agent tab, idle): clear the pending queue so the user is
         // never stuck with un-cancelable queued messages.
         _pendingQueue.splice(0)
         _persistQueueNow()
@@ -1666,7 +1669,7 @@ function setupChatInput() {
       }
       // ↑ on empty input with pending queue → pop last item back into input for editing.
       // Mirrors CLI "press up to edit queued messages" behaviour.
-      if (isClaudeTab && _pendingQueue.length > 0 && chatInput.value === '') {
+      if (isBlockAgentTab && _pendingQueue.length > 0 && chatInput.value === '') {
         chatInput.value = _pendingQueue.pop()
         _persistQueueNow()
         updateQueueTray()
@@ -1712,8 +1715,8 @@ function setupChatInput() {
         // Input has text: CLI behaviour = clear the line (not copy/kill)
         chatInput.value = ''
         autoResize()
-      } else if (isClaudeTab && isClaudeThinking) {
-        // Empty + busy on claude tab: interrupt
+      } else if (isBlockAgentTab && isClaudeThinking) {
+        // Empty + busy on block-agent tab: interrupt
         doInterrupt()
       } else if (activePane) {
         // Empty + idle, or non-claude tab: forward raw Ctrl+C to PTY
@@ -1749,7 +1752,7 @@ function setupChatInput() {
           // Same logic as keyboard Ctrl+C: clear input if has text, else interrupt/sendRaw
           if (chatInput.value) {
             chatInput.value = ''; autoResize()
-          } else if (isClaudeTab && isClaudeThinking) {
+          } else if (isBlockAgentTab && isClaudeThinking) {
             doInterrupt()
           } else {
             activePane.sendRaw('\x03')
@@ -1759,7 +1762,7 @@ function setupChatInput() {
           activePane.sendRaw('\x0c'); break
         case 'arrow-up': {
           // Same as keyboard ↑: pop pending queue first if applicable
-          if (isClaudeTab && _pendingQueue.length > 0 && chatInput.value === '') {
+          if (isBlockAgentTab && _pendingQueue.length > 0 && chatInput.value === '') {
             chatInput.value = _pendingQueue.pop()
             _persistQueueNow()
             updateQueueTray()
@@ -1791,7 +1794,7 @@ function setupChatInput() {
             hideSlashCommands()
           } else if (suggestionsOpen) {
             hideSuggestions()
-          } else if (isClaudeTab && isClaudeThinking) {
+          } else if (isBlockAgentTab && isClaudeThinking) {
             doInterrupt()
           } else if (chatInput.value) {
             chatInput.value = ''; autoResize()

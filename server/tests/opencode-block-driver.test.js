@@ -8,7 +8,9 @@
  *   - queues messages while a turn is busy
  *   - emits a synthetic result on crash / interrupt / empty turn
  *   - drains the queue after a turn completes
- *   - interrupt clears the queue
+ *   - interrupt auto-flushes the queue as the next turn (aligned with claude)
+ *   - drains persisted tab.pendingQueue (需求9/item2 server-owned queue)
+ *   - forceFlush (send-now) overrides auto_flush disabled
  *   - env carries MESHY_AIGW_KEY + OPENCODE_CONFIG_CONTENT, no FORCE_COLOR
  */
 
@@ -48,6 +50,7 @@ function makeStore(initial = {}) {
   return {
     getSetting(k) { return settings[k] },
     setSetting(k, v) { settings[k] = v },
+    getTab(p, t) { return metadata[`${p}:${t}`] || null },
     updateTabMetadata(p, t, m) { metadata[`${p}:${t}`] = { ...(metadata[`${p}:${t}`] || {}), ...m } },
     _settings: settings,
     _metadata: metadata,
@@ -239,12 +242,14 @@ describe('createOpencodeBlockDriver — queue & interrupt', () => {
     assert.equal(cs.queue[0], 'second')
     assert.ok(events.some((e) => e.text?.includes('queued')))
   })
-  it('interrupt clears the queue', async () => {
+  it('interrupt auto-flushes the in-memory queue as the next turn (aligned with claude)', async () => {
     const spawn = makeMockSpawn()
     const store = makeStore()
     const events = []
     const broadcast = (cs, ev) => events.push(ev)
-    const driver = createOpencodeBlockDriver({ store, broadcast, rerunTurn() {}, spawnFn: spawn })
+    let rerunArg = null
+    const rerunTurn = (cs, prompt) => { rerunArg = prompt }
+    const driver = createOpencodeBlockDriver({ store, broadcast, rerunTurn, spawnFn: spawn })
     const cs = makeCs({ queue: ['pending1', 'pending2'] })
     const p = driver.runOpencodeTurn(cs, 'go', 'p:c:t', '/r')
     await new Promise((r) => setImmediate(r))
@@ -252,9 +257,47 @@ describe('createOpencodeBlockDriver — queue & interrupt', () => {
     child.stdout.emit('data', JSON.stringify({ type: 'text', sessionID: 's', part: { type: 'text', text: 'partial', messageID: 'm1' } }) + '\n')
     cs.currentProc.kill('SIGINT')
     await p
+    await new Promise((r) => setImmediate(r))   // let setImmediate(rerunTurn) fire
     assert.equal(cs.busy, false)
     assert.equal(cs.queue.length, 0)
-    assert.ok(events.some((e) => e.text?.includes('Queue cleared')))
+    assert.equal(rerunArg, 'pending1\n\npending2', 'in-memory queue auto-flushed as one combined turn')
+    assert.ok(events.some((e) => e.text?.includes('Resuming with 2 queued messages')), 'resuming banner')
+  })
+  it('drains persisted tab.pendingQueue after a normal turn (需求9/item2 server-owned queue)', async () => {
+    const spawn = makeMockSpawn()
+    const store = makeStore({ metadata: { 'p:tab1': { pendingQueue: ['queued msg'] } } })
+    const events = []
+    const broadcast = (cs, ev) => events.push(ev)
+    let rerunArg = null
+    const rerunTurn = (cs, prompt) => { rerunArg = prompt }
+    const driver = createOpencodeBlockDriver({ store, broadcast, rerunTurn, spawnFn: spawn })
+    const cs = makeCs({ queue: [] })
+    const p = driver.runOpencodeTurn(cs, 'first', 'p:opencode-block:tab1', '/r')
+    await new Promise((r) => setImmediate(r))
+    spawn.current().emit('exit', 0)            // normal exit, not interrupted
+    await p
+    await new Promise((r) => setImmediate(r))   // let setImmediate(rerunTurn) fire
+    assert.deepEqual(store._metadata['p:tab1'].pendingQueue, [], 'pendingQueue cleared on the store')
+    assert.ok(events.some((e) => e.subtype === 'queue-drained' && e.text?.includes('Delivering 1 queued message')), 'queue-drained event')
+    assert.equal(rerunArg, 'queued msg', 'delivered the persisted queued message')
+  })
+  it('forceFlush (send-now) delivers the in-memory queue even when auto_flush is disabled', async () => {
+    const spawn = makeMockSpawn()
+    const store = makeStore({ settings: { auto_flush_queue_on_interrupt: '0' } })
+    const events = []
+    const broadcast = (cs, ev) => events.push(ev)
+    let rerunArg = null
+    const rerunTurn = (cs, prompt) => { rerunArg = prompt }
+    const driver = createOpencodeBlockDriver({ store, broadcast, rerunTurn, spawnFn: spawn })
+    const cs = makeCs({ queue: ['sendnow1', 'sendnow2'], _forceFlushQueue: true })
+    const p = driver.runOpencodeTurn(cs, 'go', 'p:opencode-block:tab1', '/r')
+    await new Promise((r) => setImmediate(r))
+    cs.currentProc.kill('SIGINT')
+    await p
+    await new Promise((r) => setImmediate(r))
+    assert.equal(rerunArg, 'sendnow1\n\nsendnow2', 'force-flush overrode auto_flush=off')
+    assert.equal(cs.queue.length, 0)
+    assert.equal(cs._forceFlushQueue, false, 'forceFlush flag reset after use')
   })
 })
 
