@@ -1195,6 +1195,13 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         cwd: project.cwd,
         currentProc: null,
         queue: [],
+        // 需求15 item5: persona chosen at new-session creation (需求8), resolved
+        // + framed once at attach with the SAME helper as claude. The opencode
+        // block driver has no --append-system-prompt flag, so it prepends this
+        // framed instruction to the user prompt every turn — keeping the persona
+        // active across reconnects/resumes (mirrors claude's per-turn re-inject).
+        persona: tab?.persona || null,
+        personaPrompt: tab?.persona ? framePersonaPrompt(resolvePersonaPrompt(home, tab.persona)) : '',
       }
       opencodeBlockSessions.set(sessionKey, cs)
     }

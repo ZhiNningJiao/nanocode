@@ -152,6 +152,13 @@ export function createStore(filePath = ':memory:') {
       tab.opencodeSessionId = typeof opts.opencodeSessionId === 'string' && opts.opencodeSessionId.trim()
         ? opts.opencodeSessionId.trim()
         : null
+      // 需求15 item5: persona id chosen in the new-session picker → stored on
+      // the tab so the opencode block driver re-injects it every turn (prepend,
+      // since opencode has no --append-system-prompt flag). Mirrors claude's
+      // persistence so the 🐱 tab chip + per-turn injection survive reconnects.
+      if (opts.persona && typeof opts.persona === 'string' && opts.persona.trim()) {
+        tab.persona = opts.persona.trim()
+      }
     }
     existing.push(tab)
     save()

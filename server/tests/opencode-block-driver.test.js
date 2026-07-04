@@ -135,6 +135,45 @@ describe('createOpencodeBlockDriver — spawn args & env', () => {
     spawn.current().emit('exit', 0)
     await p
   })
+  it('需求15 item5: prepends cs.personaPrompt to the prompt arg, keeps UI echo raw', async () => {
+    const spawn = makeMockSpawn()
+    const store = makeStore()
+    const broadcastCalls = []
+    const broadcast = (cs, ev) => broadcastCalls.push(ev)
+    const driver = createOpencodeBlockDriver({ store, broadcast, rerunTurn() {}, spawnFn: spawn })
+    // opencode has no --append-system-prompt; the driver prepends the framed
+    // persona to the user prompt every turn. cs.personaPrompt is resolved +
+    // framed at attach (claude-session-controller), same helper as claude.
+    const personaText = '## ACTIVE PERSONA — highest priority\nBe terse and formal.'
+    const cs = makeCs({ personaPrompt: personaText })
+    const p = driver.runOpencodeTurn(cs, 'hello world', 'p:c:t', '/r')
+    await new Promise((r) => setImmediate(r))
+    const args = spawn.calls[0].args
+    const lastArg = args[args.length - 1]
+    // The subprocess receives the persona-prepended prompt (re-applied each turn).
+    assert.equal(lastArg, `${personaText}\n\nhello world`)
+    // The user echo broadcast stays CLEAN (raw text only) — the persona must NOT
+    // leak into the rendered user bubble (anti-fake-pass: UI shows what the user
+    // typed, the subprocess sees the persona).
+    const userEcho = broadcastCalls.find((e) => e.type === 'user')
+    assert.ok(userEcho, 'expected a user echo event')
+    assert.equal(userEcho.message.content[0].text, 'hello world')
+    spawn.current().emit('exit', 0)
+    await p
+  })
+  it('需求15 item5: no personaPrompt → prompt arg unchanged (defensive)', async () => {
+    const spawn = makeMockSpawn()
+    const store = makeStore()
+    const broadcast = () => {}
+    const driver = createOpencodeBlockDriver({ store, broadcast, rerunTurn() {}, spawnFn: spawn })
+    const cs = makeCs() // no personaPrompt
+    const p = driver.runOpencodeTurn(cs, 'just text', 'p:c:t', '/r')
+    await new Promise((r) => setImmediate(r))
+    const args = spawn.calls[0].args
+    assert.equal(args[args.length - 1], 'just text')
+    spawn.current().emit('exit', 0)
+    await p
+  })
 })
 
 describe('createOpencodeBlockDriver — event streaming', () => {

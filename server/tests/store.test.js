@@ -91,4 +91,26 @@ describe('store', () => {
     const fetched = store.getTab(project.id, tab.id)
     assert.equal(fetched.codexThreadId, 'thread-123')
   })
+
+  it('需求15 item5: persists persona on fable5/opencode tabs + opencodeSessionId', () => {
+    const project = store.createProject('Fable', '/tmp/fable')
+    // New fable5 tab with a chosen persona + a resumed opencode session id.
+    const tab = store.createTab(project.id, { type: 'fable5', label: 'fable 1', persona: 'catgirl', opencodeSessionId: 'ses_xyz' })
+    assert.equal(tab.persona, 'catgirl')
+    assert.equal(tab.opencodeSessionId, 'ses_xyz')
+
+    // A fable5 tab without a persona must NOT set persona (no empty string leak).
+    const bare = store.createTab(project.id, { type: 'fable5', label: 'bare', persona: '   ' })
+    assert.equal(bare.persona, undefined)
+    assert.equal(bare.opencodeSessionId, null)
+
+    // opencode tab type also persists persona (same branch).
+    const oc = store.createTab(project.id, { type: 'opencode', label: 'oc', persona: 'stern' })
+    assert.equal(oc.persona, 'stern')
+
+    // Survives a reload (getTab reads persisted state).
+    const fetched = store.getTab(project.id, tab.id)
+    assert.equal(fetched.persona, 'catgirl')
+    assert.equal(fetched.opencodeSessionId, 'ses_xyz')
+  })
 })
