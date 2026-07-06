@@ -12,7 +12,7 @@ import { createOpencodeBlockDriver } from './opencode-block-driver.js'
 import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
 
-export function createClaudeSessionController({ store, home, recentAgents }) {
+export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl }) {
   const IS_WIN = platform() === 'win32'
   const SHELL = IS_WIN
     ? (process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe')
@@ -315,6 +315,10 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         } catch {}
       }
     },
+    // Test seam: inject a mock queryImpl to make the streaming SDK path
+    // deterministic (the real claude binary completes turns too fast to
+    // reproduce a stable "busy" state for the send-now race tests).
+    ...(testQueryImpl ? { queryImpl: testQueryImpl, forceStreaming: true } : {}),
   })
   const tmuxDriver = createClaudeTmuxDriver({
     store,
@@ -1080,7 +1084,28 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
         // "send now": suppress the "Message queued" banner if this lands while a
         // turn is still winding down — it's about to be flushed by the interrupt.
         if (msg._sendNow === true) cs._quietQueueOnce = true
+        // ── Atomic "send now" (立刻发送) ──────────────────────────────────────
+        // Fold "enqueue + interrupt + flush" into ONE atomic step here so the
+        // backend never depends on a separate HTTP /interrupt from the client
+        // (which raced the WS dispatch and could kill the just-started turn on
+        // idle, losing the message). Capture the busy state BEFORE dispatching:
+        //   busy → dispatch queues synchronously, then interrupt the running
+        //          turn with andFlush so the queued message flushes as the next
+        //          turn (force, but SDK remaps to q.interrupt() — never kills the
+        //          process or sub-agents, red line).
+        //   idle → dispatch starts the send-now message itself; do NOT interrupt
+        //          (interrupting would kill the user's message).
+        const wasBusy = msg._sendNow === true && cs.busy && !!cs.currentProc
         dispatchClaudeTurn(cs, msg.text, sessionKey, project.cwd)
+        if (wasBusy) {
+          try {
+            Promise.resolve(_interruptRunningClaudeTurn(cs, { force: true, andFlush: true })).catch((err) => {
+              console.error(`[claude:send-now] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+            })
+          } catch (err) {
+            console.error(`[claude:send-now] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+          }
+        }
       } else if (msg.type === 'ping') {
         try { ws.send(JSON.stringify({ type: 'pong', id: msg.id })) } catch {}
       }
@@ -1226,7 +1251,23 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
           message: { role: 'user', content: [{ type: 'text', text: msg.text }] },
         }
         claudeBroadcast(cs, userEvent)
+        // ── Atomic "send now" (立刻发送) — mirrors the claude WS handler ────────
+        // Capture busy state BEFORE dispatching: busy → dispatch queues, then
+        // interrupt the running turn + _forceFlushQueue so the queued message
+        // flushes as the next turn. idle → dispatch starts the send-now message
+        // itself; do NOT interrupt (would kill the user's message). This removes
+        // the WS-vs-HTTP race; the client no longer sends a separate interrupt.
+        const wasBusy = msg._sendNow === true && cs.busy && !!cs.currentProc
         dispatchOpencodeBlockTurn(cs, msg.text, sessionKey, project.cwd)
+        if (wasBusy) {
+          try {
+            cs._forceFlushQueue = true
+            cs.currentProc._nanocodeInterrupted = true
+            cs.currentProc.kill('SIGINT')
+          } catch (err) {
+            console.error(`[opencode:block:send-now] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+          }
+        }
       } else if (msg.type === 'ping') {
         try { ws.send(JSON.stringify({ type: 'pong', id: msg.id })) } catch {}
       }
@@ -1240,6 +1281,53 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
 
   dispatchOpencodeBlockTurn = function dispatchOpencodeBlockTurn(cs, text, sessionKey, cwd) {
     opencodeBlockDriver.runOpencodeTurn(cs, text, sessionKey, cwd)
+  }
+
+  // Interrupt the running claude turn for session `cs`. Pure helper (no HTTP)
+  // shared by the HTTP /interrupt route and the WS "send now" atomic flush.
+  // On andFlush, sets cs._forceFlushQueue so the driver's finally block drains
+  // the queue as the next turn regardless of auto_flush_queue_on_interrupt.
+  // Force on the SDK streaming path is remapped to q.interrupt() + watchdog
+  // (never kills the claude process or sub-agents — red line). Returns a result
+  // object; the tmux path returns a Promise resolving to the same shape.
+  // Preserves the wedge-unwind (busy=true, currentProc=null) defense-in-depth.
+  function _interruptRunningClaudeTurn(cs, { force = false, andFlush = false } = {}) {
+    const sessionKey = cs?.sessionKey || ''
+    if (andFlush) cs._forceFlushQueue = true
+    if (!cs.busy || !cs.currentProc) {
+      if (force && cs.busy) {
+        console.warn(`[claude:interrupt] ${sessionKey}: force-unwedge (busy=true, currentProc=null); settling turn locally, process untouched`)
+        cs.busy = false
+        cs.currentProc = null
+        _emitAgentStop(cs, sessionKey, { subtype: 'error' })
+        claudeBroadcast(cs, { type: 'result', subtype: 'error_during_execution' })
+        if (!Array.isArray(cs.queue)) cs.queue = []
+        const drained = cs.queue.splice(0)
+        cs._forceFlushQueue = false
+        if (drained.length > 0) {
+          const combinedText = drained.join('\n\n')
+          console.log(`[claude:interrupt] ${sessionKey}: draining ${drained.length} stranded queued message(s) as a fresh turn`)
+          setImmediate(() => dispatchClaudeTurn(cs, combinedText, sessionKey, cs.cwd))
+        }
+        return { ok: true, force: true, unwedged: true, andFlush }
+      }
+      return { ok: false, reason: 'not busy', andFlush }
+    }
+    if (cs.claudeDriver === 'tmux') {
+      return tmuxDriver.interrupt(cs, force)
+        .then(() => ({ ok: true, force: !!force, andFlush }))
+        .catch((err) => { throw err })
+    }
+    try {
+      cs.currentProc._nanocodeInterrupted = true
+      // force → SIGKILL. In SDK streaming mode this is remapped to a guaranteed
+      // turn-unlock that keeps the process (and sub-agents) alive; it does NOT
+      // kill the claude process. soft → SIGINT (q.interrupt()).
+      cs.currentProc.kill(force ? 'SIGKILL' : 'SIGINT')
+      return { ok: true, force: !!force, andFlush }
+    } catch (err) {
+      throw err
+    }
   }
 
   function handleInterrupt(req, res) {
@@ -1284,57 +1372,11 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     // after this interrupt, regardless of the auto_flush_queue_on_interrupt
     // setting, so the user's message is never silently dropped.
     const andFlush = req.query.flush === '1' || req.body?.andFlush === true
-    if (andFlush) cs._forceFlushQueue = true
     const force = req.query.force === '1' || req.body?.force === true
-    if (!cs.busy || !cs.currentProc) {
-      // ── WEDGE FIX (defense in depth) ─────────────────────────────────────
-      // Normally there is nothing to interrupt here. BUT a wedge can leave
-      // cs.busy=true with cs.currentProc=null (a driver set busy=true then threw
-      // before wiring currentProc). A force interrupt must ALWAYS be able to
-      // break that wedge — the user must never be locked out. Forcibly clear
-      // busy, settle the turn locally (synthetic result so the UI leaves the
-      // thinking state and the send button returns), and drain any messages the
-      // wedge stranded in the queue as a fresh turn. We NEVER touch the claude
-      // process here, so detached sub-agents survive (red line).
-      if (force && cs.busy) {
-        console.warn(`[claude:interrupt] ${sessionKey}: force-unwedge (busy=true, currentProc=null); settling turn locally, process untouched`)
-        cs.busy = false
-        cs.currentProc = null
-        _emitAgentStop(cs, sessionKey, { subtype: 'error' })
-        claudeBroadcast(cs, { type: 'result', subtype: 'error_during_execution' })
-        if (!Array.isArray(cs.queue)) cs.queue = []
-        const drained = cs.queue.splice(0)
-        cs._forceFlushQueue = false
-        if (drained.length > 0) {
-          const combinedText = drained.join('\n\n')
-          console.log(`[claude:interrupt] ${sessionKey}: draining ${drained.length} stranded queued message(s) as a fresh turn`)
-          setImmediate(() => dispatchClaudeTurn(cs, combinedText, sessionKey, cs.cwd))
-        }
-        return res.json({ ok: true, force: true, unwedged: true, andFlush })
-      }
-      // Nothing running to interrupt. If a flush was requested and something is
-      // queued server-side, there is no turn whose exit will drain it — but the
-      // normal not-busy dispatch path will pick it up, so this is a no-op here.
-      return res.json({ ok: false, reason: 'not busy', andFlush })
-    }
-    try {
-      if (cs.claudeDriver === 'tmux') {
-        tmuxDriver.interrupt(cs, force).then(() => {
-          res.json({ ok: true, force: !!force, andFlush })
-        }).catch((err) => {
-          res.status(500).json({ error: err.message })
-        })
-        return
-      }
-      cs.currentProc._nanocodeInterrupted = true
-      // force → SIGKILL. In SDK streaming mode this is remapped to a guaranteed
-      // turn-unlock that keeps the process (and sub-agents) alive; it does NOT
-      // kill the claude process. soft → SIGINT (q.interrupt()).
-      cs.currentProc.kill(force ? 'SIGKILL' : 'SIGINT')
-      res.json({ ok: true, force: !!force, andFlush })
-    } catch (err) {
-      res.status(500).json({ error: err.message })
-    }
+    Promise.resolve(_interruptRunningClaudeTurn(cs, { force, andFlush })).then(
+      (result) => res.json(result),
+      (err) => res.status(500).json({ error: err.message })
+    )
   }
 
   function handleReset(req, res) {

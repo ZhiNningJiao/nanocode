@@ -19,11 +19,18 @@ import { listOpencodeSessions } from './opencode-sessions.js'
 /**
  * Create terminal routes backed by the given store.
  */
-export function createTerminalRoutes(store) {
+export function createTerminalRoutes(store, opts = {}) {
   const router = Router()
   const home = homedir()
   const recentAgents = createRecentAgentsService({ home })
-  const sessionController = createClaudeSessionController({ store, home, recentAgents })
+  const sessionController = createClaudeSessionController({
+    store,
+    home,
+    recentAgents,
+    // Test seam only: forwarded to createClaudeSdkDriver so send-now race
+    // tests can inject a deterministic mock query. Undefined in production.
+    testQueryImpl: opts?.testQueryImpl,
+  })
   // On server shutdown / test end, tear down all in-process SDK streaming
   // sessions so their child-process handles release and the process can exit.
   // (Reload-survives is preserved: this only fires from store.close(), not from
