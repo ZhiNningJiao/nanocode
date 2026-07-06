@@ -723,3 +723,631 @@ export function scanAllOpencodeUsage(home) {
   const agg = aggregateOpencodeSessions(allRows)
   return { ...agg, dbPaths, errors, source: 'opencode SQLite session table' }
 }
+
+// ── MES-13788: CodexBar-style usage windows + burn + projection ───────────────
+//
+// Algorithm ported from CodexBar (MIT license, https://github.com/steipete/CodexBar)
+// — "Show usage stats for OpenAI Codex and Claude Code". CodexBar is a Swift/macOS
+// menu bar app; the window/reset/burn logic is ported to JS here (not imported).
+// See CodexBar docs/claude.md: Claude usage comes from the OAuth API
+// (api.anthropic.com/api/oauth/usage) which returns five_hour (session) + seven_day
+// (weekly) utilization% + reset time + extra_usage (monthly credits). The absolute
+// token limit is NOT published by the API, so burn rate + hit projection are
+// derived from the local jsonl token timeline and labelled `estimated`.
+//
+// Three sources, each honest (no fabricated numbers — a missing limit is null):
+//   1. Claude Team1 (~/.claude)        — OAuth API (real % + reset) + jsonl burn
+//   2. Claude Team2 (~/.claude-team2)  — same
+//   3. AIGW (LiteLLM)                  — admin endpoints probed; a virtual
+//      LLM-only key is 403-rejected (only llm_api_routes allowed), so the source
+//      is labelled unavailable. If a real admin key is configured later, the
+//      probe picks up spend/budget automatically.
+//
+// Unified per-window schema (the `entries[]` of /api/usage/summary):
+//   { source, label, windowType, used, limit|null, remaining|null, utilization|null,
+//     unit, resetAt|null, burnRatePerMin|null, projectedHitAt|null,
+//     estimated:bool, severity|null, usedTokens|null, note|null }
+//
+// `estimated` reflects whether the core used/limit/remaining/reset come from a real
+// API (false) or are inferred from the jsonl timeline (true). burnRatePerMin is
+// always measured from the jsonl; projectedHitAt is always an estimate (the token
+// limit is inferred from utilization%). `note` explains the provenance for the UI.
+
+const CLAUDE_OAUTH_USAGE_URL = process.env.CLAUDE_OAUTH_USAGE_URL || 'https://api.anthropic.com/api/oauth/usage'
+const CLAUDE_OAUTH_BETA = 'oauth-2025-04-20'
+const WINDOW_5H_MS = 5 * 60 * 60 * 1000
+const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000
+// LiteLLM admin/billing endpoints probed in order. A virtual LLM-only key can
+// only call `llm_api_routes`, so all of these 403; we still try them so a real
+// admin key works the moment it is configured. (CodexBar docs/litellm.md)
+const AIGW_ADMIN_ENDPOINTS = ['/key/info', '/user/info', '/global/spend', '/spend/logs']
+
+/**
+ * Read Claude Code OAuth credentials from `<configDir>/.credentials.json`.
+ * Returns { accessToken, expiresAt, subscriptionType, rateLimitTier, scopes }
+ * or null if the file / key is absent. Never throws. The token is never logged.
+ * CodexBar reads the same file (docs/claude.md "File fallback: ~/.claude/.credentials.json").
+ */
+export function readClaudeOAuthCredentials(configDir) {
+  if (!configDir) return null
+  const credPath = join(configDir, '.credentials.json')
+  try {
+    const raw = readFileSync(credPath, 'utf8')
+    const obj = JSON.parse(raw)
+    const o = obj?.claudeAiOauth
+    if (!o || typeof o !== 'object') return null
+    const token = typeof o.accessToken === 'string' ? o.accessToken.trim() : ''
+    if (!token) return null
+    return {
+      accessToken: token,
+      expiresAt: Number(o.expiresAt) || null,
+      subscriptionType: typeof o.subscriptionType === 'string' ? o.subscriptionType : null,
+      rateLimitTier: typeof o.rateLimitTier === 'string' ? o.rateLimitTier : null,
+      scopes: Array.isArray(o.scopes) ? o.scopes : [],
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Fetch the Claude Code OAuth usage API (`/api/oauth/usage`). Requires the
+ * `user:profile` scope (CodexBar docs/claude.md). Returns the parsed API
+ * response on 200, or { error, status } otherwise. Never throws — degrades to
+ * { error } so the route can fall back to jsonl estimation.
+ *
+ * Live network is not unit-tested (needs a real token); the response→windows
+ * mapping is exercised via the pure `mapClaudeOAuthToWindows` instead.
+ */
+export async function fetchClaudeOAuthUsage(configDir, { fetchImpl } = {}) {
+  const cred = readClaudeOAuthCredentials(configDir)
+  if (!cred) return { error: 'no Claude OAuth credentials at <configDir>/.credentials.json' }
+  // If the token is past expiry, skip the network call and degrade directly
+  // (we cannot refresh without the OAuth client secret). Still return a
+  // structured error so the caller can fall back to jsonl.
+  if (cred.expiresAt && cred.expiresAt < Date.now()) {
+    return { error: 'Claude OAuth token expired (no client secret to refresh)', expired: true }
+  }
+  if (!cred.scopes.includes('user:profile')) {
+    return { error: 'Claude OAuth token lacks user:profile scope (cannot read usage)' }
+  }
+  const f = fetchImpl || fetch
+  try {
+    const res = await f(CLAUDE_OAUTH_USAGE_URL, {
+      headers: {
+        Authorization: `Bearer ${cred.accessToken}`,
+        'anthropic-beta': CLAUDE_OAUTH_BETA,
+      },
+      signal: AbortSignal.timeout(12000),
+    })
+    if (!res.ok) {
+      let body = null
+      try { body = await res.json() } catch {}
+      return { error: `Claude OAuth usage HTTP ${res.status}`, status: res.status, body }
+    }
+    const data = await res.json()
+    return { data, subscriptionType: cred.subscriptionType, rateLimitTier: cred.rateLimitTier }
+  } catch (err) {
+    return { error: `Claude OAuth usage fetch failed: ${err?.message || err}` }
+  }
+}
+
+// ── jsonl timeline (for burn rate + hit projection) ────────────────────────────
+
+/**
+ * Stream one jsonl file and collect assistant-row timeline entries since
+ * `sinceMs`. Each entry: { ts, input, output, cacheCreation, cacheRead, tokens, model }.
+ * `ts` is the row's `timestamp` (ISO) parsed to epoch ms. Rows without a
+ * timestamp or before sinceMs are skipped. Mirrors aggregateJsonlUsage's
+ * streaming + fast `"usage"` substring pre-check, but keeps per-row timestamps.
+ */
+export function streamJsonlTimeline(jsonlPath, sinceMs, capBytes = USAGE_CAP_BYTES) {
+  let size = 0
+  try { size = statSync(jsonlPath).size } catch { return [] }
+  if (size === 0) return []
+  const readCap = Math.min(size, capBytes)
+  const chunkBuf = Buffer.allocUnsafe(128 * 1024)
+  let fd
+  try { fd = openSync(jsonlPath, 'r') } catch { return [] }
+  const out = []
+  let pos = 0
+  let tail = ''
+  try {
+    while (pos < readCap) {
+      const n = readSync(fd, chunkBuf, 0, Math.min(chunkBuf.length, readCap - pos), pos)
+      if (n <= 0) break
+      tail += chunkBuf.subarray(0, n).toString('utf8')
+      const lastNl = tail.lastIndexOf('\n')
+      let block
+      if (lastNl >= 0) {
+        block = tail.slice(0, lastNl + 1)
+        tail = tail.slice(lastNl + 1)
+      } else if (pos + n >= readCap) {
+        block = tail; tail = ''
+      } else {
+        pos += n; continue
+      }
+      pos += n
+      const lines = block.split('\n')
+      for (const line of lines) {
+        if (!line || line.length < 8) continue
+        if (line.indexOf('"usage"') === -1) continue
+        let row
+        try { row = JSON.parse(line) } catch { continue }
+        if (row.type !== 'assistant') continue
+        const u = row.message?.usage
+        if (!u || typeof u !== 'object') continue
+        const tsStr = row.timestamp
+        let ts = 0
+        if (typeof tsStr === 'string' && tsStr) {
+          const t = Date.parse(tsStr)
+          if (Number.isFinite(t)) ts = t
+        }
+        if (!ts) continue
+        if (sinceMs && ts < sinceMs) continue
+        const input = Number(u.input_tokens) || 0
+        const output = Number(u.output_tokens) || 0
+        const cacheCreation = Number(u.cache_creation_input_tokens) || 0
+        const cacheRead = Number(u.cache_read_input_tokens) || 0
+        out.push({
+          ts,
+          input, output, cacheCreation, cacheRead,
+          tokens: input + output + cacheCreation + cacheRead,
+          model: row.message?.model || '(unknown)',
+        })
+      }
+    }
+  } catch {
+    // best-effort
+  } finally {
+    try { closeSync(fd) } catch {}
+  }
+  return out
+}
+
+/**
+ * Collect the per-row token timeline across a team's `$configDir/projects/`,
+ * limited to rows since `sinceMs`. Files are scanned most-recent-first by mtime
+ * (up to maxFiles); files whose mtime is older than sinceMs are skipped (cheap).
+ * Returns entries sorted by ts ascending.
+ */
+export function collectClaudeTimeline(configDir, { sinceMs = 0, maxFiles = 200 } = {}) {
+  const projectsRoot = join(configDir, 'projects')
+  const out = []
+  if (!existsSync(projectsRoot)) return out
+  const files = []
+  let projectDirs = []
+  try { projectDirs = readdirSync(projectsRoot, { withFileTypes: true }) } catch { return out }
+  for (const dirent of projectDirs) {
+    if (!dirent.isDirectory()) continue
+    const dirPath = join(projectsRoot, dirent.name)
+    let names = []
+    try { names = readdirSync(dirPath) } catch { continue }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue
+      const fullPath = join(dirPath, name)
+      try {
+        const st = statSync(fullPath)
+        if (st.size < 200) continue
+        files.push({ path: fullPath, mtimeMs: st.mtimeMs, size: st.size })
+      } catch {}
+    }
+  }
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  for (const f of files.slice(0, maxFiles)) {
+    if (sinceMs && f.mtimeMs < sinceMs) continue
+    const rows = streamJsonlTimeline(f.path, sinceMs)
+    for (const r of rows) out.push(r)
+  }
+  out.sort((a, b) => a.ts - b.ts)
+  return out
+}
+
+/**
+ * Pure: compute burn rate + window usage from a timeline for a given window.
+ * `rows` are { ts, tokens } (any extra fields ignored). Returns:
+ *   { usedTokens, burnRatePerMin, oldestTs, newestTs, activeMinutes }
+ *
+ * Burn rate (CodexBar style): tokens consumed divided by the elapsed minutes
+ * between the oldest and newest row in the window, floored to 1 minute so a
+ * single bursty row does not produce an infinite rate. When there are no rows,
+ * burnRatePerMin is null and usedTokens is 0.
+ */
+export function computeBurnRate(rows, { now = Date.now() } = {}) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return { usedTokens: 0, burnRatePerMin: null, oldestTs: null, newestTs: null, activeMinutes: 0 }
+  }
+  let usedTokens = 0
+  let oldestTs = Infinity
+  let newestTs = -Infinity
+  for (const r of rows) {
+    const ts = Number(r?.ts) || 0
+    const tok = Number(r?.tokens) || 0
+    usedTokens += tok
+    if (ts && ts < oldestTs) oldestTs = ts
+    if (ts && ts > newestTs) newestTs = ts
+  }
+  if (!Number.isFinite(oldestTs)) oldestTs = null
+  if (!Number.isFinite(newestTs)) newestTs = null
+  // elapsed between oldest and newest row in the window; floor to 1 min
+  const span = (oldestTs != null && newestTs != null) ? (newestTs - oldestTs) : 0
+  const activeMinutes = Math.max(span / 60000, 1)
+  const burnRatePerMin = usedTokens / activeMinutes
+  return { usedTokens, burnRatePerMin, oldestTs, newestTs, activeMinutes }
+}
+
+/**
+ * Pure: project when utilization will hit 100% given the current utilization%
+ * and a token burn rate. The token limit is inferred as usedTokens / (util/100)
+ * (because util% of the limit == usedTokens). Returns an ISO string or null
+ * when the projection is not computable (no burn, already at/over 100%, or
+ * missing inputs). Always an estimate — the inferred limit is the source of
+ * uncertainty, so callers label projectedHitAt as estimated.
+ */
+export function projectHitAt({ utilization, burnRatePerMin, usedTokens, now = Date.now() }) {
+  const util = Number(utilization)
+  const burn = Number(burnRatePerMin)
+  const used = Number(usedTokens)
+  if (!Number.isFinite(util) || util <= 0 || util >= 100) return null
+  if (!Number.isFinite(burn) || burn <= 0) return null
+  if (!Number.isFinite(used) || used <= 0) return null
+  // inferred token limit: usedTokens is util% of the limit
+  const tokenLimit = used / (util / 100)
+  const remaining = tokenLimit - used
+  if (remaining <= 0) return null
+  const minutesToHit = remaining / burn
+  if (!Number.isFinite(minutesToHit) || minutesToHit < 0) return null
+  return new Date(now + minutesToHit * 60000).toISOString()
+}
+
+/**
+ * Pure: map a Claude OAuth `/api/oauth/usage` response to the unified window
+ * entries. This is the testable core — the live fetch is in fetchClaudeOAuthUsage.
+ *
+ * Response shape (verified against a real 200 on 2026-07-06):
+ *   { five_hour: { utilization, resets_at, limit_dollars, used_dollars, remaining_dollars },
+ *     seven_day: { utilization, resets_at, ... },
+ *     extra_usage: { is_enabled, monthly_limit, used_credits, utilization, currency, ... },
+ *     limits: [{ kind, group, percent, severity, resets_at, scope, is_active }, ...] }
+ *
+ * Returns windows: [5h(session), weekly(seven_day), monthly(extra_usage)]. The 5h
+ * and weekly `used`/`limit`/`remaining` are in PERCENT (the API's real metric);
+ * the monthly is in CREDITS. burnRatePerMin / projectedHitAt / usedTokens are
+ * attached later from the jsonl timeline (see attachBurnAndProjection).
+ */
+export function mapClaudeOAuthToWindows(apiResp, { source, label, now = Date.now() } = {}) {
+  const windows = []
+  const r = apiResp || {}
+  const five = r.five_hour || null
+  const seven = r.seven_day || null
+  const extra = r.extra_usage || null
+  // pick severity from the limits[] array when present (richest signal)
+  const limits = Array.isArray(r.limits) ? r.limits : []
+  const sevFor = (kind) => {
+    const m = limits.find((l) => l && l.kind === kind)
+    return m?.severity || null
+  }
+  if (five && typeof five.utilization === 'number') {
+    windows.push({
+      source, label,
+      windowType: '5h',
+      used: five.utilization, limit: 100, remaining: 100 - five.utilization,
+      utilization: five.utilization, unit: 'percent',
+      resetAt: typeof five.resets_at === 'string' ? five.resets_at : null,
+      burnRatePerMin: null, projectedHitAt: null,
+      estimated: false, severity: sevFor('session') || severityFor(five.utilization),
+      usedTokens: null, note: 'Claude Code OAuth API: 5-hour session window utilization % + reset time (real).',
+    })
+  }
+  if (seven && typeof seven.utilization === 'number') {
+    windows.push({
+      source, label,
+      windowType: 'weekly',
+      used: seven.utilization, limit: 100, remaining: 100 - seven.utilization,
+      utilization: seven.utilization, unit: 'percent',
+      resetAt: typeof seven.resets_at === 'string' ? seven.resets_at : null,
+      burnRatePerMin: null, projectedHitAt: null,
+      estimated: false, severity: sevFor('weekly_all') || severityFor(seven.utilization),
+      usedTokens: null, note: 'Claude Code OAuth API: 7-day weekly window utilization % + reset time (real).',
+    })
+  }
+  if (extra && extra.is_enabled && typeof extra.monthly_limit === 'number' && typeof extra.used_credits === 'number') {
+    windows.push({
+      source, label,
+      windowType: 'monthly',
+      used: extra.used_credits, limit: extra.monthly_limit,
+      remaining: extra.monthly_limit - extra.used_credits,
+      utilization: typeof extra.utilization === 'number' ? extra.utilization : null,
+      unit: 'credits',
+      resetAt: null, // monthly reset day is not returned by the API
+      burnRatePerMin: null, projectedHitAt: null,
+      estimated: false, severity: severityFor(extra.utilization),
+      usedTokens: null,
+      note: 'Claude Code OAuth API: extra_usage monthly credits (real used/limit). Reset day not provided by API.',
+    })
+  }
+  return windows
+}
+
+function severityFor(util) {
+  const u = Number(util)
+  if (!Number.isFinite(u)) return null
+  if (u >= 90) return 'critical'
+  if (u >= 75) return 'warning'
+  return 'normal'
+}
+
+/**
+ * Attach jsonl-derived burn rate + hit projection to a 5h/weekly window that
+ * came from the OAuth API. `timeline` is the full 7d timeline; we filter to
+ * the window's span for the burn calc. usedTokens + burnRatePerMin come from
+ * the timeline; projectedHitAt is inferred from (utilization, usedTokens,
+ * burnRatePerMin). projectedHitAt and the inferred limit are estimates, so
+ * the window keeps `estimated:false` (the used/limit/reset are real from the
+ * API) but gains `projectedHitEstimated:true` + a note.
+ */
+export function attachBurnAndProjection(window, timeline, { now = Date.now() } = {}) {
+  if (!window) return window
+  if (window.windowType !== '5h' && window.windowType !== 'weekly') return window
+  const spanMs = window.windowType === '5h' ? WINDOW_5H_MS : WINDOW_7D_MS
+  const sinceMs = now - spanMs
+  const rows = (timeline || []).filter((r) => Number(r?.ts) >= sinceMs)
+  const { usedTokens, burnRatePerMin } = computeBurnRate(rows, { now })
+  const projected = projectHitAt({
+    utilization: window.utilization, burnRatePerMin, usedTokens, now,
+  })
+  return {
+    ...window,
+    usedTokens: usedTokens || null,
+    burnRatePerMin: burnRatePerMin || null,
+    projectedHitAt: projected,
+    projectedHitEstimated: projected != null,
+    note: (window.note || '') + (burnRatePerMin
+      ? ` Burn rate ${Math.round(burnRatePerMin)} tokens/min from local jsonl (last ${window.windowType === '5h' ? '5h' : '7d'}); hit projection inferred from utilization% (estimated).`
+      : ' No recent jsonl activity in this window for burn-rate projection.'),
+  }
+}
+
+/**
+ * Pure: estimate 5h + weekly windows purely from a jsonl timeline (the degraded
+ * path when the OAuth API is unavailable). used = tokens in window, limit =
+ * null (unknown), resetAt = oldest row ts + window span (when the oldest usage
+ * ages out of the rolling window — a CodexBar-style rolling-window reset
+ * estimate). Everything is `estimated:true`. No fabricated limits.
+ */
+export function estimateClaudeWindowsFromTimeline(timeline, { source, label, now = Date.now() } = {}) {
+  const rows = Array.isArray(timeline) ? timeline : []
+  const build = (windowType, spanMs) => {
+    const sinceMs = now - spanMs
+    const wRows = rows.filter((r) => Number(r?.ts) >= sinceMs)
+    const { usedTokens, burnRatePerMin, oldestTs } = computeBurnRate(wRows, { now })
+    const resetAt = (oldestTs != null && usedTokens > 0) ? new Date(oldestTs + spanMs).toISOString() : null
+    return {
+      source, label, windowType,
+      used: usedTokens, limit: null, remaining: null,
+      utilization: null, unit: 'tokens',
+      resetAt,
+      burnRatePerMin: burnRatePerMin || null,
+      projectedHitAt: null, // no limit -> no projection
+      estimated: true, severity: severityFor(null),
+      usedTokens: usedTokens || null,
+      note: `Estimated from local jsonl timeline (OAuth API unavailable). ${usedTokens > 0 ? `~${Math.round(usedTokens)} tokens in last ${windowType === '5h' ? '5h' : '7d'}; reset when oldest usage ages out.` : 'No usage in window.'}`,
+    }
+  }
+  return [build('5h', WINDOW_5H_MS), build('weekly', WINDOW_7D_MS)]
+}
+
+/**
+ * Build the full Claude source summary for one team config dir. Tries the
+ * OAuth API first (real % + reset), attaches jsonl burn/projection; on any
+ * OAuth failure, degrades to pure jsonl estimation. Never throws.
+ */
+export async function buildClaudeSourceSummary({ configDir, source, label, home, now = Date.now() }) {
+  const dir = configDir || effectiveClaudeConfigDir(null, home)
+  const base = { source, label, kind: 'claude-oauth', configDir: dir, available: true }
+  const cred = readClaudeOAuthCredentials(dir)
+  if (cred) {
+    base.subscriptionType = cred.subscriptionType
+    base.rateLimitTier = cred.rateLimitTier
+  }
+  // collect the 7d timeline once (used for both 5h and weekly burn)
+  const timeline = collectClaudeTimeline(dir, { sinceMs: now - WINDOW_7D_MS })
+  const oauth = await fetchClaudeOAuthUsage(dir)
+  if (oauth.data) {
+    let windows = mapClaudeOAuthToWindows(oauth.data, { source, label, now })
+    windows = windows.map((w) => attachBurnAndProjection(w, timeline, { now }))
+    return { ...base, available: true, oauthAvailable: true, windows }
+  }
+  // degrade to jsonl estimation
+  const windows = estimateClaudeWindowsFromTimeline(timeline, { source, label, now })
+  return {
+    ...base, available: true, oauthAvailable: false,
+    oauthError: oauth.error || 'OAuth API unavailable',
+    windows,
+  }
+}
+
+// ── AIGW (LiteLLM) spend probe ─────────────────────────────────────────────────
+
+/**
+ * Probe the AIGW (LiteLLM) admin/billing endpoints for real spend/budget. Tries
+ * /key/info, /user/info, /global/spend, /spend/logs in order (CodexBar
+ * docs/litellm.md). A virtual LLM-only key is 403-rejected ("only allowed to
+ * call routes: ['llm_api_routes']") — verified live on 2026-07-06. Never throws;
+ * returns { available, tried[], error?, spend? } so the UI labels honestly.
+ *
+ * When a real admin key is configured, /key/info returns { soft_budget,
+ * spend, token, ... } and /global/spend returns total spend — we map the first
+ * usable response into a monthly-budget window. No fabricated numbers.
+ */
+export async function probeAigwSpend({ key, fetchImpl } = {}) {
+  const apiKey = (key ?? readAigwKey()).trim()
+  if (!apiKey) {
+    return { available: false, error: 'AIGW key not found (~/.config/meshy-aigw.key)', tried: [] }
+  }
+  const f = fetchImpl || fetch
+  const tried = []
+  for (const ep of AIGW_ADMIN_ENDPOINTS) {
+    const url = `${AIGW_BASE}${ep}`
+    try {
+      const res = await f(url, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(10000),
+      })
+      tried.push({ endpoint: ep, status: res.status })
+      if (res.ok) {
+        let body = null
+        try { body = await res.json() } catch {}
+        return mapAigwSpendResponse(ep, body, { tried })
+      }
+      // 403 with the "only allowed to call routes: ['llm_api_routes']" message
+      // means this is a virtual LLM-only key — no admin endpoint will work, so
+      // stop probing further and report unavailable honestly.
+      if (res.status === 403) {
+        let body = null
+        try { body = await res.json() } catch {}
+        const msg = body?.detail || body?.error || `HTTP ${res.status}`
+        if (/llm_api_routes|not allowed/i.test(String(msg))) {
+          return {
+            available: false,
+            error: `AIGW key is virtual LLM-only (403 on ${ep}: ${msg}). Admin/billing routes are not permitted; spend/budget unavailable.`,
+            tried,
+          }
+        }
+      }
+    } catch (err) {
+      tried.push({ endpoint: ep, error: String(err?.message || err) })
+    }
+  }
+  return {
+    available: false,
+    error: 'All AIGW admin endpoints rejected or unreachable (no spend/budget data).',
+    tried,
+  }
+}
+
+/**
+ * Pure: map a successful AIGW admin response into a monthly-budget window.
+ * LiteLLM /key/info returns { soft_budget, spend, token, ... } (credits/usd);
+ * /global/spend returns { total_spend }. We surface whatever the gateway gave
+ * us, labelled with its unit, and never invent fields. Returns
+ * { available:true, windows:[...], raw } or { available:false, error }.
+ */
+export function mapAigwSpendResponse(endpoint, body, { tried } = {}) {
+  if (!body || typeof body !== 'object') {
+    return { available: false, error: `${endpoint} returned no parseable body`, tried }
+  }
+  // /key/info shape: { soft_budget, spend, token, budget_duration, ... }
+  if (endpoint === '/key/info') {
+    const soft = Number(body.soft_budget)
+    const spend = Number(body.spend)
+    if (Number.isFinite(spend)) {
+      const limit = Number.isFinite(soft) && soft > 0 ? soft : null
+      return {
+        available: true,
+        tried,
+        raw: { endpoint, soft_budget: body.soft_budget, spend: body.spend },
+        windows: [{
+          source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
+          windowType: 'monthly',
+          used: spend, limit, remaining: limit != null ? limit - spend : null,
+          utilization: limit != null ? (spend / limit) * 100 : null,
+          unit: 'usd',
+          resetAt: null, burnRatePerMin: null, projectedHitAt: null,
+          estimated: false, severity: severityFor(limit != null ? (spend / limit) * 100 : null),
+          usedTokens: null,
+          note: `AIGW LiteLLM /key/info: spend $${spend.toFixed(4)}${limit != null ? ` of $${limit.toFixed(4)} soft budget` : ''} (real).`,
+        }],
+      }
+    }
+  }
+  // /global/spend shape: { total_spend, ... } — spend only, no limit
+  if (endpoint === '/global/spend') {
+    const total = Number(body.total_spend ?? body.spend)
+    if (Number.isFinite(total)) {
+      return {
+        available: true,
+        tried,
+        raw: { endpoint, total_spend: body.total_spend },
+        windows: [{
+          source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
+          windowType: 'monthly',
+          used: total, limit: null, remaining: null,
+          utilization: null, unit: 'usd',
+          resetAt: null, burnRatePerMin: null, projectedHitAt: null,
+          estimated: false, severity: null, usedTokens: null,
+          note: `AIGW LiteLLM /global/spend: total spend $${total.toFixed(4)} (real, no budget limit exposed).`,
+        }],
+      }
+    }
+  }
+  return { available: false, error: `${endpoint} response had no usable spend/budget fields`, tried, raw: body }
+}
+
+/**
+ * Build the AIGW (LiteLLM) source summary. Probes admin endpoints; honestly
+ * labels unavailable when the key is virtual LLM-only (403). No fabricated numbers.
+ */
+export async function buildAigwSourceSummary({ now = Date.now() } = {}) {
+  const probe = await probeAigwSpend({})
+  const base = {
+    source: 'aigw-litellm', label: 'AIGW (LiteLLM)', kind: 'litellm',
+    configDir: null, available: !!probe.available, tried: probe.tried || [],
+  }
+  if (probe.available) {
+    return { ...base, windows: probe.windows, raw: probe.raw }
+  }
+  return {
+    ...base,
+    windows: [{
+      source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
+      windowType: 'monthly',
+      used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
+      resetAt: null, burnRatePerMin: null, projectedHitAt: null,
+      estimated: false, severity: null, usedTokens: null,
+      note: probe.error || 'AIGW spend/budget unavailable.',
+    }],
+    error: probe.error,
+  }
+}
+
+// ── /api/usage/summary entry point ────────────────────────────────────────────
+
+/**
+ * Build the three-source usage summary returned by GET /api/usage/summary.
+ * Iterates the discovered Claude teams (Team1 ~/.claude + ~/.claude-team*) and
+ * adds the AIGW source. Returns:
+ *   { generatedAt, schemaVersion, sources: [...], entries: [...] }
+ * `entries` is a flat array of the unified per-window schema objects — the
+ * AI-readable surface a secretary/agent fetches to read usage + limits and
+ * decide degradation routing. Never throws; each source degrades independently.
+ */
+export async function buildUsageSummary({ home, store, now = Date.now() } = {}) {
+  const homeDir = home || homedir()
+  const { teams } = listTeams(homeDir, store)
+  const sources = []
+  // Claude teams: ~/.claude (team1) + ~/.claude-team* (CodexBar multi-account).
+  for (const team of teams) {
+    if (!team.exists) continue
+    const src = await buildClaudeSourceSummary({
+      configDir: team.path,
+      source: `claude-${team.id}`,
+      label: `${team.name} (Claude Code)`,
+      home: homeDir, now,
+    })
+    sources.push(src)
+  }
+  // AIGW (LiteLLM)
+  sources.push(await buildAigwSourceSummary({ now }))
+  // flat entries for AI consumption
+  const entries = []
+  for (const s of sources) {
+    for (const w of (s.windows || [])) entries.push({ ...w, source: s.source, label: s.label })
+  }
+  return {
+    generatedAt: new Date(now).toISOString(),
+    schemaVersion: 1,
+    sources,
+    entries,
+  }
+}
