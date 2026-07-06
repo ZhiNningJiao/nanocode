@@ -278,7 +278,9 @@ describe('createOpencodeBlockDriver — queue & interrupt', () => {
     const cs = makeCs({ busy: true, queue: [] })
     driver.runOpencodeTurn(cs, 'second', 'p:c:t', '/r')
     assert.equal(cs.queue.length, 1)
-    assert.equal(cs.queue[0], 'second')
+    // 块B修复: queue 现存 {text, nonce} 对象以便 drain 时透传 nonce
+    assert.equal(cs.queue[0].text, 'second')
+    assert.equal(cs.queue[0].nonce, null)
     assert.ok(events.some((e) => e.text?.includes('queued')))
   })
   it('interrupt auto-flushes the in-memory queue as the next turn (aligned with claude)', async () => {
