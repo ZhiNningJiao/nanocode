@@ -9,7 +9,7 @@ import * as sessions from './sessions.js'
 import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
-import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
+import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri } from './remote.js'
@@ -793,6 +793,22 @@ export function createTerminalRoutes(store) {
       res.json(result)
     } catch (err) {
       console.error('[/api/usage/opencode]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // GET /api/usage/summary — MES-13788 three-source usage+limit summary
+  // (CodexBar-style windows + reset + burn + projection). The AI-readable
+  // entry point: a secretary/agent fetches this to read Team1/Team2/AIGW usage
+  // + limits and decide degradation routing. Returns { generatedAt, schemaVersion,
+  // sources:[...], entries:[flat unified-schema windows] }. Each source degrades
+  // independently (OAuth → jsonl estimate; AIGW → unavailable) and never throws.
+  router.get('/api/usage/summary', async (_req, res) => {
+    try {
+      const result = await buildUsageSummary({ home, store })
+      res.json(result)
+    } catch (err) {
+      console.error('[/api/usage/summary]', err)
       res.status(500).json({ error: err.message })
     }
   })
