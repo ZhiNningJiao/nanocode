@@ -12,7 +12,8 @@ import { createRecentAgentsService } from './recent-agents.js'
 import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
-import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri } from './remote.js'
+import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand } from './remote.js'
+import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
 import { exportToEvents } from './opencode-adapter.js'
 import { listOpencodeSessions } from './opencode-sessions.js'
 
@@ -37,6 +38,7 @@ export function createTerminalRoutes(store) {
     recentAgents,
     sessionController,
   })
+  const remoteSsh = createRemoteSshHandler(store)
 
   /** Parse ~/.ssh/config into an array of host objects. */
   function parseSshConfig(content) {
@@ -1070,6 +1072,10 @@ export function createTerminalRoutes(store) {
 
   router.delete('/api/remote/machines/:id', (req, res) => {
     try {
+      // Tear down any live SSH PTY for this machine before the record vanishes,
+      // so a dangling terminal Tab reconnects cleanly (gets "machine not found")
+      // instead of reattaching to a stale shell pointed at a deleted host.
+      sessions.destroySession(`remote:ssh:${req.params.id}`)
       const result = deleteMachine(store, req.params.id)
       if (result.error) {
         const code = /not found/.test(result.error) ? 404 : 400
@@ -1078,6 +1084,28 @@ export function createTerminalRoutes(store) {
       res.json({ ok: true })
     } catch (err) {
       console.error('[DELETE /api/remote/machines/:id]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── POST /api/remote/machines/:id/connect ─────────────────────────────────
+  //
+  // Pre-flight check before the browser opens a terminal Tab for an ssh
+  // machine: validates the record is an ssh machine, resolves the ssh command
+  // (key existence / sshpass presence for password auth), and returns a safe
+  // summary (no secrets). The browser uses the failure to show an inline error
+  // instead of opening a dead terminal; a WS attach would also reject, but
+  // surfacing it via REST gives a cleaner UX (no flash of empty xterm).
+  router.post('/api/remote/machines/:id/connect', (req, res) => {
+    try {
+      const machine = getMachine(store, req.params.id)
+      if (!machine) return res.status(404).json({ error: 'machine not found' })
+      if (machine.type !== 'ssh') return res.status(400).json({ error: 'not an ssh machine' })
+      const built = buildSshCommand(machine, { sshpassPath: machine.sshPassword ? resolveSshpass() : null })
+      if (!built.ok) return res.status(400).json({ error: built.error })
+      res.json({ ok: true, summary: built.logSummary })
+    } catch (err) {
+      console.error('[POST /api/remote/machines/:id/connect]', err)
       res.status(500).json({ error: err.message })
     }
   })
@@ -1151,5 +1179,6 @@ export function createTerminalRoutes(store) {
     handleTerminalWs: sessionController.handleTerminalWs,
     handleTabsWs,
     setAgentHealthMonitor: sessionController.setAgentHealthMonitor,
+    handleRemoteSshWs: remoteSsh.handleRemoteSshWs,
   }
 }

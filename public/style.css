@@ -1606,6 +1606,136 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 }
 .rm-connect { text-decoration: none; }
 
+/* SSH type badge + type/auth selector (MES-13781) */
+.rm-type-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+}
+.rm-type-badge-rustdesk {
+  background: var(--bg-inset, var(--bg-hover));
+  color: var(--text-dim, var(--text));
+}
+.rm-type-badge-ssh {
+  background: color-mix(in srgb, var(--accent, #0ea5b7) 18%, transparent);
+  color: var(--accent, #0ea5b7);
+  border-color: color-mix(in srgb, var(--accent, #0ea5b7) 40%, transparent);
+}
+.rm-type-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+.rm-type-group {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.rm-type-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 44px;
+}
+.rm-type-opt input[type='radio'] {
+  margin: 0;
+  accent-color: var(--accent, #0ea5b7);
+}
+.rm-type-opt:has(input:checked) {
+  border-color: var(--accent, #0ea5b7);
+  background: color-mix(in srgb, var(--accent, #0ea5b7) 10%, transparent);
+}
+.rm-connect-ssh {
+  background: var(--accent, #0ea5b7);
+  color: #fff;
+  border-color: var(--accent, #0ea5b7);
+}
+
+/* SSH terminal overlay modal (MES-13781) */
+.rm-ssh-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+.rm-ssh-card {
+  flex: 1;
+  margin: 24px;
+  background: var(--bg, #1a1a1a);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-width: 1100px;
+  max-height: 760px;
+  width: 100%;
+  align-self: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.rm-ssh-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-inset, var(--bg-hover));
+  flex-shrink: 0;
+}
+.rm-ssh-title {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.rm-ssh-sub {
+  font-size: 12px;
+  color: var(--text-dim, var(--text));
+  font-family: var(--font-mono);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rm-ssh-close {
+  font-size: 18px;
+  line-height: 1;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.rm-ssh-term {
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+  overflow: hidden;
+  background: #000;
+}
+.rm-ssh-term .pane-terminal {
+  height: 100%;
+  width: 100%;
+}
+
 /* -- Persona library + skills browser (MES-13740 需求8) ---------- */
 
 .persona-preview {
@@ -3453,6 +3583,19 @@ body.workspace-active .landing-overlay { display: none; }
   .rm-row-actions .rp-btn,
   .rm-row-actions .rp-btn-sm { min-height: 44px; flex: 1 1 auto; }
   .rm-connect { min-width: 0; }
+  .rm-type-opt { min-height: 44px; }
+  .rm-type-badge { font-size: 9px; }
+
+  /* SSH terminal overlay: full-screen on mobile 390×844 (MES-13781) */
+  .rm-ssh-overlay { padding: 0; }
+  .rm-ssh-card {
+    margin: 0;
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    border: none;
+  }
+  .rm-ssh-close { min-width: 44px; min-height: 44px; }
 
   /* Team & Model plugin: ≥44px touch targets for the model/effort selectors
      migrated out of Settings + team radio rows (MES-13740 R2 Block A). */
