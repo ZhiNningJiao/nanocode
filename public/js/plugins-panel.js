@@ -236,20 +236,22 @@ export async function renderUsagePane(pane) {
   }
   try {
     await ensureSettings()
-    // Fetch both usage sources in parallel. Each endpoint degrades to
+    // Fetch usage sources in parallel. Each endpoint degrades to
     // { error } on failure (never rejects) so a missing opencode DB does not
-    // hide the claude panel, and vice-versa.
-    const [usage, opencode] = await Promise.all([
+    // hide the claude panel, and vice-versa. The summary endpoint drives the
+    // MES-13788 three-source CodexBar-style card at the top.
+    const [usage, opencode, summary] = await Promise.all([
       fetch('/api/usage/claude').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
       fetch('/api/usage/opencode').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+      fetch('/api/usage/summary').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
     ])
-    renderUsageContent(pane, usage, opencode)
+    renderUsageContent(pane, usage, opencode, summary)
   } catch (err) {
     renderError(pane, err)
   }
 }
 
-function renderUsageContent(pane, usage, opencode) {
+function renderUsageContent(pane, usage, opencode, summary) {
   pane.innerHTML = ''
   const refreshBtn = document.createElement('button')
   refreshBtn.className = 'rp-refresh-btn'
@@ -257,9 +259,232 @@ function renderUsageContent(pane, usage, opencode) {
   refreshBtn.addEventListener('click', () => { usageLoaded = false; renderUsagePane(pane) })
   pane.appendChild(refreshBtn)
 
+  pane.appendChild(renderUsageSummarySection(summary))
   pane.appendChild(renderClaudeUsageSection(usage))
   pane.appendChild(renderOpencodeUsageSection(opencode))
   pane.appendChild(renderAigwProbeSection(pane))
+}
+
+// ── MES-13788 three-source usage summary (CodexBar-style) ─────────────────────
+// Renders one card per source (Team1 / Team2 / AIGW) with per-window bars,
+// reset countdown, burn rate and hit projection. Estimates are labelled.
+// Mobile 390×844 + touch ≥44px are handled by the .rp-usage-* CSS.
+function renderUsageSummarySection(summary) {
+  const section = document.createElement('div')
+  section.className = 'rp-section rp-usage-summary'
+  const title = document.createElement('div')
+  title.className = 'rp-section-title'
+  title.textContent = t('usage.summary.title')
+  section.appendChild(title)
+  const desc = document.createElement('div')
+  desc.className = 'rp-hint'
+  desc.textContent = t('usage.summary.desc')
+  section.appendChild(desc)
+
+  if (!summary || summary.error) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = summary?.error || t('usage.summary.loading')
+    section.appendChild(empty)
+    return section
+  }
+
+  const sources = Array.isArray(summary.sources) ? summary.sources : []
+  if (!sources.length) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = t('usage.summary.loading')
+    section.appendChild(empty)
+    return section
+  }
+  for (const src of sources) {
+    section.appendChild(renderUsageSourceCard(src))
+  }
+  return section
+}
+
+function renderUsageSourceCard(src) {
+  const card = document.createElement('div')
+  card.className = 'rp-usage-source'
+  card.dataset.source = src.source || ''
+
+  const head = document.createElement('div')
+  head.className = 'rp-usage-source-head'
+  const name = document.createElement('span')
+  name.className = 'rp-usage-source-name'
+  name.textContent = src.label || src.source || ''
+  head.appendChild(name)
+
+  // status badge: unavailable / oauth-down / estimated
+  const badge = document.createElement('span')
+  badge.className = 'rp-usage-badge'
+  if (src.source === 'aigw-litellm' && !src.available) {
+    badge.classList.add('rp-usage-badge-down')
+    badge.textContent = t('usage.summary.unavailable')
+    badge.title = src.error || t('usage.summary.aigwDown')
+  } else if (src.kind === 'claude-oauth' && src.oauthAvailable === false) {
+    badge.classList.add('rp-usage-badge-est')
+    badge.textContent = t('usage.summary.estimated')
+    badge.title = src.oauthError || t('usage.summary.oauthDown')
+  } else {
+    badge.classList.add('rp-usage-badge-ok')
+    badge.textContent = src.kind === 'claude-oauth' ? 'OAuth' : (src.available ? 'API' : '—')
+  }
+  head.appendChild(badge)
+  card.appendChild(head)
+
+  const windows = Array.isArray(src.windows) ? src.windows : []
+  if (!windows.length) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = src.error || t('usage.summary.unavailable')
+    card.appendChild(empty)
+    return card
+  }
+  for (const w of windows) {
+    card.appendChild(renderUsageWindowRow(w))
+  }
+  // provenance note (compact) for the unavailable/estimated case
+  if (src.error) {
+    const note = document.createElement('div')
+    note.className = 'rp-hint rp-usage-note'
+    note.textContent = src.error
+    card.appendChild(note)
+  }
+  return card
+}
+
+function renderUsageWindowRow(w) {
+  const row = document.createElement('div')
+  row.className = 'rp-usage-window'
+  row.dataset.window = w.windowType || ''
+  if (w.severity) row.dataset.severity = w.severity
+
+  const head = document.createElement('div')
+  head.className = 'rp-usage-window-head'
+  const type = document.createElement('span')
+  type.className = 'rp-usage-window-type'
+  const typeKey = { '5h': 'usage.summary.window.5h', 'weekly': 'usage.summary.window.weekly', 'monthly': 'usage.summary.window.monthly' }[w.windowType]
+  type.textContent = typeKey ? t(typeKey) : (w.windowType || '')
+  head.appendChild(type)
+
+  // pct label (right side)
+  const pct = document.createElement('span')
+  pct.className = 'rp-usage-window-pct'
+  const utilPct = computeWindowPct(w)
+  if (utilPct != null) {
+    pct.textContent = `${Math.round(utilPct)}%`
+  } else if (w.used != null && w.limit == null) {
+    pct.textContent = fmtTokens(w.used)
+  } else {
+    pct.textContent = '—'
+  }
+  head.appendChild(pct)
+  row.appendChild(head)
+
+  // bar
+  const bar = document.createElement('div')
+  bar.className = 'rp-usage-bar'
+  const fill = document.createElement('div')
+  fill.className = 'rp-usage-bar-fill'
+  if (utilPct != null) fill.style.width = `${Math.min(100, Math.max(0, utilPct))}%`
+  if (w.severity === 'critical') fill.classList.add('rp-usage-bar-critical')
+  else if (w.severity === 'warning') fill.classList.add('rp-usage-bar-warning')
+  bar.appendChild(fill)
+  row.appendChild(bar)
+
+  // meta line: used/limit · reset · burn · projected
+  const meta = document.createElement('div')
+  meta.className = 'rp-usage-window-meta'
+  meta.appendChild(usageMetaCell(t('usage.summary.used'), fmtUsedLimit(w)))
+  meta.appendChild(usageMetaCell(t('usage.summary.reset'), fmtResetCountdown(w.resetAt)))
+  if (w.burnRatePerMin != null) {
+    meta.appendChild(usageMetaCell(t('usage.summary.burn'), `${fmtTokens(w.burnRatePerMin)} ${t('usage.summary.tokensMin')}`))
+  }
+  if (w.projectedHitAt) {
+    meta.appendChild(usageMetaCell(t('usage.summary.projected'), fmtProjectedHit(w.projectedHitAt)))
+  }
+  row.appendChild(meta)
+
+  if (w.estimated) {
+    const est = document.createElement('span')
+    est.className = 'rp-usage-est-tag'
+    est.textContent = t('usage.summary.estimated')
+    row.appendChild(est)
+  }
+  return row
+}
+
+function usageMetaCell(label, value) {
+  const cell = document.createElement('span')
+  cell.className = 'rp-usage-meta-cell'
+  const lab = document.createElement('span')
+  lab.className = 'rp-usage-meta-label'
+  lab.textContent = label
+  const val = document.createElement('span')
+  val.className = 'rp-usage-meta-value'
+  val.textContent = value
+  cell.appendChild(lab)
+  cell.appendChild(val)
+  return cell
+}
+
+function computeWindowPct(w) {
+  if (typeof w.utilization === 'number') return w.utilization
+  if (typeof w.used === 'number' && typeof w.limit === 'number' && w.limit > 0) {
+    return (w.used / w.limit) * 100
+  }
+  return null
+}
+
+function fmtUsedLimit(w) {
+  const u = w.used
+  const l = w.limit
+  const unit = w.unit || ''
+  const fmtByUnit = (n) => {
+    if (n == null) return '—'
+    if (unit === 'percent') return `${Math.round(n)}%`
+    if (unit === 'usd' || unit === 'credits') return n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${Number(n).toFixed(2)}`
+    return fmtTokens(n)
+  }
+  if (l != null) return `${fmtByUnit(u)} ${t('usage.summary.of')} ${fmtByUnit(l)}`
+  if (u != null) return fmtByUnit(u)
+  return '—'
+}
+
+function fmtResetCountdown(resetAt) {
+  if (!resetAt) return t('usage.summary.noReset')
+  const ts = Date.parse(resetAt)
+  if (!Number.isFinite(ts)) return t('usage.summary.noReset')
+  const diff = ts - Date.now()
+  if (diff <= 0) return t('usage.summary.noReset')
+  return fmtDuration(diff)
+}
+
+function fmtDuration(ms) {
+  const s = Math.max(0, Math.round(ms / 1000))
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m`
+  return `<1m`
+}
+
+function fmtProjectedHit(iso) {
+  const ts = Date.parse(iso)
+  if (!Number.isFinite(ts)) return '—'
+  const diff = ts - Date.now()
+  if (diff <= 0) return 'now'
+  return fmtDuration(diff)
+}
+
+function fmtTokens(n) {
+  const v = Number(n) || 0
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
+  return `${Math.round(v)}`
 }
 
 function renderClaudeUsageSection(usage) {

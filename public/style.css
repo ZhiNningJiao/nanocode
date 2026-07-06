@@ -1128,6 +1128,120 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .rp-flash.show { opacity: 1; }
 .rp-flash.error { color: var(--warning); }
 
+/* -- MES-13788 three-source usage summary (CodexBar-style) ------------------- */
+
+.rp-usage-summary { gap: var(--s-2); }
+
+.rp-usage-source {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--s-2);
+  margin-bottom: var(--s-2);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rp-usage-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.rp-usage-source-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.rp-usage-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.rp-usage-badge-ok { color: var(--success); border-color: var(--success); background: var(--success-bg); }
+.rp-usage-badge-est { color: var(--warning); border-color: var(--warning); background: var(--warning-bg); }
+.rp-usage-badge-down { color: var(--error); border-color: var(--error); background: var(--error-bg); }
+
+.rp-usage-window {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 0;
+  position: relative;
+}
+.rp-usage-window + .rp-usage-window { border-top: 1px dashed var(--border); }
+.rp-usage-window-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.rp-usage-window-type { color: var(--text-secondary); }
+.rp-usage-window-pct { font-family: var(--font-mono); font-weight: 600; color: var(--text); }
+.rp-usage-window[data-severity="critical"] .rp-usage-window-pct { color: var(--error); }
+.rp-usage-window[data-severity="warning"] .rp-usage-window-pct { color: var(--warning); }
+
+.rp-usage-bar {
+  height: 6px;
+  width: 100%;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.rp-usage-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
+  transition: width var(--duration-fast) var(--ease-standard);
+  min-width: 0;
+}
+.rp-usage-bar-fill.rp-usage-bar-warning { background: var(--warning); }
+.rp-usage-bar-fill.rp-usage-bar-critical { background: var(--error); }
+
+.rp-usage-window-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.rp-usage-meta-cell { display: inline-flex; gap: 3px; align-items: baseline; }
+.rp-usage-meta-label { opacity: 0.7; }
+.rp-usage-meta-value { color: var(--text); }
+.rp-usage-est-tag {
+  align-self: flex-start;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warning);
+  border: 1px solid var(--warning);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.rp-usage-note { font-size: 10px; line-height: 1.4; word-break: break-word; }
+
+/* Mobile 390×844 + touch ≥44px: taller bars, larger tap-friendly rows, stacked meta */
+@media (max-width: 480px) {
+  .rp-usage-source { padding: 10px; margin-bottom: 10px; }
+  .rp-usage-source-name { font-size: 14px; }
+  .rp-usage-badge { font-size: 11px; padding: 2px 8px; }
+  .rp-usage-window { padding: 8px 0; }
+  .rp-usage-window-head { font-size: 13px; }
+  .rp-usage-bar { height: 10px; }
+  .rp-usage-window-meta {
+    font-size: 12px;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .rp-usage-meta-cell { min-height: 20px; }
+  .rp-usage-est-tag { font-size: 10px; padding: 1px 6px; }
+}
+
 /* -- Memory viewer plugin (MES-13740 需求7) ------------------------------- */
 
 .right-panel-pane[data-rp-pane="memory"] {
