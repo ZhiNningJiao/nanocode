@@ -1219,14 +1219,12 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
       let msg
       try { msg = JSON.parse(raw) } catch { return }
       if (msg.type === 'claude-input' && typeof msg.text === 'string' && msg.text.trim()) {
-        // Echo the user message locally (the driver also echoes, but echoing
-        // here keeps the UX snappy and matches the claude tab behaviour).
-        const userEvent = {
-          type: 'user',
-          message: { role: 'user', content: [{ type: 'text', text: msg.text }] },
-        }
-        claudeBroadcast(cs, userEvent)
-        dispatchOpencodeBlockTurn(cs, msg.text, sessionKey, project.cwd)
+        // 块B修复: 删除此处的 controller user echo。原先这里 claudeBroadcast(userEvent) 与
+        // runOpencodeTurn 的 driver echo (opencode-block-driver.js line 130) 双重 echo 同一条
+        // 消息，且两者都丢弃了 msg._nonce → 客户端 nonce 去重不触发 → live 渲染 3 份
+        // (本地 echo + controller echo + driver echo)。现在只保留 driver echo，并把
+        // nonce 透传过去，让客户端能 nonce 去重（local echo + driver echo(nonce) = 1 份）。
+        dispatchOpencodeBlockTurn(cs, msg.text, sessionKey, project.cwd, { nonce: msg._nonce || null })
       } else if (msg.type === 'ping') {
         try { ws.send(JSON.stringify({ type: 'pong', id: msg.id })) } catch {}
       }
@@ -1238,8 +1236,8 @@ export function createClaudeSessionController({ store, home, recentAgents }) {
     })
   }
 
-  dispatchOpencodeBlockTurn = function dispatchOpencodeBlockTurn(cs, text, sessionKey, cwd) {
-    opencodeBlockDriver.runOpencodeTurn(cs, text, sessionKey, cwd)
+  dispatchOpencodeBlockTurn = function dispatchOpencodeBlockTurn(cs, text, sessionKey, cwd, opts) {
+    opencodeBlockDriver.runOpencodeTurn(cs, text, sessionKey, cwd, opts)
   }
 
   function handleInterrupt(req, res) {
