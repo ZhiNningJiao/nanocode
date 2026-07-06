@@ -22,9 +22,10 @@ import { randomUUID } from 'node:crypto'
 
 const SETTING_KEY = 'remote_machines'
 
-// RustDesk peer IDs are alphanumeric (the client lower-cases / strips for display).
-// Keep it permissive but bounded; reject anything that could break a URI.
-const PEER_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+// RustDesk peer IDs are alphanumeric (the client lower-cases / strips for display),
+// but direct-IP access lets you enter an IPv4 / host[:port] in the ID field, so allow
+// '.' and ':' too. Keep it permissive but bounded; reject anything that could break a URI.
+const PEER_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/
 const ALIAS_RE = /^[^\n\r]{1,64}$/u
 const NOTE_RE = /^[^\n\r]{0,256}$/u
 
