@@ -105,12 +105,19 @@ class Session {
    * @param {number} rows
    * @param {string} cwd
    * @param {string} [scrollbackPath] — if provided, scrollback persists here
+   * @param {{ env?: object, redactLog?: boolean }} [opts]
+   *   - env: extra env vars merged into the PTY env (e.g. SSHPASS for sshpass -e).
+   *     Used by the remote-ssh handler so a password never appears in argv.
+   *   - redactLog: when true, the spawn log line uses the command name only and
+   *     omits args (so a secret-bearing argv is never written to stdout/logs).
    */
-  constructor(_key, command, args, cols, rows, cwd, scrollbackPath) {
+  constructor(_key, command, args, cols, rows, cwd, scrollbackPath, opts = {}) {
     this._key = _key
     this._command = command
     this._args = args
     this._cwd = cwd
+    this._extraEnv = opts.env || null
+    this._redactLog = !!opts.redactLog
     this._scrollback = new ScrollbackBuffer({ path: scrollbackPath })
     /** @type {Set<import('ws').WebSocket>} */
     this._clients = new Set()
@@ -140,7 +147,12 @@ class Session {
     if (!existsSync(command)) {
       console.warn(`[pty] command not found: ${command}`)
     }
-    console.log(`[pty] spawn: command=${command} args=${JSON.stringify(this._args)} cwd=${cwd}`)
+    if (this._redactLog) {
+      // Secret-bearing argv (e.g. sshpass password path): log command only.
+      console.log(`[pty] spawn: command=${command} args=<redacted> cwd=${cwd}`)
+    } else {
+      console.log(`[pty] spawn: command=${command} args=${JSON.stringify(this._args)} cwd=${cwd}`)
+    }
     // Strip session-identity vars that Claude Code sets in the parent process so
     // that any `claude` invocations started inside this PTY (e.g. codex/agent/
     // claude tab types or a user typing `claude` in a bash tab) get a clean
@@ -157,6 +169,13 @@ class Session {
     const ptyEnv = { TERM: 'xterm-256color', COLORTERM: 'truecolor', FORCE_COLOR: '3' }
     for (const [k, v] of Object.entries(process.env)) {
       if (!STRIP_PTY_KEYS.has(k)) ptyEnv[k] = v
+    }
+    // Merge caller-supplied env last (e.g. SSHPASS for sshpass -e). These values
+    // are never logged (redactLog hides args; env is not printed here).
+    if (this._extraEnv) {
+      for (const [k, v] of Object.entries(this._extraEnv)) {
+        ptyEnv[k] = v
+      }
     }
 
     this._proc = pty.spawn(command, this._args, {
@@ -386,12 +405,14 @@ const sessions = new Map()
  * @param {number} cols
  * @param {number} rows
  * @param {string} cwd
+ * @param {string} [scrollbackPath]
+ * @param {{ env?: object, redactLog?: boolean }} [opts]
  * @returns {Session}
  */
-export function getOrCreate(sessionKey, command, args, cols, rows, cwd, scrollbackPath) {
+export function getOrCreate(sessionKey, command, args, cols, rows, cwd, scrollbackPath, opts) {
   let session = sessions.get(sessionKey)
   if (!session) {
-    session = new Session(sessionKey, command, args, cols, rows, cwd, scrollbackPath)
+    session = new Session(sessionKey, command, args, cols, rows, cwd, scrollbackPath, opts)
     sessions.set(sessionKey, session)
   }
   return session

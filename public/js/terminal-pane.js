@@ -92,13 +92,24 @@ const WS_PATH = '/ws/terminal'
 export class TerminalPane {
   /**
    * @param {HTMLElement} container — the .pane-terminal element
-   * @param {{ projectId: string, tabId: string, onStatusChange?: (connected: boolean) => void }} opts
+   * @param {{
+   *   projectId: string,
+   *   tabId: string,
+   *   onStatusChange?: (connected: boolean) => void,
+   *   wsPath?: string,            // override WS endpoint (default '/ws/terminal')
+   *   attachExtra?: object,       // extra fields merged into the 'attach' message
+   * }} opts
    */
   constructor(container, opts = {}) {
     this.container = container
     this.projectId = opts.projectId
     this.tabId = opts.tabId
     this.onStatusChange = opts.onStatusChange || (() => {})
+    // The remote-ssh terminal overlay reuses this class with a different WS
+    // endpoint + an sshMachineId in the attach payload. Default keeps the
+    // original project-tab behaviour so existing callers are unaffected.
+    this._wsPath = opts.wsPath || WS_PATH
+    this._attachExtra = opts.attachExtra || null
 
     this._ws = null
     this._exited = false
@@ -262,7 +273,7 @@ export class TerminalPane {
   _connect() {
     this._exited = false
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    this._ws = new WebSocket(`${proto}//${location.host}${WS_PATH}`)
+    this._ws = new WebSocket(`${proto}//${location.host}${this._wsPath}`)
 
     this._ws.onopen = () => {
       this._reconnectAttempts = 0 // reset backoff on success
@@ -275,6 +286,7 @@ export class TerminalPane {
         tabId: this.tabId,
         cols,
         rows,
+        ...(this._attachExtra || {}),
       })
       this._startPing()
       this.localEcho.enabled = true

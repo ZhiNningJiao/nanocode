@@ -23,7 +23,17 @@
  * from both history-replay and live-SSE paths in 11-C.
  */
 
+import { buildUserReplayId } from './claude-history.js'
+
 const NO_INPUT_TOOLS = new Set(['Task', 'TaskCreate'])
+
+// 块B修复: replay_id 让 ClaudeBlockRenderer 的 ReplayCache 能在回放时去重
+// (export 回放 vs cs.history 回放)。与 claude-history.js 同算法，避免重复实现。
+function assistantReplayId(msg, firstPartType) {
+  const id = msg && msg.id
+  if (!id) return null
+  return `oc:asst:${id}:${firstPartType || 'unknown'}`
+}
 
 function isObj(x) {
   return x && typeof x === 'object' && !Array.isArray(x)
@@ -161,8 +171,10 @@ function makeAssistantEvent(msg, parts) {
     if (c) content.push(c)
   }
   if (!content.length) return null
+  const firstPartType = parts[0] && parts[0].type
   return {
     type: 'assistant',
+    replay_id: assistantReplayId(msg, firstPartType),
     message: {
       id: (msg && msg.id) || `oc-msg-${Math.random().toString(36).slice(2, 10)}`,
       role: 'assistant',
@@ -172,9 +184,9 @@ function makeAssistantEvent(msg, parts) {
   }
 }
 
-function makeUserEvent(msg, content) {
+function makeUserEvent(msg, content, replayId) {
   if (!content || (Array.isArray(content) && !content.length)) return null
-  return {
+  const ev = {
     type: 'user',
     message: {
       id: (msg && msg.id) || `oc-msg-${Math.random().toString(36).slice(2, 10)}`,
@@ -182,6 +194,10 @@ function makeUserEvent(msg, content) {
       content,
     },
   }
+  // 块B修复: tool_result 类 user 事件用 opencode msg id 做 replay_id；
+  // 纯文本 user 事件由调用方用 buildUserReplayId(text, counts) 传入 replayId。
+  if (replayId) ev.replay_id = replayId
+  return ev
 }
 
 function makeResultEvent(stepFinish) {
@@ -227,12 +243,13 @@ function makeSystemEvent(sessionInfo) {
  *
  * A user-role opencode message with text emits a single user event.
  */
-export function messageToEvents(opencodeMessage) {
+export function messageToEvents(opencodeMessage, ctx) {
   if (!isObj(opencodeMessage)) return []
   const info = opencodeMessage.info || {}
   const parts = Array.isArray(opencodeMessage.parts) ? opencodeMessage.parts : []
   const role = info.role || (info.data && info.data.role)
   const events = []
+  const userTextCounts = (ctx && ctx.userTextCounts) || null
 
   if (role === 'user') {
     const textPart = parts.find((p) => p && p.type === 'text')
@@ -240,11 +257,15 @@ export function messageToEvents(opencodeMessage) {
     if (toolParts.length) {
       const trps = toolParts.map(toolResultPart).filter(Boolean)
       const content = buildUserMessageParts(textPart && textPart.text, trps)
-      const ev = makeUserEvent(info, content)
+      // tool_result 类 user 事件: 用 opencode msg id 做 replay_id (稳定)
+      const rid = info.id ? `oc:user:${info.id}:toolresult` : null
+      const ev = makeUserEvent(info, content, rid)
       if (ev) events.push(ev)
     } else if (textPart) {
       const c = userTextContent(textPart.text)
-      if (c) events.push(makeUserEvent(info, [c]))
+      // 纯文本 user 事件: 用 buildUserReplayId(text, counts) 与 driver echo 对齐
+      const rid = userTextCounts ? buildUserReplayId(textPart.text, userTextCounts) : null
+      if (c) events.push(makeUserEvent(info, [c], rid))
     }
     return events
   }
@@ -259,7 +280,8 @@ export function messageToEvents(opencodeMessage) {
     if (toolParts.length) {
       const trps = toolParts.map(toolResultPart).filter(Boolean)
       if (trps.length) {
-        const userEv = makeUserEvent(info, trps)
+        const rid = info.id ? `oc:user:${info.id}:toolresult` : null
+        const userEv = makeUserEvent(info, trps, rid)
         if (userEv) events.push(userEv)
       }
     }
@@ -282,8 +304,11 @@ export function exportToEvents(exportPayload) {
   const sys = makeSystemEvent(exportPayload.info)
   if (sys) events.push(sys)
   const messages = Array.isArray(exportPayload.messages) ? exportPayload.messages : []
+  // 块B修复: 内部 userTextCounts 让连续 user 文本消息拿到与 driver echo 对齐的
+  // user:<hash>:<N> replay_id，回放时 ReplayCache 能去重 export vs cs.history。
+  const ctx = { userTextCounts: new Map() }
   for (const m of messages) {
-    for (const ev of messageToEvents(m)) events.push(ev)
+    for (const ev of messageToEvents(m, ctx)) events.push(ev)
   }
   return events
 }
