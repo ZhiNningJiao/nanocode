@@ -18,6 +18,8 @@ import { t } from './i18n.js'
 
 const AIGW_KEY = 'aigw_model'
 const CLAUDE_MODEL_KEY = 'claude_model'
+const CODEX_MODEL_KEY = 'codex_model'
+const CLAUDE_EFFORT_KEY = 'claude_effort'
 const TEAM_KEY = 'claude_config_dir'
 
 let pluginsLoaded = false
@@ -42,11 +44,17 @@ export async function renderTeamModelPane(pane) {
   }
   try {
     await ensureSettings()
-    const [teamsRes, modelsRes] = await Promise.all([
-      fetch('/api/teams').then((r) => r.json()),
-      fetch('/api/aigw/models').then((r) => r.json()),
+    // Fetch all model-domain sources in parallel. Each degrades gracefully
+    // (never rejects) so a missing source doesn't hide the others. MES-13740 R2:
+    // init-snapshot (Claude CLI model hint) + codex/config (Codex model options)
+    // migrated here from the Settings page so the model domain has a single home.
+    const [teamsRes, modelsRes, snapshotRes, codexRes] = await Promise.all([
+      fetch('/api/teams').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+      fetch('/api/aigw/models').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+      fetch('/api/claude/init-snapshot').then((r) => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/codex/config').then((r) => r.ok ? r.json() : null).catch(() => null),
     ])
-    renderTeamModelContent(pane, teamsRes, modelsRes)
+    renderTeamModelContent(pane, teamsRes, modelsRes, snapshotRes, codexRes)
   } catch (err) {
     renderError(pane, err)
   }
@@ -67,10 +75,10 @@ function renderError(pane, err) {
   pane.appendChild(div)
 }
 
-function renderTeamModelContent(pane, teamsRes, modelsRes) {
+function renderTeamModelContent(pane, teamsRes, modelsRes, snapshotRes, codexRes) {
   pane.innerHTML = ''
   pane.appendChild(renderTeamSection(pane, teamsRes))
-  pane.appendChild(renderModelSection(modelsRes))
+  pane.appendChild(renderModelSection(modelsRes, snapshotRes, codexRes))
 }
 
 function renderTeamSection(pane, teamsRes) {
@@ -132,7 +140,7 @@ async function onTeamChange(pane, path) {
   }
 }
 
-function renderModelSection(modelsRes) {
+function renderModelSection(modelsRes, snapshotRes, codexRes) {
   const section = document.createElement('div')
   section.className = 'rp-section'
   const title = document.createElement('div')
@@ -145,6 +153,17 @@ function renderModelSection(modelsRes) {
   desc.textContent = t('plugins.model.desc')
   section.appendChild(desc)
 
+  const currentAigw = settings[AIGW_KEY] || ''
+  const currentClaude = settings[CLAUDE_MODEL_KEY] || ''
+  const currentCodex = settings[CODEX_MODEL_KEY] || ''
+  const currentEffort = settings[CLAUDE_EFFORT_KEY] || ''
+
+  // ── AIGW model (opencode / fable5 sessions via MESHY_AIGW_MODEL) ──
+  const aigwLabel = document.createElement('div')
+  aigwLabel.className = 'rp-subtitle'
+  aigwLabel.textContent = t('plugins.model.aigwTitle')
+  section.appendChild(aigwLabel)
+
   if (modelsRes?.error || !modelsRes?.models?.length) {
     const empty = document.createElement('div')
     empty.className = 'rp-empty'
@@ -152,35 +171,31 @@ function renderModelSection(modelsRes) {
       ? modelsRes.error
       : t('plugins.model.none')
     section.appendChild(empty)
-    return section
+  } else {
+    const select = document.createElement('select')
+    select.className = 'rp-select'
+    select.id = 'rp-aigw-model'
+    const noneOpt = document.createElement('option')
+    noneOpt.value = ''
+    noneOpt.textContent = t('plugins.model.default')
+    select.appendChild(noneOpt)
+    for (const m of modelsRes.models) {
+      const id = typeof m === 'string' ? m : m.id
+      const opt = document.createElement('option')
+      opt.value = id
+      opt.textContent = id
+      if (id === currentAigw) opt.selected = true
+      select.appendChild(opt)
+    }
+    select.addEventListener('change', () => onAigwModelChange(select.value))
+    section.appendChild(select)
   }
+  const aigwHint = document.createElement('div')
+  aigwHint.className = 'rp-hint'
+  aigwHint.textContent = t('plugins.model.hint')
+  section.appendChild(aigwHint)
 
-  const currentAigw = settings[AIGW_KEY] || ''
-  const currentClaude = settings[CLAUDE_MODEL_KEY] || ''
-  const select = document.createElement('select')
-  select.className = 'rp-select'
-  select.id = 'rp-aigw-model'
-  const noneOpt = document.createElement('option')
-  noneOpt.value = ''
-  noneOpt.textContent = t('plugins.model.default')
-  select.appendChild(noneOpt)
-  for (const m of modelsRes.models) {
-    const id = typeof m === 'string' ? m : m.id
-    const opt = document.createElement('option')
-    opt.value = id
-    opt.textContent = id
-    if (id === currentAigw) opt.selected = true
-    select.appendChild(opt)
-  }
-  select.addEventListener('change', () => onAigwModelChange(select.value))
-  section.appendChild(select)
-
-  const hint = document.createElement('div')
-  hint.className = 'rp-hint'
-  hint.textContent = t('plugins.model.hint')
-  section.appendChild(hint)
-
-  // Claude model (--model flag, already injected by SDK/tmux drivers)
+  // ── Claude model (--model flag) — migrated from Settings (MES-13740 R2) ──
   const claudeLabel = document.createElement('div')
   claudeLabel.className = 'rp-subtitle'
   claudeLabel.textContent = t('plugins.model.claudeTitle')
@@ -190,17 +205,94 @@ function renderModelSection(modelsRes) {
   claudeInput.type = 'text'
   claudeInput.className = 'rp-input'
   claudeInput.id = 'rp-claude-model'
-  claudeInput.value = currentClaude
+  // If the user has no saved model, pre-fill with the CLI-reported model from
+  // init-snapshot so they can see what's active without looking elsewhere.
+  // Don't overwrite a saved value. (Ported from Settings app.js.)
+  const snapshotModel = snapshotRes?.model || ''
+  claudeInput.value = currentClaude || snapshotModel
   claudeInput.placeholder = t('plugins.model.claudePlaceholder')
-  const saveBtn = document.createElement('button')
-  saveBtn.className = 'rp-btn rp-btn-sm'
-  saveBtn.textContent = t('plugins.model.save')
-  saveBtn.addEventListener('click', () => onClaudeModelChange(claudeInput.value))
+  const claudeSaveBtn = document.createElement('button')
+  claudeSaveBtn.className = 'rp-btn rp-btn-sm'
+  claudeSaveBtn.textContent = t('plugins.model.save')
+  claudeSaveBtn.addEventListener('click', () => onClaudeModelChange(claudeInput.value))
   const claudeRow = document.createElement('div')
   claudeRow.className = 'rp-btn-row'
   claudeRow.appendChild(claudeInput)
-  claudeRow.appendChild(saveBtn)
+  claudeRow.appendChild(claudeSaveBtn)
   section.appendChild(claudeRow)
+  // Show the current active CLI model as a hint (when no override is saved).
+  if (snapshotModel) {
+    const snapHint = document.createElement('div')
+    snapHint.className = 'rp-hint'
+    snapHint.textContent = `${t('plugins.model.cliCurrent')}: ${snapshotModel}`
+    section.appendChild(snapHint)
+  }
+
+  // ── Codex model — migrated from Settings (MES-13740 R2) ──
+  const codexLabel = document.createElement('div')
+  codexLabel.className = 'rp-subtitle'
+  codexLabel.textContent = t('plugins.model.codexTitle')
+  section.appendChild(codexLabel)
+
+  const codexSelect = document.createElement('select')
+  codexSelect.className = 'rp-select'
+  codexSelect.id = 'rp-codex-model'
+  const codexConfigModel = codexRes?.model || null
+  const codexDefaultOpt = document.createElement('option')
+  codexDefaultOpt.value = ''
+  codexDefaultOpt.textContent = codexConfigModel
+    ? `${t('plugins.model.codexDefault')} (config: ${codexConfigModel})`
+    : t('plugins.model.codexDefault')
+  codexSelect.appendChild(codexDefaultOpt)
+  if (codexConfigModel) {
+    const opt = document.createElement('option')
+    opt.value = codexConfigModel
+    opt.textContent = codexConfigModel
+    if (codexConfigModel === currentCodex) opt.selected = true
+    codexSelect.appendChild(opt)
+  }
+  if (currentCodex) {
+    codexSelect.value = currentCodex
+    if (codexSelect.value !== currentCodex) codexSelect.value = ''
+  }
+  codexSelect.addEventListener('change', () => onCodexModelChange(codexSelect.value))
+  section.appendChild(codexSelect)
+  const codexHint = document.createElement('div')
+  codexHint.className = 'rp-hint'
+  codexHint.textContent = t('plugins.model.codexHint')
+  section.appendChild(codexHint)
+
+  // ── Effort level — migrated from Settings (MES-13740 R2) ──
+  const effortLabel = document.createElement('div')
+  effortLabel.className = 'rp-subtitle'
+  effortLabel.textContent = t('plugins.model.effortTitle')
+  section.appendChild(effortLabel)
+
+  const effortSelect = document.createElement('select')
+  effortSelect.className = 'rp-select'
+  effortSelect.id = 'rp-claude-effort'
+  const effortOpts = [
+    ['', t('plugins.model.effortDefault')],
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['high', 'high'],
+    ['xhigh', 'xhigh'],
+    ['max', 'max'],
+  ]
+  for (const [val, label] of effortOpts) {
+    const opt = document.createElement('option')
+    opt.value = val
+    opt.textContent = label
+    if (val === currentEffort) opt.selected = true
+    effortSelect.appendChild(opt)
+  }
+  effortSelect.addEventListener('change', () => onEffortChange(effortSelect.value))
+  section.appendChild(effortSelect)
+  const effortHint = document.createElement('div')
+  effortHint.className = 'rp-hint'
+  effortHint.textContent = t('plugins.model.effortHint')
+  section.appendChild(effortHint)
+
   return section
 }
 
@@ -219,6 +311,26 @@ async function onAigwModelChange(model) {
   try {
     await updateSetting(AIGW_KEY, model)
     settings[AIGW_KEY] = model
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), t('plugins.model.applied'))
+  } catch (err) {
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), String(err.message || err), true)
+  }
+}
+
+async function onCodexModelChange(model) {
+  try {
+    await updateSetting(CODEX_MODEL_KEY, model)
+    settings[CODEX_MODEL_KEY] = model
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), t('plugins.model.applied'))
+  } catch (err) {
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), String(err.message || err), true)
+  }
+}
+
+async function onEffortChange(effort) {
+  try {
+    await updateSetting(CLAUDE_EFFORT_KEY, effort)
+    settings[CLAUDE_EFFORT_KEY] = effort
     flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), t('plugins.model.applied'))
   } catch (err) {
     flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), String(err.message || err), true)

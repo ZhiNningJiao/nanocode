@@ -12,8 +12,11 @@
  *   - address-book cap (MAX_MACHINES) rejects over-fill
  */
 
-import { describe, it, beforeEach } from 'node:test'
+import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   sanitizeMachine,
   listMachines,
@@ -21,6 +24,7 @@ import {
   updateMachine,
   deleteMachine,
   buildConnectUri,
+  buildSshCommand,
 } from '../../terminal/remote.js'
 
 function mockStore() {
@@ -196,6 +200,147 @@ describe('remote machines (MES-13740 需求10)', () => {
       // peerId regex allows _ and - (no encoding needed), but the encoder is
       // still applied so any future-allowed char stays safe.
       assert.equal(buildConnectUri({ peerId: 'a_b-c' }), 'rustdesk://connect/a_b-c')
+    })
+  })
+
+  describe('sanitizeMachine (ssh type)', () => {
+    it('accepts a minimal ssh machine with key auth', () => {
+      const r = sanitizeMachine({ type: 'ssh', alias: 'dev-212', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' })
+      assert.ok(r.ok, r.errors.join('; '))
+      assert.equal(r.machine.type, 'ssh')
+      assert.equal(r.machine.host, '172.30.20.212')
+      assert.equal(r.machine.user, 'Administrator')
+      assert.equal(r.machine.port, 22)
+      assert.equal(r.machine.key, '~/.ssh/id_cluster')
+      assert.equal(r.machine.sshPassword, '')
+      // rustdesk-only fields are dropped
+      assert.equal(r.machine.peerId, undefined)
+      assert.equal(r.machine.relay, undefined)
+    })
+
+    it('accepts an ssh machine with password auth', () => {
+      const r = sanitizeMachine({ type: 'ssh', alias: 'dev', host: '10.0.0.5', user: 'root', port: 2222, sshPassword: 's3cret' })
+      assert.ok(r.ok, r.errors.join('; '))
+      assert.equal(r.machine.port, 2222)
+      assert.equal(r.machine.sshPassword, 's3cret')
+      assert.equal(r.machine.key, '')
+    })
+
+    it('defaults type to rustdesk when omitted', () => {
+      const r = sanitizeMachine({ alias: 'a', peerId: '123' })
+      assert.ok(r.ok)
+      assert.equal(r.machine.type, 'rustdesk')
+    })
+
+    it('rejects ssh machine with empty host', () => {
+      const r = sanitizeMachine({ type: 'ssh', alias: 'a', host: '', user: 'root', key: '/k' })
+      assert.ok(!r.ok)
+      assert.ok(r.errors.some((e) => /host/.test(e)))
+    })
+
+    it('rejects ssh machine with empty user', () => {
+      const r = sanitizeMachine({ type: 'ssh', alias: 'a', host: '1.2.3.4', user: '', key: '/k' })
+      assert.ok(!r.ok)
+      assert.ok(r.errors.some((e) => /user/.test(e)))
+    })
+
+    it('rejects host with path traversal chars (.. / slash / leading -)', () => {
+      assert.ok(!sanitizeMachine({ type: 'ssh', alias: 'a', host: '../etc', user: 'r', key: '/k' }).ok)
+      assert.ok(!sanitizeMachine({ type: 'ssh', alias: 'a', host: 'a/b', user: 'r', key: '/k' }).ok)
+      assert.ok(!sanitizeMachine({ type: 'ssh', alias: 'a', host: '-evil', user: 'r', key: '/k' }).ok)
+    })
+
+    it('rejects port out of range', () => {
+      assert.ok(!sanitizeMachine({ type: 'ssh', alias: 'a', host: '1.2.3.4', user: 'r', port: 0, key: '/k' }).ok)
+      assert.ok(!sanitizeMachine({ type: 'ssh', alias: 'a', host: '1.2.3.4', user: 'r', port: 70000, key: '/k' }).ok)
+      assert.ok(!sanitizeMachine({ type: 'ssh', alias: 'a', host: '1.2.3.4', user: 'r', port: 'abc', key: '/k' }).ok)
+    })
+
+    it('rejects when both key and password are provided', () => {
+      const r = sanitizeMachine({ type: 'ssh', alias: 'a', host: '1.2.3.4', user: 'r', key: '/k', sshPassword: 'pw' })
+      assert.ok(!r.ok)
+      assert.ok(r.errors.some((e) => /both/.test(e)))
+    })
+
+    it('rejects when neither key nor password is provided', () => {
+      const r = sanitizeMachine({ type: 'ssh', alias: 'a', host: '1.2.3.4', user: 'r' })
+      assert.ok(!r.ok)
+      assert.ok(r.errors.some((e) => /key path or a password/.test(e)))
+    })
+  })
+
+  describe('buildSshCommand', () => {
+    let tmpDir
+    let keyPath
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), 'nano-ssh-test-'))
+      keyPath = join(tmpDir, 'id_test')
+      writeFileSync(keyPath, '-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n', { mode: 0o600 })
+    })
+    afterEach(() => { try { rmSync(tmpDir, { recursive: true, force: true }) } catch {} })
+
+    it('builds an ssh command with key auth', () => {
+      const r = buildSshCommand({ type: 'ssh', host: '172.30.20.212', user: 'Administrator', port: 22, key: keyPath })
+      assert.ok(r.ok, r.error)
+      assert.equal(r.command, 'ssh')
+      assert.deepEqual(r.args.slice(0, 2), ['-i', keyPath])
+      assert.ok(r.args.includes('-tt'))
+      assert.ok(r.args.includes('Administrator@172.30.20.212'))
+      assert.ok(r.args.some((a, i) => a === '-o' && r.args[i + 1] === 'StrictHostKeyChecking=accept-new'))
+      assert.deepEqual(r.env, {})
+      assert.ok(!r.logSummary.includes(keyPath), 'logSummary must not leak the key path')
+    })
+
+    it('includes the custom port in the args', () => {
+      const r = buildSshCommand({ type: 'ssh', host: '1.2.3.4', user: 'r', port: 2222, key: keyPath })
+      assert.ok(r.ok)
+      const i = r.args.indexOf('-p')
+      assert.equal(r.args[i + 1], '2222')
+    })
+
+    it('returns an error when the key file does not exist', () => {
+      const r = buildSshCommand({ type: 'ssh', host: '1.2.3.4', user: 'r', key: '/nonexistent/key' })
+      assert.ok(!r.ok)
+      assert.ok(/not found/.test(r.error))
+    })
+
+    it('builds an sshpass -e command with password auth when sshpass is resolved', () => {
+      const r = buildSshCommand(
+        { type: 'ssh', host: '1.2.3.4', user: 'r', port: 22, sshPassword: 's3cret' },
+        { sshpassPath: '/usr/bin/sshpass' },
+      )
+      assert.ok(r.ok, r.error)
+      assert.equal(r.command, '/usr/bin/sshpass')
+      assert.equal(r.args[0], '-e')
+      assert.equal(r.args[1], 'ssh')
+      assert.equal(r.env.SSHPASS, 's3cret')
+      assert.ok(!r.logSummary.includes('s3cret'), 'logSummary must not leak the password')
+    })
+
+    it('returns an error for password auth when sshpass is not installed', () => {
+      const r = buildSshCommand(
+        { type: 'ssh', host: '1.2.3.4', user: 'r', sshPassword: 'pw' },
+        { sshpassPath: null },
+      )
+      assert.ok(!r.ok)
+      assert.ok(/sshpass/.test(r.error))
+    })
+
+    it('returns an error for a non-ssh machine', () => {
+      const r = buildSshCommand({ type: 'rustdesk', peerId: '123' })
+      assert.ok(!r.ok)
+      assert.ok(/ssh machine/.test(r.error))
+    })
+
+    it('returns an error when host or user is missing', () => {
+      assert.ok(!buildSshCommand({ type: 'ssh', host: '', user: 'r', key: keyPath }).ok)
+      assert.ok(!buildSshCommand({ type: 'ssh', host: '1.2.3.4', user: '', key: keyPath }).ok)
+    })
+
+    it('returns an error when the machine has neither key nor password', () => {
+      const r = buildSshCommand({ type: 'ssh', host: '1.2.3.4', user: 'r' })
+      assert.ok(!r.ok)
+      assert.ok(/key nor a password/.test(r.error))
     })
   })
 })

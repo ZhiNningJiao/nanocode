@@ -13,6 +13,7 @@ import { WebSocketServer } from 'ws'
 import { getStore } from './store.js'
 import { createTerminalRoutes } from '../terminal/routes.js'
 import { createFileRoutes } from '../terminal/files.js'
+import { seedRemoteDefaults } from '../terminal/remote.js'
 import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete } from './qa-watcher.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 
@@ -131,6 +132,9 @@ for (const [route, dir] of Object.entries(vendorMap)) {
 const store = getStore()
 store.migrateProjectsJson(path.join(root, 'terminal', 'projects.json'))
 store.ensureStarterProject()
+// MES-13781: seed the remote address book with an example SSH dev machine
+// (dev-212) so others can copy the shape. Idempotent via a settings flag.
+try { seedRemoteDefaults(store) } catch (err) { console.warn('[seedRemoteDefaults]', err?.message) }
 setNtfyStore(store)
 
 const {
@@ -138,6 +142,7 @@ const {
   handleTerminalWs,
   handleTabsWs,
   setAgentHealthMonitor,
+  handleRemoteSshWs,
 } = createTerminalRoutes(store)
 
 // ─── Token auth middleware ─────────────────────────────────────────────────
@@ -729,6 +734,10 @@ const terminalWss = new WebSocketServer({
 })
 const tabsWss = new WebSocketServer({ noServer: true })
 const notifyWss = new WebSocketServer({ noServer: true })
+const remoteSshWss = new WebSocketServer({
+  noServer: true,
+  perMessageDeflate: deflateOpts,
+})
 
 server.on('upgrade', (req, socket, head) => {
   const parsed = new URL(req.url, `http://${req.headers.host}`)
@@ -757,6 +766,10 @@ server.on('upgrade', (req, socket, head) => {
     notifyWss.handleUpgrade(req, socket, head, (ws) => {
       notifyWss.emit('connection', ws, req)
     })
+  } else if (pathname === '/ws/remote-ssh') {
+    remoteSshWss.handleUpgrade(req, socket, head, (ws) => {
+      remoteSshWss.emit('connection', ws, req)
+    })
   } else {
     socket.destroy()
   }
@@ -764,6 +777,7 @@ server.on('upgrade', (req, socket, head) => {
 
 terminalWss.on('connection', (ws) => handleTerminalWs(ws))
 tabsWss.on('connection', (ws) => handleTabsWs(ws))
+remoteSshWss.on('connection', (ws) => handleRemoteSshWs(ws))
 notifyWss.on('connection', (ws) => {
   ws.on('error', () => {})
   // Push server version immediately on every (re)connect so the browser can

@@ -23,19 +23,19 @@ describe('plugins-registry (MES-13740 需求6)', () => {
   })
 
   it('builtinPlugin looks up by name', () => {
-    assert.equal(builtinPlugin('team-model').group, 'session')
-    assert.equal(builtinPlugin('usage').group, 'ops')
-    assert.equal(builtinPlugin('memory').group, 'session')
-    assert.equal(builtinPlugin('persona').group, 'session')
-    assert.equal(builtinPlugin('compare').group, 'artifacts')
-    assert.equal(builtinPlugin('remote').group, 'ops')
+    assert.equal(builtinPlugin('team-model').group, 'work')
+    assert.equal(builtinPlugin('usage').group, 'monitor')
+    assert.equal(builtinPlugin('memory').group, 'work')
+    assert.equal(builtinPlugin('persona').group, 'work')
+    assert.equal(builtinPlugin('compare').group, 'work')
+    assert.equal(builtinPlugin('remote').group, 'monitor')
     assert.equal(builtinPlugin('nope'), null)
   })
 
-  it('memory plugin (需求7) declares session group + fs permissions', () => {
+  it('memory plugin (需求7) declares work group + fs permissions', () => {
     const m = builtinPlugin('memory')
     assert.ok(m, 'memory plugin must be registered')
-    assert.equal(m.group, 'session')
+    assert.equal(m.group, 'work')
     assert.equal(m.tab.id, 'memory')
     assert.ok(Array.isArray(m.permissions))
     assert.ok(m.permissions.includes('fs.read'))
@@ -44,10 +44,10 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(v.ok, `memory manifest invalid: ${v.errors.join('; ')}`)
   })
 
-  it('persona plugin (需求8) declares session group + fs.read only', () => {
+  it('persona plugin (需求8) declares work group + fs.read only', () => {
     const m = builtinPlugin('persona')
     assert.ok(m, 'persona plugin must be registered')
-    assert.equal(m.group, 'session')
+    assert.equal(m.group, 'work')
     assert.equal(m.tab.id, 'persona')
     assert.equal(m.apiVersion, PLUGIN_API_VERSION)
     assert.ok(Array.isArray(m.permissions))
@@ -57,10 +57,10 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(v.ok, `persona manifest invalid: ${v.errors.join('; ')}`)
   })
 
-  it('compare plugin (需求14) declares artifacts group + git.read/fs.read', () => {
+  it('compare plugin (需求14) declares work group + git.read/fs.read', () => {
     const m = builtinPlugin('compare')
     assert.ok(m, 'compare plugin must be registered')
-    assert.equal(m.group, 'artifacts')
+    assert.equal(m.group, 'work')
     assert.equal(m.tab.id, 'compare')
     assert.equal(m.apiVersion, PLUGIN_API_VERSION)
     assert.ok(Array.isArray(m.permissions))
@@ -73,10 +73,10 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(v.ok, `compare manifest invalid: ${v.errors.join('; ')}`)
   })
 
-  it('remote plugin (需求10) declares ops group + network permission', () => {
+  it('remote plugin (需求10) declares monitor group + network permission', () => {
     const m = builtinPlugin('remote')
     assert.ok(m, 'remote plugin must be registered')
-    assert.equal(m.group, 'ops')
+    assert.equal(m.group, 'monitor')
     assert.equal(m.tab.id, 'remote')
     assert.equal(m.apiVersion, PLUGIN_API_VERSION)
     assert.ok(Array.isArray(m.permissions))
@@ -88,7 +88,7 @@ describe('plugins-registry (MES-13740 需求6)', () => {
   it('notify plugin (需求13) is settings-only (no tab) + network perm', () => {
     const m = builtinPlugin('notify')
     assert.ok(m, 'notify plugin must be registered')
-    assert.equal(m.group, 'ops')
+    assert.equal(m.group, 'monitor')
     assert.equal(m.tab, undefined, 'notify is settings-only — no tab')
     assert.ok(m.labelKey, 'settings-only plugins need a labelKey for the manager')
     assert.ok(Array.isArray(m.permissions))
@@ -100,17 +100,17 @@ describe('plugins-registry (MES-13740 需求6)', () => {
   it('tts plugin (需求13) is settings-only (no tab) + network perm', () => {
     const m = builtinPlugin('tts')
     assert.ok(m, 'tts plugin must be registered')
-    assert.equal(m.group, 'ops')
+    assert.equal(m.group, 'monitor')
     assert.equal(m.tab, undefined, 'tts is settings-only — no tab')
     assert.ok(m.labelKey, 'settings-only plugins need a labelKey for the manager')
     const v = validateManifest(m)
     assert.ok(v.ok, `tts manifest invalid: ${v.errors.join('; ')}`)
   })
 
-  it('services plugin (需求13) is a tab plugin (ops) + network perm', () => {
+  it('services plugin (需求13) is a tab plugin (monitor) + network perm', () => {
     const m = builtinPlugin('services')
     assert.ok(m, 'services plugin must be registered')
-    assert.equal(m.group, 'ops')
+    assert.equal(m.group, 'monitor')
     assert.equal(m.tab.id, 'services')
     assert.ok(m.permissions.includes('network'))
     const v = validateManifest(m)
@@ -119,7 +119,7 @@ describe('plugins-registry (MES-13740 需求6)', () => {
 
   it('accepts a settings-only manifest with no tab (需求13)', () => {
     const v = validateManifest({
-      name: 'cfg', version: '1.0.0', apiVersion: '1.0', group: 'ops',
+      name: 'cfg', version: '1.0.0', apiVersion: '1.0', group: 'monitor',
       permissions: [], labelKey: 'plugin.cfg.label',
     })
     assert.equal(v.ok, true)
@@ -136,7 +136,7 @@ describe('plugins-registry (MES-13740 需求6)', () => {
       name: 'future',
       version: '2.0.0',
       apiVersion: '2.0',
-      group: 'session',
+      group: 'work',
       tab: { id: 'future', labelKey: 'x' },
       permissions: [],
     })
@@ -155,7 +155,7 @@ describe('plugins-registry (MES-13740 需求6)', () => {
 
   it('rejects a manifest missing tab.id', () => {
     const v = validateManifest({
-      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'ops', tab: {},
+      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'monitor', tab: {},
     })
     assert.equal(v.ok, false)
     assert.ok(v.errors.some((e) => /tab\.id/.test(e)))
@@ -163,7 +163,7 @@ describe('plugins-registry (MES-13740 需求6)', () => {
 
   it('rejects non-array permissions', () => {
     const v = validateManifest({
-      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'ops',
+      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'monitor',
       tab: { id: 'bad' }, permissions: 'fs.read',
     })
     assert.equal(v.ok, false)
@@ -172,7 +172,7 @@ describe('plugins-registry (MES-13740 需求6)', () => {
 
   it('rejects non-string permission entries', () => {
     const v = validateManifest({
-      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'ops',
+      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'monitor',
       tab: { id: 'bad' }, permissions: ['fs.read', 42],
     })
     assert.equal(v.ok, false)
@@ -181,14 +181,14 @@ describe('plugins-registry (MES-13740 需求6)', () => {
 
   it('accepts a manifest with no permissions (optional field)', () => {
     const v = validateManifest({
-      name: 'ok', version: '1.0.0', apiVersion: '1.0', group: 'artifacts', tab: { id: 'ok' },
+      name: 'ok', version: '1.0.0', apiVersion: '1.0', group: 'work', tab: { id: 'ok' },
     })
     assert.equal(v.ok, true)
   })
 
   it('accepts an optional settings object (需求14 补充 ecosystem field)', () => {
     const v = validateManifest({
-      name: 'ok', version: '1.0.0', apiVersion: '1.0', group: 'artifacts',
+      name: 'ok', version: '1.0.0', apiVersion: '1.0', group: 'work',
       tab: { id: 'ok' }, settings: { defaultBranches: 20, foo: 'bar' },
     })
     assert.equal(v.ok, true)
@@ -196,7 +196,7 @@ describe('plugins-registry (MES-13740 需求6)', () => {
 
   it('rejects a non-object settings field', () => {
     const v = validateManifest({
-      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'artifacts',
+      name: 'bad', version: '1.0.0', apiVersion: '1.0', group: 'work',
       tab: { id: 'bad' }, settings: ['nope'],
     })
     assert.equal(v.ok, false)

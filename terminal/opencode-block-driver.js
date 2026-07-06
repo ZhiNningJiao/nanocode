@@ -29,6 +29,7 @@ import { spawn as defaultSpawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { messageToEvents } from './opencode-adapter.js'
+import { buildUserReplayId } from './claude-history.js'
 
 const DEFAULT_MODEL = 'litellm/claude-fable-5'
 const BASH = '/bin/bash'
@@ -100,14 +101,20 @@ export function createOpencodeBlockDriver({
   spawnFn = defaultSpawn,
   log = console,
 } = {}) {
-  async function runOpencodeTurn(cs, prompt, sessionKey, cwd) {
+  async function runOpencodeTurn(cs, prompt, sessionKey, cwd, opts = {}) {
     const trimmed = typeof prompt === 'string' ? prompt.trim() : ''
     if (!trimmed) return
+
+    // 块B修复: nonce 透传。客户端 sendInputWithEcho 发 claude-input 时带 _nonce，本地已 echo
+    // 一次。这里 driver echo 带 _nonce → 客户端 _handleUserEvent nonce 去重 → 不再重复渲染。
+    // 队列 drain 路径(rerunTurn)无 nonce → 正常渲染(用户需看到 drain 的消息)。
+    const nonce = opts?.nonce || null
 
     // Queue if a turn is already running (matches codex/claude driver behaviour)
     if (cs.busy) {
       if (!Array.isArray(cs.queue)) cs.queue = []
-      cs.queue.push(trimmed)
+      // 保留 nonce 以便 drain 时 driver echo 仍能对上客户端本地 echo（若客户端还在）
+      cs.queue.push({ text: trimmed, nonce })
       broadcast(cs, {
         type: 'system',
         subtype: 'info',
@@ -125,10 +132,13 @@ export function createOpencodeBlockDriver({
     const args = buildArgs(cs, model, trimmed)
     const env = buildEnv(home, model)
 
-    // Echo the user message immediately (claude does the same at
-    // claude-session-controller.js:1039 — the client shows it as a user block).
+    // Echo the user message immediately.带 _nonce(客户端本地已 echo → nonce 去重) +
+    // replay_id(历史回放去重: 与 export 侧 buildUserReplayId 对齐)。
+    if (!cs._ocReplayUserTextCounts) cs._ocReplayUserTextCounts = new Map()
     broadcast(cs, {
       type: 'user',
+      _nonce: nonce,
+      replay_id: buildUserReplayId(trimmed, cs._ocReplayUserTextCounts),
       message: { role: 'user', content: [{ type: 'text', text: trimmed }] },
     })
 
@@ -247,7 +257,8 @@ export function createOpencodeBlockDriver({
         const flushedCsQueue = cs.queue.length > 0 && (forceFlush || !wasInterrupted || autoFlushOnInterrupt)
         if (flushedCsQueue) {
           const allQueued = cs.queue.splice(0)
-          const combinedText = allQueued.join('\n\n')
+          // cs.queue 现存 {text, nonce} 对象(块B修复)；合并文本成单 turn，nonce 不再单个透传
+          const combinedText = allQueued.map((q) => (typeof q === 'string' ? q : q.text)).join('\n\n')
           if (wasInterrupted && !forceFlush) {
             broadcast(cs, { type: 'system', subtype: 'info', text: `Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''}…` })
           }
