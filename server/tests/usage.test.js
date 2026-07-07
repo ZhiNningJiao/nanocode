@@ -15,7 +15,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty, readClaudeOAuthCredentials, mapClaudeOAuthToWindows, computeBurnRate, projectHitAt, estimateClaudeWindowsFromTimeline, attachBurnAndProjection, streamJsonlTimeline, mapAigwSpendResponse, buildUsageSummary } from '../../terminal/usage.js'
+import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty, readClaudeOAuthCredentials, mapClaudeOAuthToWindows, computeBurnRate, projectHitAt, estimateClaudeWindowsFromTimeline, attachBurnAndProjection, streamJsonlTimeline, mapAigwSpendResponse, buildUsageSummary, fetchAigwKeyInfo, fetchAigwSpendLogs, buildAigwSourceSummary } from '../../terminal/usage.js'
+import { loadPersonalConfig, resetPersonalConfigCache } from '../../terminal/personal-config.js'
 import { createStore } from '../store.js'
 
 // node:sqlite is experimental (Node 22+). Guard so the temp-DB scan test is
@@ -551,6 +552,232 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
       assert.ok(aigw, 'aigw source present')
       assert.equal(aigw.available, false)
       assert.ok(aigw.error)
+    } finally {
+      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
+      else process.env.XDG_DATA_HOME = prevXdg
+      if (prevGlm === undefined) delete process.env.GLM_XDG_DATA_HOME
+      else process.env.GLM_XDG_DATA_HOME = prevGlm
+    }
+  })
+})
+
+// ── AIGW spend source (personal-config loader + /key/info + /spend/logs/v2) ────
+
+// Mock fetch for the AIGW /key/info + /spend/logs/v2 endpoints. Returns a
+// controlled Response-ish object (ok/status/json/headers.get) so the source
+// can be exercised hermetically without hitting the real gateway.
+function mockAigwFetch({ spend = 426.34, alias = 'test@meshy.ai', maxBudget = null, logs = [] } = {}) {
+  return async (url) => {
+    const u = String(url)
+    if (u.includes('/key/info')) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({ info: { spend, max_budget: maxBudget, key_alias: alias, budget_duration: null, budget_reset_at: null } }),
+        headers: { get: () => null },
+      }
+    }
+    if (u.includes('/spend/logs/v2')) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({ data: logs, total: logs.length, page: 1, page_size: 100, total_pages: 1 }),
+        headers: { get: () => null },
+      }
+    }
+    return { ok: false, status: 404, json: async () => ({}), headers: { get: () => null } }
+  }
+}
+
+describe('usage: personal-config loader (AIGW key/base/budgetUsd fallback)', () => {
+  let tmp
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-pcfg-')); resetPersonalConfigCache() })
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); resetPersonalConfigCache() })
+
+  it('falls back to ~/.config/meshy-aigw.key + default base + default budget when personal.json absent', () => {
+    // write a fake meshy-aigw.key under the fake home
+    mkdirSync(join(tmp, '.config'), { recursive: true })
+    writeFileSync(join(tmp, '.config', 'meshy-aigw.key'), 'fake-scattered-key\n')
+    const cfg = loadPersonalConfig({ home: tmp })
+    assert.equal(cfg.aigw.key, 'fake-scattered-key')
+    assert.equal(cfg.aigw.base, 'https://aigw.meshy.team')
+    assert.equal(cfg.aigw.budgetUsd, 1000)
+    assert.equal(cfg._source.personalFileExists, false)
+  })
+
+  it('reads aigw.key/base/budgetUsd + linear.apiKey + claude.teams from personal.json', () => {
+    mkdirSync(join(tmp, '.config', 'nanocode'), { recursive: true })
+    writeFileSync(join(tmp, '.config', 'nanocode', 'personal.json'), JSON.stringify({
+      linear: { apiKey: 'lin_fake' },
+      aigw: { base: 'https://aigw.test', key: 'aigw_fake', budgetUsd: 500 },
+      claude: { teams: [{ name: 'Custom', configDir: join(tmp, '.claude-x') }] },
+      ntfy: { url: 'http://ntfy.test/topic' },
+    }))
+    const cfg = loadPersonalConfig({ home: tmp })
+    assert.equal(cfg.aigw.key, 'aigw_fake')
+    assert.equal(cfg.aigw.base, 'https://aigw.test')
+    assert.equal(cfg.aigw.budgetUsd, 500)
+    assert.equal(cfg.linear.apiKey, 'lin_fake')
+    assert.equal(cfg.ntfy.url, 'http://ntfy.test/topic')
+    assert.equal(cfg.claude.teams.length, 1)
+    assert.equal(cfg.claude.teams[0].name, 'Custom')
+    assert.equal(cfg._source.personalFileExists, true)
+  })
+
+  it('claude.teams is null when not declared (so listTeams auto-discovers)', () => {
+    const cfg = loadPersonalConfig({ home: tmp })
+    assert.equal(cfg.claude.teams, null)
+  })
+
+  it('returns empty key when neither personal.json nor the scattered key file exist', () => {
+    const cfg = loadPersonalConfig({ home: tmp })
+    assert.equal(cfg.aigw.key, '')
+    assert.equal(cfg.linear.apiKey, '')
+  })
+})
+
+describe('usage: fetchAigwKeyInfo + fetchAigwSpendLogs (mocked)', () => {
+  it('fetchAigwKeyInfo parses nested info.spend + alias + max_budget', async () => {
+    const f = mockAigwFetch({ spend: 426.34, alias: 'zhiningjiao@meshy.ai', maxBudget: null })
+    const r = await fetchAigwKeyInfo({ key: 'k', base: 'https://aigw.test', fetchImpl: f })
+    assert.equal(r.spend, 426.34)
+    assert.equal(r.alias, 'zhiningjiao@meshy.ai')
+    assert.equal(r.maxBudget, null)
+    assert.equal(r.budgetResetAt, null)
+  })
+
+  it('fetchAigwKeyInfo returns { error } on HTTP failure (no throw)', async () => {
+    const f = async () => ({ ok: false, status: 403, json: async () => ({ detail: 'not allowed' }), headers: { get: () => null } })
+    const r = await fetchAigwKeyInfo({ key: 'k', base: 'https://aigw.test', fetchImpl: f })
+    assert.ok(r.error)
+    assert.equal(r.spend, undefined)
+  })
+
+  it('fetchAigwKeyInfo returns { error } when key is empty', async () => {
+    const r = await fetchAigwKeyInfo({ key: '', base: 'https://aigw.test', fetchImpl: mockAigwFetch() })
+    assert.ok(r.error)
+  })
+
+  it('fetchAigwSpendLogs aggregates window tokens + burn from data[]', async () => {
+    const baseTs = Date.parse('2026-07-06T05:00:00Z')
+    const logs = [
+      { startTime: '2026-07-06T05:00:00.000+00:00', total_tokens: 100000, model_group: 'litellm/SGLang-GLM-5.2' },
+      { startTime: '2026-07-06T05:20:00.000+00:00', total_tokens: 50000, model_group: 'litellm/SGLang-GLM-5.2' },
+    ]
+    const f = mockAigwFetch({ logs })
+    const r = await fetchAigwSpendLogs({ key: 'k', base: 'https://aigw.test', fetchImpl: f, now: baseTs + 60000 })
+    assert.equal(r.tokensWindow, 150000)
+    // span 20 min -> 150000/20 = 7500 per min
+    assert.equal(r.burnPerMin, 7500)
+    assert.equal(r.sampled, 2)
+    assert.equal(r.totalEntries, 2)
+  })
+
+  it('fetchAigwSpendLogs returns { error } on HTTP failure (no throw)', async () => {
+    const f = async () => ({ ok: false, status: 500, json: async () => ({}), headers: { get: () => null } })
+    const r = await fetchAigwSpendLogs({ key: 'k', base: 'https://aigw.test', fetchImpl: f })
+    assert.ok(r.error)
+  })
+})
+
+describe('usage: buildAigwSourceSummary (available path, mocked)', () => {
+  let tmp
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-aigw-')); resetPersonalConfigCache() })
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); resetPersonalConfigCache() })
+
+  function writePersonalConfig(home, aigw) {
+    mkdirSync(join(home, '.config', 'nanocode'), { recursive: true })
+    writeFileSync(join(home, '.config', 'nanocode', 'personal.json'), JSON.stringify({ aigw }))
+  }
+
+  it('returns available:true with real spend + local budgetUsd + burn (estimated)', async () => {
+    writePersonalConfig(tmp, { base: 'https://aigw.test', key: 'fake-test-key', budgetUsd: 500 })
+    const logs = [
+      { startTime: '2026-07-06T05:00:00.000+00:00', total_tokens: 100000, model_group: 'litellm/x' },
+      { startTime: '2026-07-06T05:20:00.000+00:00', total_tokens: 50000, model_group: 'litellm/x' },
+    ]
+    const f = mockAigwFetch({ spend: 426.34, alias: 'test@meshy.ai', maxBudget: null, logs })
+    const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: f, now: Date.parse('2026-07-06T06:00:00Z') })
+    assert.equal(src.available, true)
+    assert.equal(src.source, 'aigw-litellm')
+    assert.equal(src.alias, 'test@meshy.ai')
+    const w = src.windows[0]
+    assert.equal(w.used, 426.34)
+    assert.equal(w.limit, 500)            // local budgetUsd (key max_budget is null)
+    assert.equal(w.remaining, 500 - 426.34)
+    assert.equal(w.unit, 'usd')
+    assert.equal(w.estimated, true)       // budget is local
+    assert.equal(w.used_usd, 426.34)      // task unified-schema fields
+    assert.equal(w.budget_usd, 500)
+    assert.equal(w.remaining_usd, 500 - 426.34)
+    assert.equal(w.tokens_window, 150000)
+    assert.equal(w.burn_per_min, 7500)
+    assert.ok(w.note.includes('spend $426.34'))
+  })
+
+  it('uses key-side max_budget when it is non-null (>0)', async () => {
+    writePersonalConfig(tmp, { base: 'https://aigw.test', key: 'fake-test-key', budgetUsd: 500 })
+    const f = mockAigwFetch({ spend: 12.5, maxBudget: 100, logs: [] })
+    const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: f })
+    const w = src.windows[0]
+    assert.equal(w.used, 12.5)
+    assert.equal(w.limit, 100)            // key-side max_budget wins
+    assert.equal(w.remaining, 87.5)
+    assert.equal(w.budget_usd, 100)
+  })
+
+  it('degrades to unavailable when the key is absent (fake home, no files)', async () => {
+    const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: mockAigwFetch() })
+    assert.equal(src.available, false)
+    assert.ok(src.error)
+    assert.equal(src.windows[0].used, null)
+  })
+
+  it('degrades to unavailable when /key/info fails (key present but gateway 403)', async () => {
+    writePersonalConfig(tmp, { base: 'https://aigw.test', key: 'fake-test-key', budgetUsd: 500 })
+    const f = async () => ({ ok: false, status: 403, json: async () => ({ detail: 'not allowed' }), headers: { get: () => null } })
+    const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: f })
+    assert.equal(src.available, false)
+    assert.ok(src.error.includes('/key/info'))
+    assert.equal(src.windows[0].used, null)
+  })
+})
+
+describe('usage: buildUsageSummary AIGW-available path (mocked, hermetic)', () => {
+  let tmp
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-sum2-')); resetPersonalConfigCache() })
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); resetPersonalConfigCache() })
+
+  it('emits Team1 + AIGW with real spend/remaining when personal.json + fetchImpl are provided', async () => {
+    // fake home with .claude (no credentials -> jsonl degrade) + personal.json
+    mkdirSync(join(tmp, '.claude', 'projects'), { recursive: true })
+    mkdirSync(join(tmp, '.config', 'nanocode'), { recursive: true })
+    writeFileSync(join(tmp, '.config', 'nanocode', 'personal.json'), JSON.stringify({
+      aigw: { base: 'https://aigw.test', key: 'fake-test-key', budgetUsd: 1000 },
+    }))
+    const store = createStore(':memory:')
+    store.setSetting('claude_config_dir', join(tmp, '.claude'))
+    // isolate XDG so no real opencode DB leaks
+    const prevXdg = process.env.XDG_DATA_HOME
+    const prevGlm = process.env.GLM_XDG_DATA_HOME
+    process.env.XDG_DATA_HOME = join(tmp, 'xdg')
+    delete process.env.GLM_XDG_DATA_HOME
+    try {
+      const f = mockAigwFetch({ spend: 426.3456, alias: 'zhiningjiao@meshy.ai', maxBudget: null, logs: [] })
+      const sum = await buildUsageSummary({ home: tmp, store, now: NOW, fetchImpl: f })
+      assert.equal(sum.schemaVersion, 1)
+      // three sources: Team1 (Claude) + AIGW (Team2 ~/.claude-team2 absent in fake home)
+      const aigw = sum.sources.find((s) => s.source === 'aigw-litellm')
+      assert.ok(aigw, 'aigw source present')
+      assert.equal(aigw.available, true)
+      assert.equal(aigw.alias, 'zhiningjiao@meshy.ai')
+      const w = aigw.windows[0]
+      assert.equal(w.used, 426.3456)
+      assert.equal(w.budget_usd, 1000)
+      assert.equal(w.remaining_usd, 1000 - 426.3456)
+      assert.equal(w.estimated, true)
+      // the flat entries include the AIGW window with the unified-schema fields
+      const aigwEntry = sum.entries.find((e) => e.source === 'aigw-litellm')
+      assert.ok(aigwEntry)
+      assert.equal(aigwEntry.used_usd, 426.3456)
     } finally {
       if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
       else process.env.XDG_DATA_HOME = prevXdg

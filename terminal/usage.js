@@ -22,6 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { loadPersonalConfig, DEFAULT_AIGW_BASE, DEFAULT_AIGW_BUDGET_USD } from './personal-config.js'
 
 // node:sqlite is experimental (Node 22+). Guarded require so an unavailable /
 // older runtime degrades to an honest "source unavailable" instead of crashing
@@ -31,16 +32,21 @@ const _require = createRequire(import.meta.url)
 let _DatabaseSync = null
 try { ({ DatabaseSync: _DatabaseSync } = _require('node:sqlite')) } catch { /* node:sqlite unavailable */ }
 
-const AIGW_BASE = process.env.MESHY_AIGW_BASE || 'https://aigw.meshy.team'
-const AIGW_KEY_FILE = join(homedir(), '.config', 'meshy-aigw.key')
+// AIGW base + key come from the unified personal config (personal-config.js),
+// which reads ~/.config/nanocode/personal.json first then falls back to the
+// scattered ~/.config/meshy-aigw.key + $MESHY_AIGW_BASE + the default base.
+// `getAigwBase()` / `readAigwKey()` are kept as the single read points so every
+// call picks up the personal config (and tests can pass a fake `home`).
+function getAigwBase({ home } = {}) {
+  return loadPersonalConfig({ home }).aigw.base
+}
+function getAigwBudgetUsd({ home } = {}) {
+  return loadPersonalConfig({ home }).aigw.budgetUsd
+}
 
-/** Read the AIGW key from the well-known file (chmod 600). Returns '' if absent. */
-export function readAigwKey() {
-  try {
-    return readFileSync(AIGW_KEY_FILE, 'utf8').trim()
-  } catch {
-    return ''
-  }
+/** Read the AIGW key (personal config -> ~/.config/meshy-aigw.key). Returns '' if absent. */
+export function readAigwKey({ home } = {}) {
+  return loadPersonalConfig({ home }).aigw.key
 }
 
 /**
@@ -274,28 +280,48 @@ export function scanClaudeUsage(configDir, { maxFiles = 200, days } = {}) {
 
 /**
  * List available Claude "teams" — config dirs the user can switch between.
- * Always includes ~/.claude (team1 / default) plus any ~/.claude-team* dirs.
- * Returns [{ id, name, path, exists }].
+ * Auto-discovers ~/.claude (team1 / default) plus any ~/.claude-team* dirs,
+ * then MERGES any teams declared in the personal config (personal-config.js
+ * claude.teams[], loaded from ~/.config/nanocode/personal.json). Declared
+ * teams are unioned by resolved path so the existing Team1/Team2 discovery
+ * never regresses; the personal file only lets the user ADD/label extra teams
+ * (e.g. a team3 at a custom path). When the personal file is absent or has no
+ * claude.teams, behaviour is identical to before. Returns { teams, activePath }.
  */
 export function listTeams(home, store) {
   const homeDir = home || homedir()
   const teams = []
+  const seen = new Set()
+  const pushTeam = (id, name, path) => {
+    if (!path || seen.has(path)) return
+    seen.add(path)
+    teams.push({ id, name, path, exists: existsSync(path) })
+  }
+  // 1. auto-discover ~/.claude (team1) + ~/.claude-team*
   const defaultDir = join(homeDir, '.claude')
-  teams.push({ id: 'team1', name: 'Team 1', path: defaultDir, exists: existsSync(defaultDir) })
-  // scan ~/.claude-team* (and ~/.claude_team* for robustness)
+  pushTeam('team1', 'Team 1', defaultDir)
   let entries = []
   try { entries = readdirSync(homeDir, { withFileTypes: true }) } catch {}
-  const seen = new Set([defaultDir])
   for (const d of entries) {
     if (!d.isDirectory()) continue
     if (!d.name.startsWith('.claude-team') && !d.name.startsWith('.claude_team')) continue
     const fullPath = join(homeDir, d.name)
-    if (seen.has(fullPath)) continue
-    seen.add(fullPath)
-    // derive a friendly id from the dir name: .claude-team2 -> team2
     const m = d.name.match(/claude[-_](.+)$/)
     const id = m ? m[1] : d.name
-    teams.push({ id, name: `Team ${id}`, path: fullPath, exists: true })
+    pushTeam(id, `Team ${id}`, fullPath)
+  }
+  // 2. merge teams declared in the personal config (adds/labels extra teams)
+  const personal = loadPersonalConfig({ home: homeDir })
+  if (Array.isArray(personal?.claude?.teams)) {
+    for (const t of personal.claude.teams) {
+      const dir = t?.configDir || t?.path
+      if (!dir) continue
+      // derive a friendly id from the dir basename: .claude-team3 -> team3
+      const base = String(dir).split('/').filter(Boolean).pop() || dir
+      const m = String(base).match(/claude[-_](.+)$/)
+      const id = m ? m[1] : base
+      pushTeam(id, t.name || `Team ${id}`, dir)
+    }
   }
   const active = effectiveClaudeConfigDir(store, homeDir)
   return { teams, activePath: active }
@@ -309,19 +335,20 @@ export function listTeams(home, store) {
  * Never throws — returns { error } on failure so the route can 200 with a
  * clear reason (the UI labels the source honestly).
  */
-export async function listAigwModels({ key } = {}) {
-  const apiKey = (key ?? readAigwKey()).trim()
-  if (!apiKey) return { models: [], raw: 0, base: AIGW_BASE, keyPresent: false, error: 'AIGW key not found (~/.config/meshy-aigw.key)' }
-  const res = await fetch(`${AIGW_BASE}/v1/models`, {
+export async function listAigwModels({ key, home } = {}) {
+  const base = getAigwBase({ home })
+  const apiKey = (key ?? readAigwKey({ home })).trim()
+  if (!apiKey) return { models: [], raw: 0, base, keyPresent: false, error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)' }
+  const res = await fetch(`${base}/v1/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(10000),
   })
-  if (!res.ok) return { models: [], raw: 0, base: AIGW_BASE, keyPresent: true, error: `AIGW /v1/models HTTP ${res.status}` }
+  if (!res.ok) return { models: [], raw: 0, base, keyPresent: true, error: `AIGW /v1/models HTTP ${res.status}` }
   const data = await res.json()
   const all = Array.isArray(data?.data) ? data.data : []
   const ids = all.map((m) => m.id).filter((id) => typeof id === 'string' && id.startsWith('litellm/'))
   ids.sort()
-  return { models: ids, raw: all.length, base: AIGW_BASE, keyPresent: true }
+  return { models: ids, raw: all.length, base, keyPresent: true }
 }
 
 /**
@@ -334,10 +361,11 @@ export async function listAigwModels({ key } = {}) {
  * not an ongoing per-session accumulator. The UI accumulates probed costs in a
  * setting and labels ongoing-session cost honestly.
  */
-export async function probeAigwCost({ key, model = 'litellm/SGLang-GLM-latest', prompt = 'Reply with the single word: ok' } = {}) {
-  const apiKey = (key ?? readAigwKey()).trim()
-  if (!apiKey) return { error: 'AIGW key not found (~/.config/meshy-aigw.key)', keyPresent: false }
-  const res = await fetch(`${AIGW_BASE}/v1/chat/completions`, {
+export async function probeAigwCost({ key, model = 'litellm/SGLang-GLM-latest', prompt = 'Reply with the single word: ok', home } = {}) {
+  const base = getAigwBase({ home })
+  const apiKey = (key ?? readAigwKey({ home })).trim()
+  if (!apiKey) return { error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)', keyPresent: false }
+  const res = await fetch(`${base}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -357,7 +385,7 @@ export async function probeAigwCost({ key, model = 'litellm/SGLang-GLM-latest', 
   try { body = await res.json() } catch {}
   const usage = body?.usage || null
   if (!res.ok) {
-    return { error: `AIGW HTTP ${res.status}`, status: res.status, keyPresent: true, model, base: AIGW_BASE }
+    return { error: `AIGW HTTP ${res.status}`, status: res.status, keyPresent: true, model, base }
   }
   return {
     cost: costHeader !== null ? Number(costHeader) : null,
@@ -368,7 +396,7 @@ export async function probeAigwCost({ key, model = 'litellm/SGLang-GLM-latest', 
     completionTokens: usage?.completion_tokens ?? null,
     totalTokens: usage?.total_tokens ?? null,
     model,
-    base: AIGW_BASE,
+    base,
     keyPresent: true,
     note: 'nanocode made this call directly; opencode session calls are not proxied by nanocode so their per-call cost is not captured here.',
   }
@@ -738,10 +766,12 @@ export function scanAllOpencodeUsage(home) {
 // Three sources, each honest (no fabricated numbers — a missing limit is null):
 //   1. Claude Team1 (~/.claude)        — OAuth API (real % + reset) + jsonl burn
 //   2. Claude Team2 (~/.claude-team2)  — same
-//   3. AIGW (LiteLLM)                  — admin endpoints probed; a virtual
-//      LLM-only key is 403-rejected (only llm_api_routes allowed), so the source
-//      is labelled unavailable. If a real admin key is configured later, the
-//      probe picks up spend/budget automatically.
+//   3. AIGW (LiteLLM)                  — /key/info?key=KEY (real spend) +
+//      /spend/logs/v2 (window token burn). remaining = budgetUsd - spend,
+//      where budgetUsd comes from the personal config (default 1000); the
+//      key-side max_budget is null for a virtual LLM-only key, so the budget
+//      is local and the window is labelled `estimated:true`. Verified live
+//      2026-07-07: spend≈$426.35, alias zhiningjiao@meshy.ai.
 //
 // Unified per-window schema (the `entries[]` of /api/usage/summary):
 //   { source, label, windowType, used, limit|null, remaining|null, utilization|null,
@@ -757,10 +787,16 @@ const CLAUDE_OAUTH_USAGE_URL = process.env.CLAUDE_OAUTH_USAGE_URL || 'https://ap
 const CLAUDE_OAUTH_BETA = 'oauth-2025-04-20'
 const WINDOW_5H_MS = 5 * 60 * 60 * 1000
 const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000
-// LiteLLM admin/billing endpoints probed in order. A virtual LLM-only key can
-// only call `llm_api_routes`, so all of these 403; we still try them so a real
-// admin key works the moment it is configured. (CodexBar docs/litellm.md)
+// LiteLLM admin/billing endpoints probed in order by the legacy probeAigwSpend
+// fallback (CodexBar docs/litellm.md). The primary AIGW source now uses the
+// verified-live /key/info?key=KEY + /spend/logs/v2 flow (fetchAigwKeyInfo /
+// fetchAigwSpendLogs below); this list is kept for the legacy fallback.
 const AIGW_ADMIN_ENDPOINTS = ['/key/info', '/user/info', '/global/spend', '/spend/logs']
+// /spend/logs/v2 window sample size. The full history can be 20k+ rows; we
+// fetch the most-recent bounded page and compute burn from its active span
+// (labelled estimated/sampled in the window note).
+const AIGW_SPEND_LOGS_PAGE_SIZE = 100
+const AIGW_SPEND_LOGS_WINDOW_DAYS = 7
 
 /**
  * Read Claude Code OAuth credentials from `<configDir>/.credentials.json`.
@@ -1167,28 +1203,115 @@ export async function buildClaudeSourceSummary({ configDir, source, label, home,
   }
 }
 
-// ── AIGW (LiteLLM) spend probe ─────────────────────────────────────────────────
+// ── AIGW (LiteLLM) spend source ─────────────────────────────────────────────────
 
 /**
- * Probe the AIGW (LiteLLM) admin/billing endpoints for real spend/budget. Tries
- * /key/info, /user/info, /global/spend, /spend/logs in order (CodexBar
- * docs/litellm.md). A virtual LLM-only key is 403-rejected ("only allowed to
- * call routes: ['llm_api_routes']") — verified live on 2026-07-06. Never throws;
- * returns { available, tried[], error?, spend? } so the UI labels honestly.
- *
- * When a real admin key is configured, /key/info returns { soft_budget,
- * spend, token, ... } and /global/spend returns total spend — we map the first
- * usable response into a monthly-budget window. No fabricated numbers.
+ * Fetch AIGW `GET /key/info?key=KEY` (Authorization: Bearer KEY) and return the
+ * real spend + alias + the key-side max_budget. Verified live 2026-07-07: 200
+ * with `{ info: { spend, max_budget, key_alias, budget_duration, budget_reset_at, ... } }`
+ * (max_budget is null for a virtual LLM-only key, so remaining is computed
+ * locally from the personal-config budgetUsd — see buildAigwSourceSummary).
+ * Never throws; returns { error } so the source degrades honestly.
  */
-export async function probeAigwSpend({ key, fetchImpl } = {}) {
-  const apiKey = (key ?? readAigwKey()).trim()
+export async function fetchAigwKeyInfo({ key, base, fetchImpl } = {}) {
+  const apiKey = String(key ?? '').trim()
+  const b = base || getAigwBase()
+  if (!apiKey) return { error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)' }
+  const f = fetchImpl || fetch
+  try {
+    const res = await f(`${b}/key/info?key=${encodeURIComponent(apiKey)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) {
+      let body = null
+      try { body = await res.json() } catch {}
+      const msg = body?.detail || body?.error || `HTTP ${res.status}`
+      return { error: `AIGW /key/info HTTP ${res.status}: ${msg}`, status: res.status }
+    }
+    const body = await res.json()
+    const info = body?.info || body  // real API nests under info; flat fallback
+    const spend = Number(info?.spend)
+    if (!Number.isFinite(spend)) return { error: 'AIGW /key/info returned no usable spend field' }
+    return {
+      spend,
+      alias: typeof info?.key_alias === 'string' ? info.key_alias : null,
+      maxBudget: (info?.max_budget == null) ? null : (Number.isFinite(Number(info.max_budget)) ? Number(info.max_budget) : null),
+      budgetDuration: typeof info?.budget_duration === 'string' ? info.budget_duration : null,
+      budgetResetAt: typeof info?.budget_reset_at === 'string' ? info.budget_reset_at : null,
+      raw: { spend: info?.spend, max_budget: info?.max_budget, key_alias: info?.key_alias },
+    }
+  } catch (err) {
+    return { error: `AIGW /key/info fetch failed: ${err?.message || err}` }
+  }
+}
+
+/**
+ * Fetch AIGW `GET /spend/logs/v2?key=KEY&page=1&page_size=N&start_date=...&end_date=...`
+ * (Authorization: Bearer KEY) and aggregate the window's token detail into a
+ * burn rate. The page is bounded (AIGW_SPEND_LOGS_PAGE_SIZE) so a 20k+-entry
+ * history does not stall the endpoint; burn is computed from the sampled rows'
+ * active span (CodexBar-style, same computeBurnRate used for the jsonl
+ * timeline). Each row carries total_tokens/prompt/completion/model/model_group/
+ * startTime/endTime. Returns { tokensWindow, burnPerMin, rows, oldestTs,
+ * newestTs, sampled, totalEntries } or { error }. Never throws.
+ */
+export async function fetchAigwSpendLogs({ key, base, fetchImpl, days = AIGW_SPEND_LOGS_WINDOW_DAYS, now = Date.now() } = {}) {
+  const apiKey = String(key ?? '').trim()
+  const b = base || getAigwBase()
+  if (!apiKey) return { error: 'AIGW key not found' }
+  const f = fetchImpl || fetch
+  const fmt = (d) => new Date(d).toISOString().slice(0, 10)
+  const url = `${b}/spend/logs/v2?key=${encodeURIComponent(apiKey)}&page=1&page_size=${AIGW_SPEND_LOGS_PAGE_SIZE}&start_date=${fmt(now - days * 86400_000)}&end_date=${fmt(now)}`
+  try {
+    const res = await f(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(12000),
+    })
+    if (!res.ok) return { error: `AIGW /spend/logs/v2 HTTP ${res.status}` }
+    const body = await res.json()
+    const data = Array.isArray(body?.data) ? body.data : []
+    const rows = []
+    let tokensWindow = 0
+    for (const e of data) {
+      const tsStr = e?.startTime || e?.endTime
+      const ts = tsStr ? Date.parse(tsStr) : 0
+      const tok = Number(e?.total_tokens) || 0
+      if (!ts || !tok) continue
+      rows.push({ ts, tokens: tok, model: e?.model_group || e?.model || '(unknown)' })
+      tokensWindow += tok
+    }
+    rows.sort((a, b) => a.ts - b.ts)
+    const { burnRatePerMin, oldestTs, newestTs } = computeBurnRate(rows, { now })
+    return {
+      tokensWindow,
+      burnPerMin: burnRatePerMin,
+      rows: rows.length,
+      oldestTs, newestTs,
+      sampled: rows.length,
+      totalEntries: typeof body?.total === 'number' ? body.total : null,
+    }
+  } catch (err) {
+    return { error: `AIGW /spend/logs/v2 fetch failed: ${err?.message || err}` }
+  }
+}
+
+/**
+ * Legacy probe of LiteLLM admin/billing endpoints (kept as a fallback; the
+ * primary AIGW source uses fetchAigwKeyInfo + fetchAigwSpendLogs). Tries
+ * /key/info, /user/info, /global/spend, /spend/logs in order. Never throws;
+ * returns { available, tried[], error?, spend? } so a caller can label honestly.
+ */
+export async function probeAigwSpend({ key, base, fetchImpl, home } = {}) {
+  const apiKey = String(key ?? readAigwKey({ home })).trim()
+  const b = base || getAigwBase({ home })
   if (!apiKey) {
-    return { available: false, error: 'AIGW key not found (~/.config/meshy-aigw.key)', tried: [] }
+    return { available: false, error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)', tried: [] }
   }
   const f = fetchImpl || fetch
   const tried = []
   for (const ep of AIGW_ADMIN_ENDPOINTS) {
-    const url = `${AIGW_BASE}${ep}`
+    const url = `${b}${ep}`
     try {
       const res = await f(url, {
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -1200,9 +1323,6 @@ export async function probeAigwSpend({ key, fetchImpl } = {}) {
         try { body = await res.json() } catch {}
         return mapAigwSpendResponse(ep, body, { tried })
       }
-      // 403 with the "only allowed to call routes: ['llm_api_routes']" message
-      // means this is a virtual LLM-only key — no admin endpoint will work, so
-      // stop probing further and report unavailable honestly.
       if (res.status === 403) {
         let body = null
         try { body = await res.json() } catch {}
@@ -1228,25 +1348,28 @@ export async function probeAigwSpend({ key, fetchImpl } = {}) {
 
 /**
  * Pure: map a successful AIGW admin response into a monthly-budget window.
- * LiteLLM /key/info returns { soft_budget, spend, token, ... } (credits/usd);
- * /global/spend returns { total_spend }. We surface whatever the gateway gave
- * us, labelled with its unit, and never invent fields. Returns
- * { available:true, windows:[...], raw } or { available:false, error }.
+ * LiteLLM /key/info returns `{ info: { spend, max_budget, key_alias, ... } }`
+ * (verified live; max_budget is null for a virtual LLM-only key) — we accept
+ * both the nested `info.*` shape and the flat `{ soft_budget, spend }` shape
+ * (the latter is the legacy/CodexBar-documented shape). /global/spend returns
+ * `{ total_spend }`. We surface whatever the gateway gave us, labelled with its
+ * unit, and never invent fields. Returns { available:true, windows, raw } or
+ * { available:false, error }.
  */
 export function mapAigwSpendResponse(endpoint, body, { tried } = {}) {
   if (!body || typeof body !== 'object') {
     return { available: false, error: `${endpoint} returned no parseable body`, tried }
   }
-  // /key/info shape: { soft_budget, spend, token, budget_duration, ... }
   if (endpoint === '/key/info') {
-    const soft = Number(body.soft_budget)
-    const spend = Number(body.spend)
+    const info = body.info || body
+    const soft = Number(info?.soft_budget ?? body.soft_budget)
+    const spend = Number(info?.spend ?? body.spend)
     if (Number.isFinite(spend)) {
       const limit = Number.isFinite(soft) && soft > 0 ? soft : null
       return {
         available: true,
         tried,
-        raw: { endpoint, soft_budget: body.soft_budget, spend: body.spend },
+        raw: { endpoint, soft_budget: info?.soft_budget ?? body.soft_budget, spend: info?.spend ?? body.spend },
         windows: [{
           source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
           windowType: 'monthly',
@@ -1261,7 +1384,6 @@ export function mapAigwSpendResponse(endpoint, body, { tried } = {}) {
       }
     }
   }
-  // /global/spend shape: { total_spend, ... } — spend only, no limit
   if (endpoint === '/global/spend') {
     const total = Number(body.total_spend ?? body.spend)
     if (Number.isFinite(total)) {
@@ -1284,30 +1406,86 @@ export function mapAigwSpendResponse(endpoint, body, { tried } = {}) {
   return { available: false, error: `${endpoint} response had no usable spend/budget fields`, tried, raw: body }
 }
 
-/**
- * Build the AIGW (LiteLLM) source summary. Probes admin endpoints; honestly
- * labels unavailable when the key is virtual LLM-only (403). No fabricated numbers.
- */
-export async function buildAigwSourceSummary({ now = Date.now() } = {}) {
-  const probe = await probeAigwSpend({})
-  const base = {
-    source: 'aigw-litellm', label: 'AIGW (LiteLLM)', kind: 'litellm',
-    configDir: null, available: !!probe.available, tried: probe.tried || [],
-  }
-  if (probe.available) {
-    return { ...base, windows: probe.windows, raw: probe.raw }
-  }
+function aigwUnavailableWindow(note) {
   return {
-    ...base,
+    source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
+    windowType: 'monthly',
+    used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
+    resetAt: null, burnRatePerMin: null, projectedHitAt: null,
+    estimated: false, severity: null, usedTokens: null,
+    note,
+  }
+}
+
+/**
+ * Build the AIGW (LiteLLM) source summary. Calls /key/info?key=KEY for the real
+ * spend and /spend/logs/v2 for the window token burn. remaining = budgetUsd -
+ * spend (budgetUsd from the personal config, default 1000; the key-side
+ * max_budget is null for a virtual LLM-only key, so the budget is local and the
+ * window is labelled `estimated:true`). `home` / `fetchImpl` are threaded
+ * through so tests run hermetically against a fake home + mocked fetch. Never
+ * throws; degrades to an honest unavailable window when the key / endpoints fail.
+ */
+export async function buildAigwSourceSummary({ now = Date.now(), home, fetchImpl } = {}) {
+  const personal = loadPersonalConfig({ home })
+  const { base, key, budgetUsd } = personal.aigw
+  const baseFields = {
+    source: 'aigw-litellm', label: 'AIGW (LiteLLM)', kind: 'litellm',
+    configDir: null, base, alias: null, available: false, tried: [],
+  }
+  if (!key) {
+    return {
+      ...baseFields,
+      windows: [aigwUnavailableWindow('AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key).')],
+      error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)',
+    }
+  }
+  const info = await fetchAigwKeyInfo({ key, base, fetchImpl })
+  if (info.error) {
+    return {
+      ...baseFields, available: false,
+      tried: [{ endpoint: '/key/info', error: info.error }],
+      windows: [aigwUnavailableWindow(info.error)],
+      error: info.error,
+    }
+  }
+  // spend is real from the API; budget is local (key max_budget is null) → estimated.
+  const spend = info.spend
+  const limit = (info.maxBudget != null && info.maxBudget > 0) ? info.maxBudget : budgetUsd
+  const remaining = limit - spend
+  const utilization = limit > 0 ? (spend / limit) * 100 : null
+  // burn from the spend/logs/v2 window (best-effort; does not gate availability)
+  const logs = await fetchAigwSpendLogs({ key, base, fetchImpl, now })
+  const burnPerMin = logs && !logs.error ? (logs.burnPerMin || null) : null
+  const tokensWindow = logs && !logs.error ? (logs.tokensWindow || 0) : null
+  const logsNote = logs?.error
+    ? ` (spend/logs/v2 unavailable: ${logs.error})`
+    : (tokensWindow != null
+      ? ` Window burn from /spend/logs/v2 (last ${AIGW_SPEND_LOGS_WINDOW_DAYS}d, ${logs.sampled} sampled rows${logs.totalEntries != null ? ` of ${logs.totalEntries}` : ''}).`
+      : '')
+  const tried = [{ endpoint: '/key/info', status: 200 }]
+  if (logs?.error) tried.push({ endpoint: '/spend/logs/v2', error: logs.error })
+  else tried.push({ endpoint: '/spend/logs/v2', status: 200, sampled: logs?.sampled ?? null })
+  return {
+    ...baseFields,
+    available: true,
+    alias: info.alias,
+    tried,
+    raw: info.raw,
     windows: [{
       source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
       windowType: 'monthly',
-      used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
-      resetAt: null, burnRatePerMin: null, projectedHitAt: null,
-      estimated: false, severity: null, usedTokens: null,
-      note: probe.error || 'AIGW spend/budget unavailable.',
+      used: spend, limit, remaining, utilization, unit: 'usd',
+      resetAt: info.budgetResetAt || null,
+      burnRatePerMin: burnPerMin, projectedHitAt: null,
+      estimated: true,   // budget is local (key max_budget is null); remaining computed locally
+      severity: severityFor(utilization),
+      usedTokens: tokensWindow,
+      // AI-readable AIGW-specific fields (task unified schema):
+      used_usd: spend, budget_usd: limit, remaining_usd: remaining,
+      tokens_window: tokensWindow, burn_per_min: burnPerMin,
+      note: `AIGW LiteLLM /key/info: spend $${spend.toFixed(2)}${info.alias ? ` (alias ${info.alias})` : ''} of $${limit.toFixed(2)} budget (spend real from API, budget local from personal config → estimated). Remaining $${remaining.toFixed(2)}.${logsNote}`,
     }],
-    error: probe.error,
   }
 }
 
@@ -1315,18 +1493,21 @@ export async function buildAigwSourceSummary({ now = Date.now() } = {}) {
 
 /**
  * Build the three-source usage summary returned by GET /api/usage/summary.
- * Iterates the discovered Claude teams (Team1 ~/.claude + ~/.claude-team*) and
- * adds the AIGW source. Returns:
+ * Iterates the discovered Claude teams (personal config + ~/.claude + ~/.claude-team*)
+ * and adds the AIGW source. Returns:
  *   { generatedAt, schemaVersion, sources: [...], entries: [...] }
  * `entries` is a flat array of the unified per-window schema objects — the
  * AI-readable surface a secretary/agent fetches to read usage + limits and
- * decide degradation routing. Never throws; each source degrades independently.
+ * decide degradation routing. `home` is threaded to the AIGW source so it reads
+ * the personal config under that home (tests use a fake home); `fetchImpl`
+ * lets tests mock the AIGW endpoints hermetically. Never throws; each source
+ * degrades independently.
  */
-export async function buildUsageSummary({ home, store, now = Date.now() } = {}) {
+export async function buildUsageSummary({ home, store, now = Date.now(), fetchImpl } = {}) {
   const homeDir = home || homedir()
   const { teams } = listTeams(homeDir, store)
   const sources = []
-  // Claude teams: ~/.claude (team1) + ~/.claude-team* (CodexBar multi-account).
+  // Claude teams: ~/.claude (team1) + ~/.claude-team* + personal.claude.teams.
   for (const team of teams) {
     if (!team.exists) continue
     const src = await buildClaudeSourceSummary({
@@ -1337,8 +1518,8 @@ export async function buildUsageSummary({ home, store, now = Date.now() } = {}) 
     })
     sources.push(src)
   }
-  // AIGW (LiteLLM)
-  sources.push(await buildAigwSourceSummary({ now }))
+  // AIGW (LiteLLM) — /key/info real spend + /spend/logs/v2 burn + local budgetUsd.
+  sources.push(await buildAigwSourceSummary({ now, home: homeDir, fetchImpl }))
   // flat entries for AI consumption
   const entries = []
   for (const s of sources) {
