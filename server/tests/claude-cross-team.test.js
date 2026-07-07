@@ -13,7 +13,7 @@
  */
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createStore } from '../store.js'
@@ -245,11 +245,15 @@ describe('claude-history: scanRecentConversationsMulti (cross-team aggregation)'
     return { team1Dir, team2Dir }
   }
 
-  function writeSession(teamDir, cwd, sessionId, text) {
+  function writeSession(teamDir, cwd, sessionId, text, mtimeSec) {
     const slug = claudeProjectsDir(teamDir, cwd).split('/').pop()
     const projectDir = join(teamDir, 'projects', slug)
     mkdirSync(projectDir, { recursive: true })
-    writeFileSync(join(projectDir, `${sessionId}.jsonl`), makeJsonl(cwd, text))
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    writeFileSync(file, makeJsonl(cwd, text))
+    // 需求3 紧急修正: deterministic mtime control so sort-by-mtime tests aren't
+    // flaky on fast disks where sequential writes share a millisecond.
+    if (mtimeSec != null) utimesSync(file, mtimeSec, mtimeSec)
   }
 
   it('aggregates conversations across team1 and team2', () => {
@@ -305,15 +309,35 @@ describe('claude-history: scanRecentConversationsMulti (cross-team aggregation)'
     assert.equal(home.length, 1, 'no duplicate when cwd === home')
   })
 
-  it('respects the limit and sorts by byte size desc', () => {
+  // 需求3 紧急修正: sort primary key is now mtime DESC (最近的优先), byte size
+  // desc is only a secondary tiebreaker. A recent SMALL session must rank above
+  // an OLD BIG one — the old byte-size-desc-first sort let big stale sessions
+  // permanently suppress recent ones (master saw only old records on 9475).
+  it('sorts by most-recent mtime desc (recent small beats old big)', () => {
     const { team1Dir, team2Dir } = setupTeams()
     const projCwd = '/tmp/myproj'
-    writeSession(team1Dir, projCwd, 'small', 'tiny')
-    writeSession(team2Dir, projCwd, 'big', 'a much longer summary that produces a bigger file'.repeat(3))
+    const fresh = Math.floor(Date.now() / 1000)
+    const oldHr = fresh - 3600
+    writeSession(team1Dir, projCwd, 'small', 'tiny', fresh)
+    writeSession(team2Dir, projCwd, 'big', 'a much longer summary that produces a bigger file'.repeat(3), oldHr)
     const store = createStore(':memory:')
     const result = scanRecentConversationsMulti(tmp, projCwd, store, 1)
     assert.equal(result.length, 1)
-    // the bigger file wins
+    // the FRESHER file wins even though 'big' is much larger
+    assert.equal(result[0].sessionId, 'small')
+  })
+
+  it('uses byte size desc as a secondary tiebreaker when mtime is equal', () => {
+    const { team1Dir, team2Dir } = setupTeams()
+    const projCwd = '/tmp/myproj'
+    const t = Math.floor(Date.now() / 1000)
+    // Pin EQUAL mtimes so the secondary byte-size tiebreaker decides.
+    writeSession(team1Dir, projCwd, 'small', 'tiny', t)
+    writeSession(team2Dir, projCwd, 'big', 'a much longer summary that produces a bigger file'.repeat(3), t)
+    const store = createStore(':memory:')
+    const result = scanRecentConversationsMulti(tmp, projCwd, store, 1)
+    assert.equal(result.length, 1)
+    // equal mtime → the "较长" (bigger) file wins
     assert.equal(result[0].sessionId, 'big')
   })
 

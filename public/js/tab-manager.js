@@ -774,7 +774,10 @@ export class TabManager {
       if (c.isHome) badges.push('home')
       else if (c.cwd) badges.push(c.cwd)
       const badgeText = badges.length ? ` · ${badges.join(' / ')}` : ''
-      meta.textContent = `${c.messageCount} msgs · ${sizeKb} · ${c.relTime}${badgeText}`
+      // 需求3 紧急修正: relTime FIRST so the master can verify recency
+      // ("11m ago") at a glance — the sort is now mtime-desc, so the top of the
+      // list must visibly be the freshest conversation.
+      meta.textContent = `${c.relTime} · ${c.messageCount} msgs · ${sizeKb}${badgeText}`
       info.appendChild(summary)
       info.appendChild(meta)
       row.appendChild(info)
