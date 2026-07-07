@@ -695,14 +695,17 @@ export class TabManager {
     })
 
     // Load recent conversations. 需求5.3: remember the last chosen source
-    // (project/home/all) so cross-team sessions can surface without home
-    // drowning the size-sorted list.
-    this._pickerSource = localStorage.getItem('claudeResumeSource') || 'project'
+    // (project/home/all). Default is 'all' so the first screen surfaces the
+    // most-recent (mtime-desc) conversations across project + home — matching
+    // the backend default (scanRecentConversationsMulti source='all') and the
+    // 需求3 acceptance ("列表首屏必须出现最近 1 小时内活跃的会话"). A project
+    // with no recent claude sessions would otherwise show only stale entries.
+    this._pickerSource = localStorage.getItem('claudeResumeSource') || 'all'
     this._renderPickerBody(body)
   }
 
   async _renderPickerBody(body) {
-    const source = this._pickerSource || 'project'
+    const source = this._pickerSource || 'all'
     body.innerHTML = ''
 
     // 需求5.3: source switch — This project / Home / All
