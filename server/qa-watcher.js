@@ -27,16 +27,20 @@ function getNtfyConfig() {
   return { url, topic }
 }
 
+export function isNtfyConfigured() {
+  return getNtfyConfig() !== null
+}
+
 /**
  * POST a push notification to ntfy.
  * See https://docs.ntfy.sh/publish/ for header spec.
  */
 async function pushNtfy({ title, message, priority = 3, tags = [] }) {
   const cfg = getNtfyConfig()
-  if (!cfg) return
+  if (!cfg) return { ok: false, reason: 'not-configured' }
   const endpoint = cfg.url.replace(/\/$/, '') + '/' + cfg.topic
   try {
-    await fetch(endpoint, {
+    const resp = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Title': title,
@@ -47,9 +51,15 @@ async function pushNtfy({ title, message, priority = 3, tags = [] }) {
       body: message,
       signal: AbortSignal.timeout(8000),
     })
+    if (!resp.ok) {
+      console.warn(`[ntfy] push non-OK: HTTP ${resp.status}`)
+      return { ok: false, reason: `HTTP ${resp.status}` }
+    }
     console.log(`[ntfy] sent: ${title}`)
+    return { ok: true }
   } catch (err) {
     console.warn('[ntfy] push failed:', err.message)
+    return { ok: false, reason: err.message }
   }
 }
 
@@ -218,6 +228,15 @@ export async function pushNtfyTurnComplete({ elapsedSec }) {
     message: `Turn finished after ${elapsedSec}s`,
     priority: 3,
     tags: ['bell', 'robot'],
+  })
+}
+
+export async function pushNtfyMessage({ title, message, priority, tags }) {
+  return pushNtfy({
+    title: title || 'Nanocode',
+    message: message || '',
+    priority: Number.isFinite(priority) ? priority : 3,
+    tags: Array.isArray(tags) ? tags : [],
   })
 }
 
