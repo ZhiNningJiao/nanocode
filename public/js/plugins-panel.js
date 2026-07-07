@@ -239,19 +239,22 @@ export async function renderUsagePane(pane) {
     // Fetch usage sources in parallel. Each endpoint degrades to
     // { error } on failure (never rejects) so a missing opencode DB does not
     // hide the claude panel, and vice-versa. The summary endpoint drives the
-    // MES-13788 three-source CodexBar-style card at the top.
-    const [usage, opencode, summary] = await Promise.all([
+    // MES-13788 three-source CodexBar-style card at the top. The dedicated
+    // /api/usage/aigw-budget endpoint drives the headline remaining-$ card
+    // (MES-13788 延续: /user/info 剩余额度 + 自适配档).
+    const [usage, opencode, summary, budget] = await Promise.all([
       fetch('/api/usage/claude').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
       fetch('/api/usage/opencode').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
       fetch('/api/usage/summary').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+      fetch('/api/usage/aigw-budget').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
     ])
-    renderUsageContent(pane, usage, opencode, summary)
+    renderUsageContent(pane, usage, opencode, summary, budget)
   } catch (err) {
     renderError(pane, err)
   }
 }
 
-function renderUsageContent(pane, usage, opencode, summary) {
+function renderUsageContent(pane, usage, opencode, summary, budget) {
   pane.innerHTML = ''
   const refreshBtn = document.createElement('button')
   refreshBtn.className = 'rp-refresh-btn'
@@ -259,10 +262,135 @@ function renderUsageContent(pane, usage, opencode, summary) {
   refreshBtn.addEventListener('click', () => { usageLoaded = false; renderUsagePane(pane) })
   pane.appendChild(refreshBtn)
 
+  // Headline: AIGW monthly budget (remaining $ + bar + tier badge + reset/days).
+  pane.appendChild(renderAigwBudgetSection(budget))
   pane.appendChild(renderUsageSummarySection(summary))
   pane.appendChild(renderClaudeUsageSection(usage))
   pane.appendChild(renderOpencodeUsageSection(opencode))
   pane.appendChild(renderAigwProbeSection(pane))
+}
+
+// ── AIGW monthly budget card (MES-13788 延续: /user/info 剩余额度 + 自适配档) ──
+// Headline card: remaining $ + progress bar (spent/max) + tier badge (colored
+// by strategy) + reset date / days-left + advice. Mobile 390×844 + touch ≥44px
+// handled by the .rp-budget-* CSS. Falls back to an honest unavailable state.
+function renderAigwBudgetSection(budget) {
+  const section = document.createElement('div')
+  section.className = 'rp-section rp-budget-card'
+  const title = document.createElement('div')
+  title.className = 'rp-section-title'
+  title.textContent = t('usage.budget.title')
+  section.appendChild(title)
+  const desc = document.createElement('div')
+  desc.className = 'rp-hint'
+  desc.textContent = t('usage.budget.desc')
+  section.appendChild(desc)
+
+  if (!budget || budget.error || !budget.available) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = budget?.error || t('usage.budget.unavailable')
+    section.appendChild(empty)
+    return section
+  }
+
+  const maxBudget = Number(budget.max_budget)
+  const spend = Number(budget.spend)
+  const remaining = Number(budget.remaining)
+  const pctUsed = Number(budget.pct_used)
+  const pctRem = Number(budget.pct_remaining)
+  const daysLeft = budget.days_left
+  const tier = budget.tier || 'BALANCED'
+
+  // Headline row: remaining $ (big) + tier badge (colored)
+  const head = document.createElement('div')
+  head.className = 'rp-budget-head'
+  const rem = document.createElement('div')
+  rem.className = 'rp-budget-remaining'
+  const remLabel = document.createElement('span')
+  remLabel.className = 'rp-budget-remaining-label'
+  remLabel.textContent = t('usage.budget.remaining')
+  const remVal = document.createElement('span')
+  remVal.className = 'rp-budget-remaining-value'
+  remVal.textContent = Number.isFinite(remaining) ? `$${remaining.toFixed(2)}` : '—'
+  rem.appendChild(remLabel)
+  rem.appendChild(remVal)
+  head.appendChild(rem)
+
+  const tierBadge = document.createElement('span')
+  tierBadge.className = `rp-tier-badge rp-tier-${tier.toLowerCase().replace(/_/g, '-')}`
+  tierBadge.textContent = t(`usage.budget.tier.${tier}`) || tier
+  tierBadge.title = t(`usage.budget.tierLabel.${tier}`) || ''
+  head.appendChild(tierBadge)
+  section.appendChild(head)
+
+  // Progress bar: spent fills toward max_budget. Color by severity (used%).
+  const bar = document.createElement('div')
+  bar.className = 'rp-budget-bar'
+  const fill = document.createElement('div')
+  fill.className = 'rp-budget-bar-fill'
+  if (Number.isFinite(pctUsed)) fill.style.width = `${Math.min(100, Math.max(0, pctUsed))}%`
+  if (pctUsed >= 90) fill.classList.add('rp-budget-bar-critical')
+  else if (pctUsed >= 75) fill.classList.add('rp-budget-bar-warning')
+  bar.appendChild(fill)
+  section.appendChild(bar)
+
+  // Meta: spent of total · reset · days-left
+  const meta = document.createElement('div')
+  meta.className = 'rp-budget-meta'
+  const spentCell = document.createElement('span')
+  spentCell.className = 'rp-budget-meta-cell'
+  const spentLab = document.createElement('span')
+  spentLab.className = 'rp-budget-meta-label'
+  spentLab.textContent = t('usage.budget.spend')
+  const spentVal = document.createElement('span')
+  spentVal.className = 'rp-budget-meta-value'
+  spentVal.textContent = Number.isFinite(spend) && Number.isFinite(maxBudget)
+    ? `$${spend.toFixed(2)} ${t('usage.budget.of')} $${maxBudget.toFixed(0)}${Number.isFinite(pctUsed) ? ` (${Math.round(pctUsed)}%)` : ''}`
+    : (Number.isFinite(spend) ? `$${spend.toFixed(2)}` : '—')
+  spentCell.appendChild(spentLab)
+  spentCell.appendChild(spentVal)
+  meta.appendChild(spentCell)
+
+  const resetCell = document.createElement('span')
+  resetCell.className = 'rp-budget-meta-cell'
+  const resetLab = document.createElement('span')
+  resetLab.className = 'rp-budget-meta-label'
+  resetLab.textContent = t('usage.budget.reset')
+  const resetVal = document.createElement('span')
+  resetVal.className = 'rp-budget-meta-value'
+  resetVal.textContent = fmtBudgetReset(budget.reset_at, daysLeft)
+  resetCell.appendChild(resetLab)
+  resetCell.appendChild(resetVal)
+  meta.appendChild(resetCell)
+  section.appendChild(meta)
+
+  // Advice line (tier strategy hint)
+  if (budget.advice) {
+    const advice = document.createElement('div')
+    advice.className = 'rp-hint rp-budget-advice'
+    advice.textContent = budget.advice
+    section.appendChild(advice)
+  }
+  if (budget.user_email) {
+    const who = document.createElement('div')
+    who.className = 'rp-hint rp-budget-user'
+    who.textContent = budget.user_email
+    section.appendChild(who)
+  }
+  return section
+}
+
+function fmtBudgetReset(resetAt, daysLeft) {
+  if (!resetAt) return t('usage.budget.noReset')
+  const ts = Date.parse(resetAt)
+  if (!Number.isFinite(ts)) return t('usage.budget.noReset')
+  const date = new Date(ts)
+  const dateStr = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+  if (Number.isFinite(Number(daysLeft)) && Number(daysLeft) >= 0) {
+    return `${dateStr} (${daysLeft} ${t('usage.budget.daysLeft')})`
+  }
+  return dateStr
 }
 
 // ── MES-13788 three-source usage summary (CodexBar-style) ─────────────────────

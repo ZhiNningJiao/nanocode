@@ -1242,6 +1242,118 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   .rp-usage-est-tag { font-size: 10px; padding: 1px 6px; }
 }
 
+/* -- AIGW monthly budget card (MES-13788 延续: /user/info 剩余额度 + 档位) ------- */
+
+.rp-budget-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--s-2);
+  margin-bottom: var(--s-2);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rp-budget-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.rp-budget-remaining { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rp-budget-remaining-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rp-budget-remaining-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.1;
+}
+/* Tier badge: coloured by self-adapting strategy (aigw_budget.sh). */
+.rp-tier-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+}
+.rp-tier-free-only { color: var(--error); border-color: var(--error); background: var(--error-bg); }
+.rp-tier-balanced { color: var(--warning); border-color: var(--warning); background: var(--warning-bg); }
+.rp-tier-spend-paid { color: var(--success); border-color: var(--success); background: var(--success-bg); }
+.rp-tier-burn { color: #6d8eff; border-color: #6d8eff; background: rgba(109, 142, 255, 0.14); }
+
+.rp-budget-bar {
+  height: 10px;
+  width: 100%;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.rp-budget-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
+  transition: width var(--duration-fast) var(--ease-standard);
+  min-width: 0;
+}
+.rp-budget-bar-fill.rp-budget-bar-warning { background: var(--warning); }
+.rp-budget-bar-fill.rp-budget-bar-critical { background: var(--error); }
+
+.rp-budget-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.rp-budget-meta-cell { display: inline-flex; gap: 4px; align-items: baseline; }
+.rp-budget-meta-label { opacity: 0.7; }
+.rp-budget-meta-value { color: var(--text); }
+.rp-budget-advice {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+.rp-budget-user {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  opacity: 0.6;
+  word-break: break-all;
+}
+
+/* Mobile 390×844 + touch ≥44px for the budget card */
+@media (max-width: 480px) {
+  .rp-budget-card { padding: 12px; margin-bottom: 12px; gap: 10px; }
+  .rp-budget-remaining-value { font-size: 26px; }
+  .rp-tier-badge { font-size: 12px; padding: 6px 14px; min-height: 32px; }
+  .rp-budget-bar { height: 14px; }
+  .rp-budget-meta { font-size: 12px; flex-direction: column; gap: 6px; }
+  .rp-budget-meta-cell { min-height: 22px; }
+  .rp-budget-advice { font-size: 12px; padding-left: 10px; }
+  /* touch target ≥44px: enlarge the manual refresh button on mobile */
+  .rp-refresh-btn {
+    align-self: stretch;
+    padding: 12px var(--s-2);
+    font-size: 13px;
+    min-height: 44px;
+    margin-bottom: 12px;
+  }
+}
+
 /* -- Memory viewer plugin (MES-13740 需求7) ------------------------------- */
 
 .right-panel-pane[data-rp-pane="memory"] {

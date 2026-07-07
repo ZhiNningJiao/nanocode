@@ -321,12 +321,16 @@ function applySubTab(domain) {
   }
   if (tabId) {
     const entry = mountedEntryByTab(domain, tabId)
-    if (entry && !entry.rendered) {
+    if (entry) {
       const render = PLUGIN_RENDERERS[entry.plugin.name]
-      // Pass the plugin manifest as the 2nd arg so renderers can read
-      // `plugin.settings` (需求14 compare reads settings.defaultBranches).
-      // Existing renderers take (pane) and ignore the extra arg — backward-compatible.
-      if (render) render(entry.pane, entry.plugin)
+      // First activation renders the pane; plugins that opt into
+      // `refreshOnActivate` (e.g. usage — 主人要求每次切到该 tab 都刷新) are
+      // re-rendered on EVERY activation so their data stays fresh without a
+      // manual click. The usage renderer re-fetches and replaces content in
+      // place (it does not flash the skeleton after the first render).
+      if (render && (!entry.rendered || entry.plugin.refreshOnActivate)) {
+        render(entry.pane, entry.plugin)
+      }
       entry.rendered = true
     }
     if (tabId === 'plugin-manager') {
