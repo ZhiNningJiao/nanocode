@@ -1221,6 +1221,21 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .compare-arrow { color: var(--text-tertiary); font-size: 12px; }
 .compare-load-btn { padding: 3px 10px; font-size: 12px; }
 
+/* Repo selector row — drives the whole compare flow from a top-level launch */
+.compare-repo-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+.compare-repo-select {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 320px;
+}
+.compare-repo-select:disabled { opacity: 0.6; }
+
 .compare-summary {
   display: flex;
   gap: 6px;

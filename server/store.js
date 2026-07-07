@@ -184,8 +184,14 @@ export function createStore(filePath = ':memory:') {
   }
 
   function ensureStarterProject() {
-    if (data.projects.length > 0) return
+    // Idempotent: ensure the launch-cwd project exists so a top-level
+    // (~zhining, non-repo) launch is a first-class workspace — not stranded
+    // on the project picker. Previously this only fired when the store was
+    // empty, so a restart at ~zhining with existing projects left ~zhining
+    // unregistered and compare / resume unreachable from there. Safe because
+    // it is a no-op when a project with this cwd already exists.
     const cwd = process.cwd()
+    if (data.projects.some((p) => p.cwd === cwd)) return
     const name = cwd.split('/').filter(Boolean).pop() || 'project'
     createProject(name, cwd)
   }

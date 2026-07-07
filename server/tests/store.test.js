@@ -91,4 +91,38 @@ describe('store', () => {
     const fetched = store.getTab(project.id, tab.id)
     assert.equal(fetched.codexThreadId, 'thread-123')
   })
+
+  it('ensureStarterProject idempotently registers the launch cwd (top-level first-class)', () => {
+    const cwd = process.cwd()
+    const name = cwd.split('/').filter(Boolean).pop() || 'project'
+
+    // Empty store → creates the launch-cwd project.
+    store.ensureStarterProject()
+    let projects = store.listProjects()
+    assert.equal(projects.length, 1, 'creates one starter project on empty store')
+    assert.equal(projects[0].cwd, cwd)
+    assert.equal(projects[0].name, name)
+
+    // Calling again must NOT duplicate (idempotent on cwd).
+    store.ensureStarterProject()
+    projects = store.listProjects()
+    assert.equal(projects.length, 1, 'does not duplicate when cwd already a project')
+    assert.equal(projects[0].cwd, cwd)
+
+    // A pre-existing project with a DIFFERENT cwd does not block the launch
+    // cwd from being registered — so a restart at ~zhining with other projects
+    // already present still makes ~zhining a first-class workspace.
+    store.createProject('Other', '/tmp/some-other-repo')
+    store.ensureStarterProject()
+    projects = store.listProjects()
+    assert.equal(projects.length, 2, 'adds cwd project alongside existing ones')
+    const cwds = projects.map((p) => p.cwd)
+    assert.ok(cwds.includes(cwd), 'launch cwd is registered')
+    assert.ok(cwds.includes('/tmp/some-other-repo'), 'pre-existing project kept')
+
+    // Idempotent again with the other project present.
+    store.ensureStarterProject()
+    projects = store.listProjects()
+    assert.equal(projects.length, 2, 'still idempotent with mixed projects')
+  })
 })

@@ -10,6 +10,7 @@ import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
 import { createGitCompareRoutes } from './git-compare.js'
+import { createReposRoutes } from './repos-routes.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -686,8 +687,14 @@ export function createTerminalRoutes(store) {
     sessionController.handleReset(req, res)
   })
 
-  // ── Branch compare (git diff) ──────────────────────────────────────────────
+  // ── Branch compare (git diff) — project-scoped ─────────────────────────────
   router.use(createGitCompareRoutes(store))
+
+  // ── Repo-scoped compare — works from a top-level (~zhining) launch ─────────
+  // Independent of the project system: scans ~/code for git repos/worktrees
+  // and diffs two refs in a selected repo. Server is read-only to repos
+  // except `git fetch --all --prune` (no checkout/pull/working-tree changes).
+  router.use(createReposRoutes({ home }))
 
   return { router, handleTerminalWs: sessionController.handleTerminalWs, handleTabsWs }
 }
