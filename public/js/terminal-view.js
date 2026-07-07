@@ -594,15 +594,16 @@ function setupChatInput() {
     _persistQueueNow()
     updateQueueTray()
     const combined = all.join('\n\n')
-    // 1) Echo + push the combined message to the backend (lands in the server
-    //    queue while busy, or runs immediately if already idle). sendNow=true
-    //    suppresses the transient "queued" banner.
+    // 1) Echo + push the combined message to the backend. The backend WS
+    //    handler now applies the atomic "send now" — busy → enqueue + interrupt
+    //    + _forceFlushQueue (the queued message fires as the next turn); idle →
+    //    the message runs immediately. No separate HTTP /interrupt is sent,
+    //    which removes the WS-vs-HTTP race that could kill the just-started idle
+    //    turn and silently drop the user's message. sendNow=true also suppresses
+    //    the transient "queued" banner while a turn is winding down.
     if (activePane) activePane.sendInputWithEcho(combined, { sendNow: true })
     pushHistory(combined)
     resetHistoryNav()
-    // 2) Force-interrupt with andFlush so the running turn stops and the queued
-    //    message fires as the next turn — guaranteed, no client-side race.
-    doInterrupt({ force: true, andFlush: true })
     chatInput.focus()
   }
 
