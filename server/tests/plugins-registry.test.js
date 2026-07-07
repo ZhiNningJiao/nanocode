@@ -81,8 +81,20 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.equal(m.apiVersion, PLUGIN_API_VERSION)
     assert.ok(Array.isArray(m.permissions))
     assert.ok(m.permissions.includes('network'))
+    // MES-13824: remote plugin declares the personal.remote permission so the
+    // permission-gated injection (projectForPlugin) releases dev machines to it.
+    assert.ok(m.permissions.includes('personal.remote'))
     const v = validateManifest(m)
     assert.ok(v.ok, `remote manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('usage plugin (MES-13824) declares personal.aigw for masked AIGW key display', () => {
+    const m = builtinPlugin('usage')
+    assert.ok(m, 'usage plugin must be registered')
+    assert.ok(Array.isArray(m.permissions))
+    assert.ok(m.permissions.includes('personal.aigw'), 'usage must declare personal.aigw')
+    const v = validateManifest(m)
+    assert.ok(v.ok, `usage manifest invalid: ${v.errors.join('; ')}`)
   })
 
   it('notify plugin (需求13) is settings-only (no tab) + network perm', () => {

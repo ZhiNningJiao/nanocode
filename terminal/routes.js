@@ -12,8 +12,10 @@ import { createRecentAgentsService } from './recent-agents.js'
 import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
-import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand } from './remote.js'
+import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand, mergePersonalMachines } from './remote.js'
 import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
+import { loadPersonalConfig, projectForPlugin } from './personal-config.js'
+import { builtinPlugin } from '../public/js/plugins-registry.js'
 import { exportToEvents } from './opencode-adapter.js'
 import { listOpencodeSessions } from './opencode-sessions.js'
 
@@ -1049,7 +1051,7 @@ export function createTerminalRoutes(store, opts = {}) {
 
   // ── 需求10 remote machines plugin routes (address book + URI scheme) ───────
   //
-  // GET    /api/remote/machines          — list address book
+  // GET    /api/remote/machines          — list address book (+ personal dev machines)
   // POST   /api/remote/machines          — add a machine { alias, peerId, password?, relay?, note? }
   // POST   /api/remote/machines/:id      — update a machine (same body)
   // DELETE /api/remote/machines/:id      — remove a machine
@@ -1058,10 +1060,16 @@ export function createTerminalRoutes(store, opts = {}) {
   // RustDesk code. The browser turns a Connect click into a `rustdesk://` URI
   // that the user's local OS hands to the native RustDesk client. See REPORT
   // for the AGPL + web-client + relay-server research conclusions.
+  //
+  // MES-13824: read-only personal dev machines from the personal config are
+  // merged ahead of the store list (mergePersonalMachines). They have stable
+  // ids `personal:<alias>` and are tagged personal:true/readOnly:true; update
+  // and delete on them are rejected.
 
   router.get('/api/remote/machines', (req, res) => {
     try {
-      res.json({ machines: listMachines(store) })
+      const personal = loadPersonalConfig({ home }).remote.machines || []
+      res.json({ machines: mergePersonalMachines(listMachines(store), personal) })
     } catch (err) {
       console.error('[/api/remote/machines]', err)
       res.status(500).json({ error: err.message })
@@ -1081,6 +1089,9 @@ export function createTerminalRoutes(store, opts = {}) {
 
   router.post('/api/remote/machines/:id', (req, res) => {
     try {
+      if (String(req.params.id).startsWith('personal:')) {
+        return res.status(403).json({ error: 'personal machines are read-only' })
+      }
       const result = updateMachine(store, req.params.id, req.body)
       if (result.error) {
         const code = /not found/.test(result.error) ? 404 : 400
@@ -1095,6 +1106,9 @@ export function createTerminalRoutes(store, opts = {}) {
 
   router.delete('/api/remote/machines/:id', (req, res) => {
     try {
+      if (String(req.params.id).startsWith('personal:')) {
+        return res.status(403).json({ error: 'personal machines are read-only' })
+      }
       // Tear down any live SSH PTY for this machine before the record vanishes,
       // so a dangling terminal Tab reconnects cleanly (gets "machine not found")
       // instead of reattaching to a stale shell pointed at a deleted host.
@@ -1121,7 +1135,8 @@ export function createTerminalRoutes(store, opts = {}) {
   // surfacing it via REST gives a cleaner UX (no flash of empty xterm).
   router.post('/api/remote/machines/:id/connect', (req, res) => {
     try {
-      const machine = getMachine(store, req.params.id)
+      const personal = loadPersonalConfig({ home }).remote.machines || []
+      const machine = getMachine(store, req.params.id, personal)
       if (!machine) return res.status(404).json({ error: 'machine not found' })
       if (machine.type !== 'ssh') return res.status(400).json({ error: 'not an ssh machine' })
       const built = buildSshCommand(machine, { sshpassPath: machine.sshPassword ? resolveSshpass() : null })
@@ -1195,6 +1210,27 @@ export function createTerminalRoutes(store, opts = {}) {
 
   router.post('/api/projects/:id/tabs/:tabId/reset', (req, res) => {
     sessionController.handleReset(req, res)
+  })
+
+  // ── GET /api/plugin/config?plugin=<name> (MES-13824) ────────────────────────
+  //
+  // Permission-gated personal-config injection for plugins. Looks up the named
+  // built-in plugin manifest, projects ONLY the personal-config fields its
+  // declared 'personal.*' permissions allow, and returns them MASKED — secrets
+  // are replaced by hasKey + a masked form (e.g. lin_…7f3a), never plaintext.
+  // This is the frontend-safe path; real secret values are never serialized to
+  // the browser (server-side plugin code uses resolvePluginSecrets directly).
+  router.get('/api/plugin/config', (req, res) => {
+    try {
+      const name = String(req.query.plugin || '')
+      const manifest = builtinPlugin(name)
+      if (!manifest) return res.status(404).json({ error: 'unknown plugin' })
+      const cfg = loadPersonalConfig({ home })
+      res.json({ plugin: name, config: projectForPlugin(cfg, manifest) })
+    } catch (err) {
+      console.error('[/api/plugin/config]', err)
+      res.status(500).json({ error: err.message })
+    }
   })
 
   return {

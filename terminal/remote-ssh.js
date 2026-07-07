@@ -28,6 +28,7 @@ import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import * as sessions from './sessions.js'
 import { getMachine, buildSshCommand } from './remote.js'
+import { loadPersonalConfig } from './personal-config.js'
 
 let _sshpassPath = undefined // null = confirmed absent, string = path, undefined = not probed yet
 
@@ -63,7 +64,11 @@ export function createRemoteSshHandler(store) {
         return
       }
 
-      const machine = getMachine(store, sshMachineId)
+      // MES-13824: a personal dev machine (id `personal:<alias>`) is resolved
+      // from the personal config, not the store. loadPersonalConfig never
+      // throws; .remote.machines is null when absent (→ [] fallback).
+      const personalMachines = loadPersonalConfig({ home }).remote.machines || []
+      const machine = getMachine(store, sshMachineId, personalMachines)
       if (!machine) {
         ws.send(JSON.stringify({ type: 'error', error: 'machine not found' }))
         return
