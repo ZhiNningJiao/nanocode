@@ -3200,6 +3200,33 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   padding: var(--s-2);
   font-size: 12px;
 }
+/* MES-13804: up-one-level + computer/drives toolbar. Buttons hit the 44px
+   mobile touch target via the .folder-toolbar button rule below. */
+.folder-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.folder-toolbar button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.folder-toolbar button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.folder-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.folder-up-btn { min-width: 32px; }
 .folder-breadcrumb {
   font-family: var(--font-mono);
   font-size: 11.5px;
@@ -3719,6 +3746,17 @@ body.workspace-active .landing-overlay { display: none; }
   #rp-claude-effort { min-height: 44px; }
   .right-panel-pane[data-rp-pane="team-model"] .rp-btn-sm { min-height: 44px; }
   .right-panel-pane[data-rp-pane="team-model"] .rp-option { min-height: 44px; }
+
+  /* MES-13804: folder picker ≥44px touch targets, fills the 390×844 dialog. */
+  .folder-browser { padding: 10px; font-size: 13px; }
+  .folder-toolbar button { min-height: 44px; min-width: 44px; padding: 8px 14px; font-size: 13px; }
+  .folder-up-btn { min-width: 44px; }
+  .folder-breadcrumb { font-size: 12px; padding-bottom: 8px; }
+  .folder-breadcrumb a { display: inline-block; padding: 6px 4px; min-height: 36px; }
+  .folder-list { max-height: 260px; }
+  .folder-list button { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+  .folder-current { min-height: 32px; font-size: 12px; }
+  #folder-select-btn { min-height: 44px; font-size: 13px; }
 
 }
 

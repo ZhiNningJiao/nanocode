@@ -1,10 +1,13 @@
 /** Sidebar — project list with add/delete, active project indicator. */
 
 import { state } from './state.js'
-import { fetchProjects, createProject, deleteProject, fetchDir, testSsh } from './api.js'
+import { fetchProjects, createProject, deleteProject, fetchDir, fetchDrives, testSsh } from './api.js'
 
 let _onProjectSwitch = null
 let browsePath = ''
+// MES-13804: server-reported platform ('win32' | 'posix'), stashed from each
+// /api/fs response so the breadcrumb and path-join use the right separator.
+let browsePlatform = 'posix'
 
 const SIDEBAR_COLLAPSED_KEY = 'sidebarCollapsed'
 
@@ -69,6 +72,14 @@ export function initSidebar(onProjectSwitch) {
   })
   selectFolderBtn?.addEventListener('click', selectCurrentFolder)
 
+  // MES-13804: "Up one level" + "Computer" toolbar for cross-platform nav.
+  const upBtn = document.getElementById('folder-up-btn')
+  const drivesBtn = document.getElementById('folder-drives-btn')
+  upBtn?.addEventListener('click', () => {
+    if (!upBtn.disabled && upBtn.dataset.parent) loadFolder(upBtn.dataset.parent)
+  })
+  drivesBtn?.addEventListener('click', loadDrives)
+
   const remoteToggle = document.getElementById('proj-remote-toggle')
   const localFields = document.getElementById('proj-local-fields')
   const remoteFields = document.getElementById('proj-remote-fields')
@@ -89,7 +100,7 @@ export function initSidebar(onProjectSwitch) {
   if (cwdInput && nameInput) {
     cwdInput.addEventListener('input', () => {
       if (nameInput.dataset.manual) return
-      const segs = cwdInput.value.trim().replace(/\/$/, '').split('/').filter(Boolean)
+      const segs = cwdInput.value.trim().replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean)
       const last = segs[segs.length - 1] || ''
       if (last) nameInput.value = last
     })
@@ -252,21 +263,78 @@ function openAddDialog() {
 function selectCurrentFolder() {
   if (!browsePath) return
   document.getElementById('proj-cwd').value = browsePath
-  const segments = browsePath.replace(/\/$/, '').split('/').filter(Boolean)
-  const name = segments.length ? segments[segments.length - 1] : ''
+  const segs = browsePath.replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean)
+  const name = segs.length ? segs[segs.length - 1] : ''
   const nameInput = document.getElementById('proj-name')
   if (name && !nameInput.value.trim()) nameInput.value = name
 }
 
+// True if a path looks like a Windows drive-prefixed path (C:\ or C:/).
+function isWinPath(p) {
+  return /^([A-Za-z]:)[\\/]/.test(p || '')
+}
+
+// Join a base directory and a child name with the correct separator for the
+// path's platform. Handles drive root (C:\) + name → C:\name.
+function joinPath(base, name, platform) {
+  if (!base) return name
+  const win = platform === 'win32' || isWinPath(base)
+  const sep = win ? '\\' : '/'
+  if (base === '/') return '/' + name
+  if (win && /^[A-Za-z]:\\?$/.test(base)) return base + name
+  return base + sep + name
+}
+
+async function loadDrives() {
+  try {
+    const data = await fetchDrives()
+    if (data.platform) browsePlatform = data.platform
+    browsePath = ''
+    renderBreadcrumb('')
+    renderDriveList(data.drives || [])
+    const upBtn = document.getElementById('folder-up-btn')
+    if (upBtn) { upBtn.disabled = true; delete upBtn.dataset.parent }
+    const cur = document.getElementById('folder-current')
+    if (cur) cur.textContent = 'Computer'
+  } catch (err) {
+    console.error(err)
+  }
+}
+
+function renderDriveList(drives) {
+  const el = document.getElementById('folder-list')
+  if (!el) return
+  el.textContent = ''
+  for (const d of drives) {
+    if (!d.isDir) continue
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.textContent = d.name
+    btn.title = d.name
+    btn.addEventListener('click', () => loadFolder(d.name))
+    el.appendChild(btn)
+  }
+}
+
 async function loadFolder(path) {
-  browsePath = path
   try {
     const data = await fetchDir(path || undefined)
+    if (data.platform) browsePlatform = data.platform
     browsePath = data.path
     renderBreadcrumb(data.path)
     renderFolderList(data.entries || [], data.path)
-    const current = document.getElementById('folder-current')
-    if (current) current.textContent = data.path || '(home)'
+    const upBtn = document.getElementById('folder-up-btn')
+    if (upBtn) {
+      if (data.parent) {
+        upBtn.disabled = false
+        upBtn.dataset.parent = data.parent
+      } else {
+        upBtn.disabled = true
+        delete upBtn.dataset.parent
+      }
+    }
+    const cur = document.getElementById('folder-current')
+    if (cur) cur.textContent = data.path || '(home)'
   } catch (err) {
     console.error(err)
   }
@@ -277,32 +345,80 @@ function renderBreadcrumb(path) {
   if (!el) return
   el.textContent = ''
 
-  // Two anchors at the start: "/" for absolute root and "Home" for $HOME.
-  // Users can drill into /opt, /srv, /var, etc. by starting at "/" and
-  // clicking through segments.
-  const rootLink = document.createElement('a')
-  rootLink.href = '#'
-  rootLink.textContent = '/'
-  rootLink.title = 'Filesystem root'
-  rootLink.addEventListener('click', (event) => {
+  // "Computer" anchor → drive list (Windows) / root (POSIX, single '/').
+  const comp = document.createElement('a')
+  comp.href = '#'
+  comp.textContent = 'Computer'
+  comp.title = 'Drives / filesystem roots'
+  comp.addEventListener('click', (event) => {
     event.preventDefault()
-    loadFolder('/')
+    loadDrives()
   })
-  el.appendChild(rootLink)
+  el.appendChild(comp)
 
-  el.appendChild(document.createTextNode(' '))
+  // POSIX-only convenience: "/" root + "Home" anchors so users can still jump
+  // to /opt, /srv, etc. On Windows these are meaningless (no '/').
+  if (browsePlatform !== 'win32' && !isWinPath(path)) {
+    el.appendChild(document.createTextNode(' '))
+    const rootLink = document.createElement('a')
+    rootLink.href = '#'
+    rootLink.textContent = '/'
+    rootLink.title = 'Filesystem root'
+    rootLink.addEventListener('click', (event) => {
+      event.preventDefault()
+      loadFolder('/')
+    })
+    el.appendChild(rootLink)
 
-  const homeLink = document.createElement('a')
-  homeLink.href = '#'
-  homeLink.textContent = 'Home'
-  homeLink.title = 'Your home directory'
-  homeLink.addEventListener('click', (event) => {
-    event.preventDefault()
-    loadFolder('')
-  })
-  el.appendChild(homeLink)
+    el.appendChild(document.createTextNode(' '))
+    const homeLink = document.createElement('a')
+    homeLink.href = '#'
+    homeLink.textContent = 'Home'
+    homeLink.title = 'Your home directory'
+    homeLink.addEventListener('click', (event) => {
+      event.preventDefault()
+      loadFolder('')
+    })
+    el.appendChild(homeLink)
+  }
 
-  if (!path || path === '/') return
+  if (!path) return
+
+  if (isWinPath(path)) {
+    // Windows: drive root + remaining segments, '\' separated.
+    const m = path.match(/^([A-Za-z]:[\\/])/)
+    const driveRoot = m ? m[1] : null
+    if (driveRoot) {
+      el.appendChild(document.createTextNode(' \\ '))
+      const dlink = document.createElement('a')
+      dlink.href = '#'
+      dlink.textContent = driveRoot
+      dlink.title = driveRoot
+      dlink.addEventListener('click', (event) => {
+        event.preventDefault()
+        loadFolder(driveRoot)
+      })
+      el.appendChild(dlink)
+    }
+    const rest = path.slice(driveRoot ? driveRoot.length : 0).split(/[\\/]+/).filter(Boolean)
+    let acc = driveRoot || ''
+    for (const seg of rest) {
+      acc = joinPath(acc, seg, 'win32')
+      el.appendChild(document.createTextNode(' \\ '))
+      const link = document.createElement('a')
+      link.href = '#'
+      link.textContent = seg
+      link.addEventListener('click', (event) => {
+        event.preventDefault()
+        loadFolder(acc)
+      })
+      el.appendChild(link)
+    }
+    return
+  }
+
+  // POSIX path.
+  if (path === '/') return
   const parts = path.replace(/\/$/, '').split('/').filter(Boolean)
   for (let i = 0; i < parts.length; i++) {
     const segPath = '/' + parts.slice(0, i + 1).join('/')
@@ -328,9 +444,7 @@ function renderFolderList(entries, currentPath) {
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.textContent = entry.name
-    const nextPath = !currentPath ? entry.name
-      : currentPath === '/' ? `/${entry.name}`
-      : `${currentPath}/${entry.name}`
+    const nextPath = joinPath(currentPath, entry.name, browsePlatform)
     btn.addEventListener('click', () => loadFolder(nextPath))
     el.appendChild(btn)
   }
