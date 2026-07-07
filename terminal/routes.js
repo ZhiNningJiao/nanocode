@@ -2,9 +2,10 @@
 
 import { Router } from 'express'
 import { execFile, spawn } from 'node:child_process'
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
-import { resolve, isAbsolute, join } from 'node:path'
+import { readFileSync, existsSync } from 'node:fs'
+import path, { resolve, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
+import { currentPlatform, listDirectory, listDrives } from './fsbrowse.js'
 import * as sessions from './sessions.js'
 import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
@@ -370,17 +371,27 @@ export function createTerminalRoutes(store, opts = {}) {
   // under /opt, /srv, /var/www, etc. The filesystem's own permission
   // checks (readdirSync → EACCES) remain the authorization boundary.
   // Relative paths or empty path default to $HOME for convenience.
+  //
+  // Cross-platform (MES-13804): on Windows, an empty path (or `?drives=1`)
+  // returns the list of available drive letters; every response carries a
+  // `parent` field (null at a drive root / `/`) so the frontend can disable
+  // the "up one level" button. Pure path logic lives in ./fsbrowse.js so the
+  // win32 branches are unit-testable on a Linux host.
   router.get('/api/fs', (req, res) => {
+    const platform = currentPlatform()
+    const pathMod = platform === 'win32' ? path.win32 : path
     const raw = req.query.path
     const input = raw && String(raw).trim() ? String(raw).trim() : null
-    const base = input ? (isAbsolute(input) ? resolve(input) : resolve(home, input)) : home
+    const wantsDrives = req.query.drives === '1' || (!input && platform === 'win32')
 
     try {
-      const entries = readdirSync(base, { withFileTypes: true })
-        .filter((dirent) => dirent.isDirectory() && !dirent.name.startsWith('.'))
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-        .map((dirent) => ({ name: dirent.name, isDir: true }))
-      res.json({ path: base, entries })
+      if (wantsDrives) {
+        return res.json({ drives: listDrives(platform), platform })
+      }
+      const base = input
+        ? (pathMod.isAbsolute(input) ? pathMod.resolve(input) : pathMod.resolve(home, input))
+        : home
+      res.json({ ...listDirectory(base, platform), platform })
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'not found' })
       if (err.code === 'ENOTDIR')

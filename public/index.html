@@ -488,11 +488,15 @@
               id="proj-cwd"
               type="text"
               autocomplete="off"
-              placeholder="/home/you/project or /opt/whatever"
+              placeholder="/home/you/project or C:\\Users\\you\\project"
             />
           </label>
           <p class="dialog-hint">Type any absolute path, or browse:</p>
           <div class="folder-browser">
+            <div class="folder-toolbar">
+              <button type="button" id="folder-up-btn" class="folder-up-btn" title="Up one level" disabled>&#8593;</button>
+              <button type="button" id="folder-drives-btn" class="folder-drives-btn" title="Computer / drives">Computer</button>
+            </div>
             <div class="folder-breadcrumb" id="folder-breadcrumb"></div>
             <div class="folder-list" id="folder-list"></div>
             <div class="folder-current" id="folder-current"></div>
