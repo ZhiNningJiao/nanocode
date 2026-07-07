@@ -185,8 +185,9 @@ export function createTerminalRoutes(store) {
 
   // ── GET /api/projects/:id/recent-conversations ──────────────────────────────
   // Returns up to `limit` (default 5, max 50) recent Claude conversations for the
-  // project's cwd, sorted by length (byte size) so the Claude Code tab picker
-  // (需求3 Auto Resume) can offer the "longer" conversations to 继续 / 开启新对话.
+  // project's cwd, sorted by most-recent mtime desc (最近的优先, byte size desc
+  // as secondary tiebreaker) so the Claude Code tab picker (需求3 Auto Resume)
+  // offers the "最近的 5 条较长对话" to 继续 / 开启新对话.
   // 需求5.3: `source` switches the project-directory source — 'project' (current
   // project slug, all teams), 'home' (home slug, all teams), or 'all' (both,
   // default) so cross-team sessions can surface without home drowning.

@@ -488,10 +488,13 @@ export function scanRecentConversations(home, cwd, limit = 5, now = Date.now(), 
       })
     } catch {}
   }
-  // "较长" = longer conversation. Sort by byte size desc (字节数, per the
-  // requirement), tiebreak by most-recent mtime so equally-sized files prefer
-  // the fresher one.
-  entries.sort((a, b) => b.byteSize - a.byteSize || b.mtimeMs - a.mtimeMs)
+  // 需求3 紧急修正: "最近的 5 条较长对话" — sort by most-recent activity (mtime)
+  // desc as the PRIMARY key, with byte size desc as a secondary tiebreaker (the
+  // "较长" criterion among equally-recent files). The old byte-size-desc-first
+  // sort let big OLD sessions permanently suppress recent small ones (master saw
+  // only stale conversations on 9475). The < 200-byte skip above already drops
+  // fragmentary 1-message sessions, so "较长" survives as the secondary key.
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs || b.byteSize - a.byteSize)
   const top = entries.slice(0, limit)
   return top.map((e) => ({
     sessionId: e.sessionId,
@@ -557,8 +560,9 @@ function _scanProjectDirEntries(projectDir, teamMeta, sourceCwd, activeConfigDir
  *   isCrossTeam, isHome — everything the picker needs to resume the session
  *   with the owning team's CLAUDE_CONFIG_DIR and the session's original cwd.
  *
- * Returns an array sorted by byte size desc (the "较长" criterion), capped
- * at `limit`.
+ * Returns an array sorted by most-recent mtime desc (the "最近的" criterion,
+ * 需求3 紧急修正 — recent sessions always surface above big old ones), with
+ * byte size desc as a secondary tiebreaker ("较长"), capped at `limit`.
  */
 export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = Date.now(), source = 'all') {
   const { teams } = listTeams(home, store)
@@ -587,7 +591,11 @@ export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = 
       }
     }
   }
-  entries.sort((a, b) => b.byteSize - a.byteSize || b.mtimeMs - a.mtimeMs)
+  // 需求3 紧急修正: mtime desc PRIMARY (最近的对话优先), byte size desc as a
+  // secondary tiebreaker (较长). The old byte-size-desc-first sort let big old
+  // sessions permanently suppress recent small ones — master saw only stale
+  // conversations on 9475.
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs || b.byteSize - a.byteSize)
   const top = entries.slice(0, limit)
   return top.map((e) => ({
     sessionId: e.sessionId,
