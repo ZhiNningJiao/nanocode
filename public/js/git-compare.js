@@ -3,15 +3,22 @@
  *
  *   createGitCompare(container) → { show(projectId), hide(), switchProject(id) }
  *
- * Fetches /api/projects/:id/git/branches and /api/projects/:id/git/compare,
- * renders a file list with status / +/- counts and expandable per-file diffs
+ * Repo-scoped flow (works from a top-level ~zhining launch, where the session
+ * cwd is not itself a git repo):
+ *   1. GET /api/repos              → dropdown of git repos/worktrees under ~/code
+ *   2. GET /api/repos/branches    → `git fetch --all --prune` + branches by
+ *      ?path=<repo>                  most recent commit (local + remote)
+ *   3. GET /api/repos/compare     → diff between two selected refs
+ *      ?path=<repo>&base=&head=
+ *
+ * Renders a file list with status / +/- counts and expandable per-file diffs
  * (highlighted via the globally-loaded hljs UMD).
  *
  * Visibility is driven by the `nanocode:toggle-compare` custom event (dispatched
  * from the explorer header button) and an internal close button.
  */
 
-import { fetchGitBranches, fetchGitCompare } from './api.js'
+import { fetchRepos, fetchRepoBranches, fetchRepoCompare, fetchProjects } from './api.js'
 
 const STATUS_BADGE = {
   M: { label: 'M', title: 'Modified', cls: 'st-mod' },
@@ -23,15 +30,34 @@ const STATUS_BADGE = {
   U: { label: 'U', title: 'Unmerged', cls: 'st-del' },
 }
 
+/** Compact relative time, e.g. "3h ago", "2d ago". */
+function relTime(ts) {
+  if (!ts || !Number.isFinite(ts)) return ''
+  const s = Math.max(0, Math.floor((Date.now() / 1000) - ts))
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24); if (d < 30) return `${d}d ago`
+  const mo = Math.floor(d / 30); if (mo < 12) return `${mo}mo ago`
+  return `${Math.floor(mo / 12)}y ago`
+}
+
 export function createGitCompare(container) {
   let projectId = null
+  let repos = []
+  let repoPath = ''
   let branches = []
   let current = null
   let defaultBranch = null
   let lastBase = ''
   let lastHead = ''
-  let expandedPaths = new Set()
   let loading = false
+  let loadingBranches = false
+  // Monotonic token so a stale branch fetch (from a previous repo selection)
+  // does not overwrite the selectors after the user switched repos. Each
+  // loadBranches() call increments this and only commits results if it is
+  // still the latest.
+  let loadBranchesToken = 0
 
   container.innerHTML = ''
   container.classList.add('compare')
@@ -53,12 +79,37 @@ export function createGitCompare(container) {
   closeBtn.addEventListener('click', () => hide())
   header.appendChild(closeBtn)
 
+  // --- Repo selector row (new) ---
+  const repoRow = document.createElement('div')
+  repoRow.className = 'compare-repo-row'
+
+  const repoSel = document.createElement('select')
+  repoSel.className = 'compare-select compare-repo-select'
+  repoSel.title = 'Repository (under ~/code)'
+  repoSel.appendChild(emptyOption('Loading repos…', ''))
+
+  const refreshBtn = document.createElement('button')
+  refreshBtn.type = 'button'
+  refreshBtn.className = 'explorer-icon-btn'
+  refreshBtn.title = 'Refresh repos + branches'
+  refreshBtn.innerHTML = refreshIcon()
+  refreshBtn.addEventListener('click', () => {
+    if (repoPath) loadBranches(true)
+    else loadRepos(true)
+  })
+
+  repoRow.append(repoSel, refreshBtn)
+  header.appendChild(repoRow)
+
+  // --- Branch selector toolbar (existing) ---
   const toolbar = document.createElement('div')
   toolbar.className = 'compare-toolbar'
 
   const baseSel = document.createElement('select')
   baseSel.className = 'compare-select'
   baseSel.title = 'Base branch'
+  baseSel.disabled = true
+  baseSel.appendChild(emptyOption('— base —', ''))
   const baseLabel = document.createElement('span')
   baseLabel.className = 'compare-arrow'
   baseLabel.textContent = '←'
@@ -66,6 +117,8 @@ export function createGitCompare(container) {
   const headSel = document.createElement('select')
   headSel.className = 'compare-select'
   headSel.title = 'Head branch'
+  headSel.disabled = true
+  headSel.appendChild(emptyOption('— head —', ''))
 
   const swapBtn = document.createElement('button')
   swapBtn.type = 'button'
@@ -101,32 +154,108 @@ export function createGitCompare(container) {
 
   container.append(header, status, body)
 
+  repoSel.addEventListener('change', () => {
+    repoPath = repoSel.value || ''
+    // reset branch selectors
+    baseSel.innerHTML = ''
+    headSel.innerHTML = ''
+    baseSel.appendChild(emptyOption('— base —', ''))
+    headSel.appendChild(emptyOption('— head —', ''))
+    baseSel.disabled = true
+    headSel.disabled = true
+    summary.hidden = true
+    body.innerHTML = ''
+    if (repoPath) loadBranches()
+    else setStatus('Pick a repository to list its branches.')
+  })
   baseSel.addEventListener('change', () => { lastBase = baseSel.value; runCompare() })
   headSel.addEventListener('change', () => { lastHead = headSel.value; runCompare() })
 
   // --- Logic ---
+
+  function emptyOption(text, value) {
+    const o = document.createElement('option')
+    o.value = value
+    o.textContent = text
+    return o
+  }
 
   function setStatus(msg, isError) {
     status.textContent = msg || ''
     status.classList.toggle('error', !!isError && !!msg)
   }
 
+  function populateRepos(list, preferPath) {
+    repos = list || []
+    repoSel.innerHTML = ''
+    if (!repos.length) {
+      repoSel.appendChild(emptyOption('No repos found under ~/code', ''))
+      repoSel.disabled = true
+      setStatus('No git repos found under ~/code.')
+      return
+    }
+    repoSel.disabled = false
+    for (const r of repos) {
+      const o = document.createElement('option')
+      o.value = r.path
+      const tag = r.isWorktree ? ' [wt]' : ''
+      o.textContent = `${r.name}${tag} · ${r.branch || '(detached)'}`
+      o.title = r.path
+      repoSel.appendChild(o)
+    }
+    let chosen = ''
+    if (preferPath && repos.some((r) => r.path === preferPath)) {
+      chosen = preferPath
+    } else {
+      chosen = repos[0].path
+    }
+    repoSel.value = chosen
+    repoPath = chosen
+  }
+
+  async function loadRepos(forceRefresh = false) {
+    setStatus('Scanning ~/code for repos…')
+    try {
+      // Pre-select the repo matching the current project's cwd, if any.
+      let preferPath = ''
+      if (projectId) {
+        try {
+          const projects = await fetchProjects()
+          const p = projects.find((x) => x.id === projectId)
+          if (p && p.cwd) preferPath = p.cwd
+        } catch { /* ignore — fallback to first repo */ }
+      }
+      const data = await fetchRepos()
+      populateRepos(data.repos, preferPath)
+      if (repos.length) {
+        setStatus('')
+        await loadBranches(forceRefresh)
+      }
+    } catch (e) {
+      setStatus('Failed to scan repos: ' + (e.message || e), true)
+    }
+  }
+
   function populateBranches(data) {
     branches = data.branches || []
     current = data.current
     defaultBranch = data.defaultBranch
-    const opts = branches.map((b) => {
-      const o = document.createElement('option')
-      o.value = b.name
-      o.textContent = b.name + (b.isCurrent ? ' (HEAD)' : '')
-      return o
-    })
     baseSel.innerHTML = ''
     headSel.innerHTML = ''
-    opts.forEach((o) => {
-      baseSel.appendChild(o.cloneNode(true))
-      headSel.appendChild(o.cloneNode(true))
-    })
+    if (!branches.length) {
+      baseSel.disabled = true
+      headSel.disabled = true
+      baseSel.appendChild(emptyOption('— no branches —', ''))
+      headSel.appendChild(emptyOption('— no branches —', ''))
+      return
+    }
+    for (const b of branches) {
+      const txt = formatBranchOption(b)
+      baseSel.appendChild(makeOption(b.name, txt))
+      headSel.appendChild(makeOption(b.name, txt))
+    }
+    baseSel.disabled = false
+    headSel.disabled = false
     // Defaults: base = default branch, head = current (or first non-default)
     let baseV = defaultBranch || (branches[0] && branches[0].name) || ''
     let headV = current || baseV
@@ -140,13 +269,41 @@ export function createGitCompare(container) {
     headSel.value = headV
   }
 
-  async function loadBranches() {
-    if (!projectId) return
-    setStatus('Loading branches…')
+  function makeOption(value, text) {
+    const o = document.createElement('option')
+    o.value = value
+    o.textContent = text
+    return o
+  }
+
+  function formatBranchOption(b) {
+    const when = relTime(b.lastCommitTs)
+    const subj = b.subject ? ` · ${truncate(b.subject, 40)}` : ''
+    const whenStr = when ? `  (${when})` : ''
+    const remote = b.isRemote ? '⤴ ' : ''
+    return `${remote}${b.name}${whenStr}${subj}`
+  }
+
+  function truncate(s, n) {
+    if (!s) return ''
+    return s.length > n ? s.slice(0, n - 1) + '…' : s
+  }
+
+  async function loadBranches(forceRefresh = false) {
+    if (!repoPath) return
+    // Don't drop the call if a previous load is in flight — that would
+    // silently ignore a repo switch. Instead, stamp this call with a token
+    // and let stale fetches no-op on return.
+    const token = ++loadBranchesToken
+    loadingBranches = true
+    baseSel.disabled = true
+    headSel.disabled = true
+    setStatus(forceRefresh ? 'Fetching + listing branches…' : 'Listing branches…')
     body.innerHTML = ''
     summary.hidden = true
     try {
-      const data = await fetchGitBranches(projectId)
+      const data = await fetchRepoBranches(repoPath)
+      if (token !== loadBranchesToken) return // stale — a newer load superseded us
       populateBranches(data)
       setStatus('')
       if (baseSel.value && headSel.value && baseSel.value !== headSel.value) {
@@ -155,11 +312,15 @@ export function createGitCompare(container) {
         setStatus(branches.length ? 'Only one branch — nothing to compare.' : 'No branches found.')
       }
     } catch (e) {
+      if (token !== loadBranchesToken) return // stale
       setStatus('Failed to load branches: ' + (e.message || e), true)
+    } finally {
+      if (token === loadBranchesToken) loadingBranches = false
     }
   }
 
   async function runCompare() {
+    if (!repoPath) return
     const base = baseSel.value
     const head = headSel.value
     if (!base || !head) return
@@ -178,7 +339,7 @@ export function createGitCompare(container) {
     body.innerHTML = ''
     summary.hidden = true
     try {
-      const data = await fetchGitCompare(projectId, base, head)
+      const data = await fetchRepoCompare(repoPath, base, head)
       renderSummary(data)
       renderFiles(data.files || [])
       setStatus(data.files.length ? '' : 'No differences between these branches.')
@@ -337,7 +498,12 @@ export function createGitCompare(container) {
     // Hide the explorer sibling so the compare panel fills the right pane.
     const explorerRoot = document.getElementById('explorer-root')
     if (explorerRoot) explorerRoot.hidden = true
-    loadBranches()
+    if (repos.length && repoPath) {
+      // already loaded — just refresh branches for the current repo
+      loadBranches(true)
+    } else {
+      loadRepos()
+    }
   }
 
   function hide() {
@@ -348,11 +514,13 @@ export function createGitCompare(container) {
 
   function switchProject(id) {
     projectId = id
-    expandedPaths = new Set()
     body.innerHTML = ''
     summary.hidden = true
     setStatus('')
-    if (!container.hidden) loadBranches()
+    if (!container.hidden) {
+      // Re-scan so the new project's cwd is pre-selected if it is a repo.
+      loadRepos()
+    }
   }
 
   return { show, hide, switchProject }
@@ -373,4 +541,9 @@ function swapIcon() {
 function chevIcon() {
   const s = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
   return `<svg width="10" height="10" viewBox="0 0 24 24" ${s}><polyline points="9 18 15 12 9 6"/></svg>`
+}
+
+function refreshIcon() {
+  const s = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
+  return `<svg width="14" height="14" viewBox="0 0 24 24" ${s}><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`
 }

@@ -91,6 +91,25 @@ export function fetchGitCompare(projectId, base, head) {
   return request(`/projects/${projectId}/git/compare?${q}`)
 }
 
+// ─── Repo-scoped git compare (top-level launch) ──────────────────────────
+// These are independent of the project system: the server scans ~/code for
+// git repos/worktrees, so compare works even when the session cwd (~zhining)
+// is not itself a git repo.
+
+export function fetchRepos() {
+  return request('/repos')
+}
+
+export function fetchRepoBranches(repoPath) {
+  const q = new URLSearchParams({ path: repoPath })
+  return request(`/repos/branches?${q}`)
+}
+
+export function fetchRepoCompare(repoPath, base, head) {
+  const q = new URLSearchParams({ path: repoPath, base, head })
+  return request(`/repos/compare?${q}`)
+}
+
 // ─── Settings ─────────────────────────────────────────────────────────────
 
 export function fetchSettings() {
