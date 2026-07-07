@@ -700,11 +700,14 @@ export class TabManager {
     // the backend default (scanRecentConversationsMulti source='all') and the
     // 需求3 acceptance ("列表首屏必须出现最近 1 小时内活跃的会话"). A project
     // with no recent claude sessions would otherwise show only stale entries.
+    // r8 anti-fake-pass: a STALE persisted 'project' choice (e.g. the user
+    // clicked "This project" in a prior session) would still hide recent
+    // conversations after a hot-update — see _renderPickerBody auto-fallback.
     this._pickerSource = localStorage.getItem('claudeResumeSource') || 'all'
-    this._renderPickerBody(body)
+    this._renderPickerBody(body, true)
   }
 
-  async _renderPickerBody(body) {
+  async _renderPickerBody(body, isInitial = false) {
     const source = this._pickerSource || 'all'
     body.innerHTML = ''
 
@@ -746,6 +749,24 @@ export class TabManager {
       }
     } catch (err) {
       console.warn('[claude-resume-picker] failed to load conversations', err)
+    }
+
+    // 需求3 robustness (anti-fake-pass r8): a stale persisted 'project' choice
+    // must not hide recent conversations after a hot-update. On the INITIAL
+    // picker open, if source='project' and the project has no recently-active
+    // session (top entry older than 1h), auto-fallback to 'all' so the master's
+    // hard requirement — "首屏出现最近 1h 活跃会话" — holds regardless of the
+    // browser's localStorage state. Only 'project' auto-falls back (it is the
+    // scope most likely to have no recent sessions; 'home'/'all' naturally
+    // surface recent home/secretary sessions). Explicit "This project" clicks
+    // pass isInitial=false so a deliberate choice is still respected. The
+    // re-render uses source='all' (≠ 'project') + isInitial=false → no recursion.
+    if (isInitial && source === 'project' && conversations.length
+        && Date.now() - new Date(conversations[0].mtime).getTime() > 60 * 60 * 1000) {
+      this._pickerSource = 'all'
+      localStorage.setItem('claudeResumeSource', 'all')
+      this._renderPickerBody(body)
+      return
     }
 
     loading.remove()
