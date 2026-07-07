@@ -14,7 +14,7 @@ import { getStore } from './store.js'
 import { createTerminalRoutes } from '../terminal/routes.js'
 import { createFileRoutes } from '../terminal/files.js'
 import { seedRemoteDefaults } from '../terminal/remote.js'
-import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete } from './qa-watcher.js'
+import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete, pushNtfyMessage, isNtfyConfigured } from './qa-watcher.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
@@ -196,6 +196,21 @@ app.post('/api/notify/turn-complete', (req, res) => {
   const { elapsed, elapsedSec } = req.body || {}
   const sec = elapsedSec ?? (elapsed != null ? (elapsed / 1000).toFixed(0) : '?')
   pushNtfyTurnComplete({ elapsedSec: sec })
+  res.json({ ok: true })
+})
+
+app.post('/api/notify/ntfy-publish', async (req, res) => {
+  if (!isNtfyConfigured()) {
+    return res.status(400).json({ error: 'ntfy not configured — run Initialize first' })
+  }
+  const { message, title, priority, tags } = req.body || {}
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'message required' })
+  }
+  const result = await pushNtfyMessage({ message, title, priority, tags })
+  if (!result.ok) {
+    return res.status(502).json({ error: 'ntfy push failed: ' + (result.reason || 'unknown') })
+  }
   res.json({ ok: true })
 })
 

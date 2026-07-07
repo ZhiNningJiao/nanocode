@@ -901,6 +901,16 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .pm-select-test-row { display: flex; align-items: center; gap: var(--s-2); }
 .pm-select-test-row .pm-input { flex: 1; }
 .pm-tts-status-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+/* 需求13: ntfy Initialize row — one-URL auto-config input + button */
+.pm-init-row { display: flex; align-items: stretch; gap: var(--s-2); }
+.pm-init-row .pm-init-input { flex: 1; min-width: 0; }
+.pm-init-row .pm-init-btn { flex: 0 0 auto; white-space: nowrap; }
+.pm-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+  padding: 2px 0 4px;
+}
 .settings-moved-hint {
   font-size: 12px;
   color: var(--text-secondary);
@@ -3627,6 +3637,13 @@ body.workspace-active .landing-overlay { display: none; }
   .pm-toggle-line input { width: 20px; height: 20px; }
   .pm-select-test-row { flex-direction: column; align-items: stretch; }
   .pm-select-test-row .pm-btn-icon { align-self: flex-end; }
+  /* 需求13: ntfy Initialize row on phone (390×844) — stack input above button,
+     both ≥44px tall so a thumb can hit them without missing. */
+  .pm-init-row { flex-direction: column; align-items: stretch; gap: var(--s-2); }
+  .pm-init-row .pm-init-input { width: 100%; }
+  .pm-init-row .pm-init-btn { width: 100%; min-height: 44px; font-size: 14px; }
+  .pm-hint { font-size: 12px; }
+  .pm-hook-test-btn { min-height: 44px; }
 
   /* 需求13: services (Port Health) plugin — mobile touch targets ≥44px.
      The add form stacks vertically; grid edit/delete buttons grow. */

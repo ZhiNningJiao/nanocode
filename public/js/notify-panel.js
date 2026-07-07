@@ -82,6 +82,77 @@ function _renderNtfyBlock(section) {
   const status = document.createElement('span')
   status.className = 'pm-status'
 
+  const initInput = document.createElement('input')
+  initInput.type = 'text'
+  initInput.className = 'pm-input pm-init-input'
+  initInput.placeholder = t('settings.ntfy.initialize_url')
+
+  const initHint = document.createElement('div')
+  initHint.className = 'pm-hint'
+  initHint.textContent = t('settings.ntfy.initialize_hint')
+
+  const initBtn = document.createElement('button')
+  initBtn.type = 'button'
+  initBtn.className = 'btn btn-primary pm-btn pm-init-btn'
+  initBtn.textContent = t('settings.ntfy.initialize')
+
+  function _parseNtfyUrl(raw) {
+    let s = (raw || '').trim()
+    if (!s) return { base: '', topic: null, ok: false, err: 'empty' }
+    if (!/^[a-zA-Z]+:\/\//.test(s)) s = 'http://' + s
+    let u
+    try { u = new URL(s) } catch { return { base: '', topic: null, ok: false, err: 'bad url' } }
+    if (!u.hostname) return { base: '', topic: null, ok: false, err: 'no host' }
+    const base = u.origin
+    const segs = u.pathname.split('/').map((x) => decodeURIComponent(x)).filter(Boolean)
+    const topic = segs.length ? segs[0] : null
+    return { base, topic, ok: true }
+  }
+
+  initBtn.addEventListener('click', async () => {
+    const raw = initInput.value.trim()
+    if (!raw) { _flash(status, t('settings.ntfy.init_fail') + 'empty', false); return }
+    const parsed = _parseNtfyUrl(raw)
+    if (!parsed.ok) { _flash(status, t('settings.ntfy.init_fail') + parsed.err, false); return }
+    let topic = parsed.topic
+    if (!topic) {
+      const existing = topicInput.value.trim()
+      topic = existing || 'nanocode'
+      _flash(status, t('settings.ntfy.init_derived_topic') + topic, true)
+    }
+    const base = parsed.base
+    urlInput.value = base
+    topicInput.value = topic
+    initInput.value = base + '/' + topic
+    try {
+      await updateSetting('ntfy_url', base)
+      await updateSetting('ntfy_topic', topic)
+    } catch (e) { _flash(status, t('settings.ntfy.init_fail') + (e.message || 'save'), false); return }
+    _flash(status, t('settings.ntfy.init_probing'), true)
+    try {
+      const endpoint = base.replace(/\/$/, '') + '/' + topic
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { Title: 'Nanocode initialized', Tags: 'tada', Priority: '3', 'Content-Type': 'text/plain' },
+        body: 'Nanocode ntfy configured — Initialize succeeded. Tap Test anytime.',
+      })
+      if (resp.ok) {
+        _flash(status, t('settings.ntfy.init_ok'), true)
+      } else {
+        _flash(status, t('settings.ntfy.init_fail') + 'HTTP ' + resp.status, false)
+      }
+    } catch (e) {
+      _flash(status, t('settings.ntfy.init_fail') + (e.message || 'unreachable'), false)
+    }
+  })
+
+  const initRow = document.createElement('div')
+  initRow.className = 'pm-init-row'
+  initRow.appendChild(initInput)
+  initRow.appendChild(initBtn)
+  block.appendChild(initRow)
+  block.appendChild(initHint)
+
   const saveBtn = document.createElement('button')
   saveBtn.type = 'button'
   saveBtn.className = 'btn btn-primary pm-btn'
@@ -113,12 +184,24 @@ function _renderNtfyBlock(section) {
     } catch (e) { _flash(status, e.message || 'Error', false) }
   })
 
+  const hookTestBtn = document.createElement('button')
+  hookTestBtn.type = 'button'
+  hookTestBtn.className = 'btn btn-secondary pm-btn pm-hook-test-btn'
+  hookTestBtn.textContent = t('settings.ntfy.hook_test')
+  hookTestBtn.title = t('settings.ntfy.hook_test_hint')
+  hookTestBtn.addEventListener('click', () => {
+    const msg = 'AI hook test — [NTFY] tag extracted and pushed to your topic.'
+    document.dispatchEvent(new CustomEvent('nanocode:terminal-output', { detail: '[NTFY]' + msg + '[/NTFY]' }))
+    _flash(status, 'Hook event dispatched — check your topic', true)
+  })
+
   block.appendChild(_field('settings.ntfy.url', urlInput))
   block.appendChild(_field('settings.ntfy.topic', topicInput))
   const actions = document.createElement('div')
   actions.className = 'pm-setting-actions'
   actions.appendChild(saveBtn)
   actions.appendChild(testBtn)
+  actions.appendChild(hookTestBtn)
   actions.appendChild(status)
   block.appendChild(actions)
 
@@ -126,6 +209,7 @@ function _renderNtfyBlock(section) {
   fetchSettings().then((s) => {
     urlInput.value = s?.ntfy_url || ''
     topicInput.value = s?.ntfy_topic || ''
+    if (s?.ntfy_url && s?.ntfy_topic) initInput.value = s.ntfy_url.replace(/\/$/, '') + '/' + s.ntfy_topic
   }).catch(() => {})
 
   section.appendChild(block)
