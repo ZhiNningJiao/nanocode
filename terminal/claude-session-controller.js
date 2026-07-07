@@ -1299,7 +1299,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         console.warn(`[claude:interrupt] ${sessionKey}: force-unwedge (busy=true, currentProc=null); settling turn locally, process untouched`)
         cs.busy = false
         cs.currentProc = null
-        _emitAgentStop(cs, sessionKey, { subtype: 'error' })
+        // The archived p1p5-plugin-host line emitted a plugin agent:stop event
+        // here via _emitAgentStop; that helper does not exist on this lineage
+        // (merge 66867e5 strategy=ours) and the orphan call broke this unwedge
+        // path with a ReferenceError. Re-add only together with a pluginHost.
         claudeBroadcast(cs, { type: 'result', subtype: 'error_during_execution' })
         if (!Array.isArray(cs.queue)) cs.queue = []
         const drained = cs.queue.splice(0)
