@@ -1489,6 +1489,185 @@ export async function buildAigwSourceSummary({ now = Date.now(), home, fetchImpl
   }
 }
 
+// ── AIGW monthly budget (MES-13788 延续: /user/info 剩余额度 + 自适配档) ────────
+//
+// The 4th honest source: GET https://aigw.meshy.team/user/info → user_info.
+//   { max_budget, spend, budget_reset_at, budget_duration, user_email }
+// `remaining = max_budget - spend`, `pct_remaining = remaining / max_budget * 100`,
+// `days_left` = whole days from now to budget_reset_at (floor 0). The
+// self-adapting strategy tier is ported verbatim from ~/code/aigw_budget.sh:
+//   FREE_ONLY  : 剩<10%           → 只免费 GLM/Kimi
+//   BURN       : reset≤4天 且 剩>25% → 用不完就清零, 猛往付费堆
+//   SPEND_PAID : >40% 且 reset 还远 → 硬活放开上付费 gpt-5.5/opus
+//   BALANCED   : 10-40%           → 免费铺量, 付费只给硬骨头
+// No fabricated numbers — every field comes from the gateway response.
+
+/** Tier advice strings (mirror aigw_budget.sh, zh source of truth). */
+export const AIGW_BUDGET_ADVICE = {
+  FREE_ONLY: '剩<10%: 只蹬免费 GLM/Kimi; 付费仅留给主人点名的紧急活。',
+  BALANCED: '10-40%: 免费铺量; 付费(gpt-5.5/opus)只给高优先级硬骨头。',
+  SPEND_PAID: '>40% 且离重置远: 硬活/交叉审放开上付费 gpt-5.5/claude-opus, 不心疼。',
+  BURN: '临近月末且剩余多: use-it-or-lose-it! 硬活猛往付费堆, 别让额度清零白瞎。',
+}
+
+/**
+ * Pure: compute the self-adapting strategy tier from remaining% + days to
+ * reset. Ported verbatim from aigw_budget.sh (the order matters: BURN is
+ * checked before SPEND_PAID so a near-reset surplus is not mislabelled).
+ * `pctRemaining` is remaining / max_budget * 100; `daysLeft` may be null when
+ * the reset time is unknown (then BURN is unreachable — honest).
+ */
+export function computeAigwBudgetTier({ pctRemaining, daysLeft }) {
+  const pct = Number(pctRemaining)
+  if (!Number.isFinite(pct)) return 'BALANCED'
+  if (pct < 10) return 'FREE_ONLY'
+  // daysLeft null/undefined = reset unknown -> BURN unreachable (honest: don't
+  // cry "use-it-or-lose-it" when we don't actually know when reset happens).
+  // Number(null)===0 would otherwise slip through the finite guard below.
+  if (daysLeft == null) return pct > 40 ? 'SPEND_PAID' : 'BALANCED'
+  const dl = Number(daysLeft)
+  if (Number.isFinite(dl) && dl <= 4 && pct > 25) return 'BURN'
+  if (pct > 40) return 'SPEND_PAID'
+  return 'BALANCED'
+}
+
+/**
+ * Pure: parse a budget_reset_at ISO string into whole days from `now` to reset,
+ * floored to 0. Returns null when the string is missing/unparseable. Mirrors
+ * aigw_budget.sh (UTC day diff). Never throws.
+ */
+export function computeBudgetDaysLeft(resetAt, now = Date.now()) {
+  if (typeof resetAt !== 'string' || !resetAt) return null
+  const rt = Date.parse(resetAt)
+  if (!Number.isFinite(rt)) return null
+  const diff = rt - now
+  if (diff <= 0) return 0
+  return Math.floor(diff / 86400_000)
+}
+
+/**
+ * Pure: map a successful AIGW /user/info response body into the budget object.
+ * The body's `user_info` carries max_budget / spend / budget_reset_at. Returns
+ * { available:true, ...budget } or { available:false, error } — no fabrication.
+ * This is the testable core; the live fetch is in fetchAigwBudget.
+ */
+export function mapAigwBudgetResponse(body, { now = Date.now() } = {}) {
+  const ui = body && typeof body === 'object' ? body.user_info : null
+  if (!ui || typeof ui !== 'object') {
+    return { available: false, error: '/user/info returned no user_info body' }
+  }
+  const maxb = Number(ui.max_budget)
+  const spend = Number(ui.spend)
+  if (!Number.isFinite(spend)) {
+    return { available: false, error: '/user/info user_info.spend is not a number' }
+  }
+  const maxBudget = Number.isFinite(maxb) && maxb > 0 ? maxb : null
+  const remaining = maxBudget != null ? Math.round((maxBudget - spend) * 100) / 100 : null
+  const pctRemaining = maxBudget != null ? Math.round((remaining / maxBudget) * 1000) / 10 : null
+  const pctUsed = maxBudget != null ? Math.round((spend / maxBudget) * 1000) / 10 : null
+  const resetAt = typeof ui.budget_reset_at === 'string' && ui.budget_reset_at ? ui.budget_reset_at : null
+  const daysLeft = computeBudgetDaysLeft(resetAt, now)
+  const tier = computeAigwBudgetTier({ pctRemaining: pctRemaining ?? -1, daysLeft })
+  return {
+    available: true,
+    user_email: typeof ui.user_email === 'string' && ui.user_email ? ui.user_email : null,
+    max_budget: maxBudget,
+    spend: Math.round(spend * 100000) / 100000,
+    remaining,
+    pct_remaining: pctRemaining,
+    pct_used: pctUsed,
+    reset_at: resetAt,
+    days_left: daysLeft,
+    budget_duration: typeof ui.budget_duration === 'string' && ui.budget_duration ? ui.budget_duration : null,
+    tier,
+    advice: AIGW_BUDGET_ADVICE[tier] || null,
+  }
+}
+
+/**
+ * Fetch the AIGW /user/info budget endpoint. Uses the well-known meshy-aigw.key
+ * (readAigwKey). Never throws — returns { available:false, error, keyPresent }
+ * on any failure so the route can 200 with a clear reason. Accepts a fetchImpl
+ * injection so unit tests can stub the network without a real gateway.
+ */
+export async function fetchAigwBudget({ key, fetchImpl, now = Date.now() } = {}) {
+  const apiKey = (key ?? readAigwKey()).trim()
+  if (!apiKey) {
+    return { available: false, keyPresent: false, base: AIGW_BASE, error: 'AIGW key not found (~/.config/meshy-aigw.key)' }
+  }
+  const f = fetchImpl || fetch
+  try {
+    const res = await f(`${AIGW_BASE}/user/info`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) {
+      let body = null
+      try { body = await res.json() } catch {}
+      const msg = body?.detail || body?.error || `HTTP ${res.status}`
+      return { available: false, keyPresent: true, base: AIGW_BASE, error: `AIGW /user/info ${msg}` }
+    }
+    const data = await res.json()
+    return { ...mapAigwBudgetResponse(data, { now }), keyPresent: true, base: AIGW_BASE }
+  } catch (err) {
+    return { available: false, keyPresent: true, base: AIGW_BASE, error: `AIGW /user/info fetch failed: ${err?.message || err}` }
+  }
+}
+
+/**
+ * Build the AIGW monthly-budget source summary for /api/usage/summary. Probes
+ * /user/info and surfaces a monthly window carrying the tier + advice + reset
+ * for the AI-readable surface. No fabricated numbers — unavailable is honest.
+ */
+export async function buildAigwBudgetSourceSummary({ now = Date.now(), fetchImpl } = {}) {
+  const budget = await fetchAigwBudget({ fetchImpl, now })
+  const base = {
+    source: 'aigw-budget', label: 'AIGW 月度额度', kind: 'litellm-budget',
+    configDir: null, available: !!budget.available, base: budget.base,
+    keyPresent: !!budget.keyPresent,
+  }
+  if (budget.available) {
+    const pctUsed = budget.pct_used
+    const sev = pctUsed == null ? null : (pctUsed >= 90 ? 'critical' : pctUsed >= 75 ? 'warning' : 'normal')
+    return {
+      ...base,
+      user_email: budget.user_email,
+      max_budget: budget.max_budget,
+      spend: budget.spend,
+      remaining: budget.remaining,
+      pct_remaining: budget.pct_remaining,
+      days_left: budget.days_left,
+      reset_at: budget.reset_at,
+      tier: budget.tier,
+      advice: budget.advice,
+      windows: [{
+        source: 'aigw-budget', label: 'AIGW 月度额度',
+        windowType: 'monthly',
+        used: budget.spend, limit: budget.max_budget, remaining: budget.remaining,
+        utilization: pctUsed, unit: 'usd',
+        resetAt: budget.reset_at,
+        burnRatePerMin: null, projectedHitAt: null,
+        estimated: false, severity: sev, usedTokens: null,
+        pctRemaining: budget.pct_remaining, daysLeft: budget.days_left,
+        tier: budget.tier, advice: budget.advice,
+        note: `AIGW /user/info: 预算 $${budget.max_budget} / 已花 $${budget.spend} / 剩余 $${budget.remaining} (${budget.pct_remaining}%). 重置 ${budget.reset_at || '?'}${budget.days_left != null ? ` (还剩 ~${budget.days_left} 天)` : ''}. 策略档=${budget.tier}`,
+      }],
+    }
+  }
+  return {
+    ...base,
+    windows: [{
+      source: 'aigw-budget', label: 'AIGW 月度额度',
+      windowType: 'monthly',
+      used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
+      resetAt: null, burnRatePerMin: null, projectedHitAt: null,
+      estimated: false, severity: null, usedTokens: null,
+      note: budget.error || 'AIGW /user/info budget unavailable.',
+    }],
+    error: budget.error,
+  }
+}
+
 // ── /api/usage/summary entry point ────────────────────────────────────────────
 
 /**
@@ -1520,6 +1699,8 @@ export async function buildUsageSummary({ home, store, now = Date.now(), fetchIm
   }
   // AIGW (LiteLLM) — /key/info real spend + /spend/logs/v2 burn + local budgetUsd.
   sources.push(await buildAigwSourceSummary({ now, home: homeDir, fetchImpl }))
+  // AIGW monthly budget — /user/info max_budget + spend + reset + tier (MES-13788 延续)
+  sources.push(await buildAigwBudgetSourceSummary({ now, fetchImpl }))
   // flat entries for AI consumption
   const entries = []
   for (const s of sources) {

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty, readClaudeOAuthCredentials, mapClaudeOAuthToWindows, computeBurnRate, projectHitAt, estimateClaudeWindowsFromTimeline, attachBurnAndProjection, streamJsonlTimeline, mapAigwSpendResponse, buildUsageSummary, fetchAigwKeyInfo, fetchAigwSpendLogs, buildAigwSourceSummary } from '../../terminal/usage.js'
+import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty, readClaudeOAuthCredentials, mapClaudeOAuthToWindows, computeBurnRate, projectHitAt, estimateClaudeWindowsFromTimeline, attachBurnAndProjection, streamJsonlTimeline, mapAigwSpendResponse, buildUsageSummary, fetchAigwKeyInfo, fetchAigwSpendLogs, buildAigwSourceSummary, computeAigwBudgetTier, computeBudgetDaysLeft, mapAigwBudgetResponse, fetchAigwBudget, AIGW_BUDGET_ADVICE } from '../../terminal/usage.js'
 import { loadPersonalConfig, resetPersonalConfigCache } from '../../terminal/personal-config.js'
 import { createStore } from '../store.js'
 
@@ -515,6 +515,174 @@ describe('usage: mapAigwSpendResponse (pure)', () => {
   })
 })
 
+// ── MES-13788 延续: AIGW /user/info monthly budget + self-adapting tier ─────────
+
+describe('usage: computeAigwBudgetTier (pure, aigw_budget.sh port)', () => {
+  it('FREE_ONLY when remaining < 10%', () => {
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 5, daysLeft: 20 }), 'FREE_ONLY')
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 9.9, daysLeft: 20 }), 'FREE_ONLY')
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 0, daysLeft: 20 }), 'FREE_ONLY')
+  })
+  it('BURN when reset <= 4 days and remaining > 25% (checked before SPEND_PAID)', () => {
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 50, daysLeft: 4 }), 'BURN')
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 90, daysLeft: 1 }), 'BURN')
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 26, daysLeft: 0 }), 'BURN')
+  })
+  it('SPEND_PAID when remaining > 40% and reset is far (>4 days)', () => {
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 80, daysLeft: 25 }), 'SPEND_PAID')
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 41, daysLeft: 20 }), 'SPEND_PAID')
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 100, daysLeft: 30 }), 'SPEND_PAID')
+  })
+  it('BALANCED for 10-40% remaining', () => {
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 20, daysLeft: 20 }), 'BALANCED')
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 40, daysLeft: 20 }), 'BALANCED')
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 10, daysLeft: 20 }), 'BALANCED')
+  })
+  it('BURN is unreachable when daysLeft is null (reset unknown)', () => {
+    // 50% remaining but no reset info -> not BURN, falls to SPEND_PAID (>40%)
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 50, daysLeft: null }), 'SPEND_PAID')
+    // 30% remaining, no reset -> BALANCED (not BURN)
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 30, daysLeft: null }), 'BALANCED')
+  })
+  it('degrades to BALANCED for non-finite pct', () => {
+    assert.equal(computeAigwBudgetTier({ pctRemaining: NaN, daysLeft: 5 }), 'BALANCED')
+    assert.equal(computeAigwBudgetTier({}), 'BALANCED')
+  })
+  it('BURN requires remaining > 25% (not <=25%) even when reset is soon', () => {
+    // 25% remaining, reset in 3 days -> not BURN (needs >25%), not FREE (<10%),
+    // not SPEND (>40%) -> BALANCED
+    assert.equal(computeAigwBudgetTier({ pctRemaining: 25, daysLeft: 3 }), 'BALANCED')
+  })
+  it('AIGW_BUDGET_ADVICE has a zh hint for every tier', () => {
+    for (const tier of ['FREE_ONLY', 'BALANCED', 'SPEND_PAID', 'BURN']) {
+      assert.ok(typeof AIGW_BUDGET_ADVICE[tier] === 'string' && AIGW_BUDGET_ADVICE[tier].length > 0, `advice for ${tier}`)
+    }
+  })
+})
+
+describe('usage: computeBudgetDaysLeft (pure)', () => {
+  it('floors whole days from now to reset', () => {
+    // NOW + 3.5 days -> 3
+    const reset = new Date(NOW + 3.5 * 86400_000).toISOString()
+    assert.equal(computeBudgetDaysLeft(reset, NOW), 3)
+  })
+  it('returns 0 when reset is in the past or now', () => {
+    assert.equal(computeBudgetDaysLeft(new Date(NOW - 1000).toISOString(), NOW), 0)
+    assert.equal(computeBudgetDaysLeft(new Date(NOW).toISOString(), NOW), 0)
+  })
+  it('returns null for missing / unparseable reset', () => {
+    assert.equal(computeBudgetDaysLeft(null, NOW), null)
+    assert.equal(computeBudgetDaysLeft('', NOW), null)
+    assert.equal(computeBudgetDaysLeft('not-a-date', NOW), null)
+    assert.equal(computeBudgetDaysLeft(12345, NOW), null)
+  })
+})
+
+describe('usage: mapAigwBudgetResponse (pure)', () => {
+  const REAL_USER_INFO = {
+    user_id: 'b3a432ba', user_email: 'zhiningjiao@meshy.ai',
+    max_budget: 1000.0, spend: 197.8257218000002,
+    budget_duration: '30d', budget_reset_at: '2026-08-01T00:00:00Z',
+  }
+  // NOW = 2026-07-06T06:00:00Z -> 25.75 days to reset -> floor 25
+  it('maps a real /user/info body into remaining/pct/tier/days_left', () => {
+    const r = mapAigwBudgetResponse({ user_info: REAL_USER_INFO }, { now: NOW })
+    assert.equal(r.available, true)
+    assert.equal(r.max_budget, 1000)
+    assert.equal(r.spend, 197.82572) // rounded to 5 dp
+    assert.equal(r.remaining, 802.17) // rounded to 2 dp
+    assert.equal(r.pct_remaining, 80.2)
+    assert.equal(r.pct_used, 19.8)
+    assert.equal(r.reset_at, '2026-08-01T00:00:00Z')
+    assert.equal(r.days_left, 25)
+    assert.equal(r.budget_duration, '30d')
+    assert.equal(r.user_email, 'zhiningjiao@meshy.ai')
+    // 80.2% remaining, 25 days to reset -> SPEND_PAID
+    assert.equal(r.tier, 'SPEND_PAID')
+    assert.equal(r.advice, AIGW_BUDGET_ADVICE.SPEND_PAID)
+  })
+  it('classifies BURN when reset is soon and remaining is high', () => {
+    const ui = { ...REAL_USER_INFO, spend: 300, budget_reset_at: new Date(NOW + 3 * 86400_000).toISOString() }
+    // remaining = 700 -> 70% > 25%, days_left = 3 <= 4 -> BURN
+    const r = mapAigwBudgetResponse({ user_info: ui }, { now: NOW })
+    assert.equal(r.tier, 'BURN')
+    assert.equal(r.days_left, 3)
+    assert.equal(r.advice, AIGW_BUDGET_ADVICE.BURN)
+  })
+  it('classifies FREE_ONLY when nearly exhausted', () => {
+    const ui = { ...REAL_USER_INFO, spend: 960 } // remaining 40 -> 4% < 10%
+    const r = mapAigwBudgetResponse({ user_info: ui }, { now: NOW })
+    assert.equal(r.tier, 'FREE_ONLY')
+    assert.equal(r.pct_remaining, 4)
+  })
+  it('returns limit=null + pct=null when max_budget is missing/zero', () => {
+    const ui = { ...REAL_USER_INFO, max_budget: 0, spend: 12.3 }
+    const r = mapAigwBudgetResponse({ user_info: ui }, { now: NOW })
+    assert.equal(r.available, true)
+    assert.equal(r.max_budget, null)
+    assert.equal(r.remaining, null)
+    assert.equal(r.pct_remaining, null)
+    assert.equal(r.pct_used, null)
+    // pct_remaining null -> computeAigwBudgetTier gets -1 (<10) -> FREE_ONLY
+    assert.equal(r.tier, 'FREE_ONLY')
+  })
+  it('returns unavailable when user_info is missing / not an object', () => {
+    assert.equal(mapAigwBudgetResponse(null, { now: NOW }).available, false)
+    assert.equal(mapAigwBudgetResponse({}, { now: NOW }).available, false)
+    assert.equal(mapAigwBudgetResponse({ user_info: 'x' }, { now: NOW }).available, false)
+  })
+  it('returns unavailable when spend is not a number', () => {
+    const r = mapAigwBudgetResponse({ user_info: { ...REAL_USER_INFO, spend: 'oops' } }, { now: NOW })
+    assert.equal(r.available, false)
+    assert.ok(r.error)
+  })
+  it('days_left is null when budget_reset_at is absent (BURN unreachable)', () => {
+    const ui = { ...REAL_USER_INFO, budget_reset_at: null }
+    const r = mapAigwBudgetResponse({ user_info: ui }, { now: NOW })
+    assert.equal(r.days_left, null)
+    assert.equal(r.reset_at, null)
+    // 80% remaining, no reset -> SPEND_PAID (not BURN)
+    assert.equal(r.tier, 'SPEND_PAID')
+  })
+})
+
+describe('usage: fetchAigwBudget (fetchImpl injection, no live network)', () => {
+  it('returns the mapped budget when /user/info is 200', async () => {
+    const fetchStub = async (url) => {
+      assert.ok(String(url).endsWith('/user/info'), 'hits /user/info')
+      return {
+        ok: true, status: 200,
+        json: async () => ({ user_info: { max_budget: 1000, spend: 197.83, budget_reset_at: '2026-08-01T00:00:00Z', budget_duration: '30d', user_email: 'zhiningjiao@meshy.ai' } }),
+      }
+    }
+    const r = await fetchAigwBudget({ key: 'stub-key', fetchImpl: fetchStub, now: NOW })
+    assert.equal(r.available, true)
+    assert.equal(r.keyPresent, true)
+    assert.equal(r.max_budget, 1000)
+    assert.equal(r.tier, 'SPEND_PAID')
+    assert.equal(r.days_left, 25)
+  })
+  it('returns unavailable with keyPresent=false when no key', async () => {
+    const r = await fetchAigwBudget({ key: '', fetchImpl: async () => { throw new Error('should not be called') } })
+    assert.equal(r.available, false)
+    assert.equal(r.keyPresent, false)
+    assert.ok(r.error)
+  })
+  it('returns unavailable on a non-ok response', async () => {
+    const fetchStub = async () => ({ ok: false, status: 403, json: async () => ({ detail: ' forbidden' }) })
+    const r = await fetchAigwBudget({ key: 'stub-key', fetchImpl: fetchStub, now: NOW })
+    assert.equal(r.available, false)
+    assert.equal(r.keyPresent, true)
+    assert.ok(r.error)
+  })
+  it('returns unavailable when fetch throws', async () => {
+    const fetchStub = async () => { throw new Error('network down') }
+    const r = await fetchAigwBudget({ key: 'stub-key', fetchImpl: fetchStub, now: NOW })
+    assert.equal(r.available, false)
+    assert.ok(/network down/.test(r.error))
+  })
+})
+
 describe('usage: buildUsageSummary shape (integration, no live network)', () => {
   let tmp
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-sum-')) })
@@ -552,6 +720,48 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
       assert.ok(aigw, 'aigw source present')
       assert.equal(aigw.available, false)
       assert.ok(aigw.error)
+    } finally {
+      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
+      else process.env.XDG_DATA_HOME = prevXdg
+      if (prevGlm === undefined) delete process.env.GLM_XDG_DATA_HOME
+      else process.env.GLM_XDG_DATA_HOME = prevGlm
+    }
+  })
+
+  it('includes the aigw-budget source via injected fetchImpl (MES-13788 延续)', async () => {
+    mkdirSync(join(tmp, '.claude', 'projects'), { recursive: true })
+    const store = createStore(':memory:')
+    store.setSetting('claude_config_dir', join(tmp, '.claude'))
+    const prevXdg = process.env.XDG_DATA_HOME
+    const prevGlm = process.env.GLM_XDG_DATA_HOME
+    process.env.XDG_DATA_HOME = join(tmp, 'xdg')
+    delete process.env.GLM_XDG_DATA_HOME
+    // fetch stub: /user/info returns a real-shaped body; /key/info 403.
+    const fetchStub = async (url) => {
+      const u = String(url)
+      if (u.endsWith('/user/info')) {
+        return { ok: true, status: 200, json: async () => ({ user_info: { max_budget: 1000, spend: 197.83, budget_reset_at: '2026-08-01T00:00:00Z', budget_duration: '30d', user_email: 'zhiningjiao@meshy.ai', user_id: 'b3a432ba' } }) }
+      }
+      // /key/info -> 403 to keep aigw-litellm unavailable (shape-only)
+      return { ok: false, status: 403, json: async () => ({ detail: 'forbidden' }) }
+    }
+    try {
+      const sum = await buildUsageSummary({ home: tmp, store, now: NOW, fetchImpl: fetchStub })
+      const budget = sum.sources.find((s) => s.source === 'aigw-budget')
+      assert.ok(budget, 'aigw-budget source present')
+      assert.equal(budget.available, true)
+      assert.equal(budget.max_budget, 1000)
+      assert.equal(budget.spend, 197.83)
+      assert.equal(budget.remaining, 802.17)
+      assert.equal(budget.tier, 'SPEND_PAID')
+      assert.equal(budget.days_left, 25)
+      assert.equal(budget.reset_at, '2026-08-01T00:00:00Z')
+      assert.ok(typeof budget.advice === 'string' && budget.advice.length > 0)
+      // flat entries include a monthly window for the budget source
+      const monthly = sum.entries.find((e) => e.source === 'aigw-budget' && e.windowType === 'monthly')
+      assert.ok(monthly, 'monthly entry for aigw-budget')
+      assert.equal(monthly.limit, 1000)
+      assert.equal(monthly.used, 197.83)
     } finally {
       if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
       else process.env.XDG_DATA_HOME = prevXdg

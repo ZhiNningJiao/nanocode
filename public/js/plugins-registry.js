@@ -86,6 +86,11 @@ export const BUILTIN_PLUGINS = [
     tab: { id: 'usage', labelKey: 'plugin.usage.label' },
     permissions: ['fs.read', 'network'],
     descriptionKey: 'plugin.usage.desc',
+    // MES-13788 延续: re-fetch usage sources every time the tab becomes active
+    // (主人要求: 每次拉开/切换到这个 tab 都刷新). The renderer is idempotent and
+    // degrades to honest unavailable states, so re-invoking on each activation is
+    // safe and keeps the budget/usage numbers fresh without a manual click.
+    refreshOnActivate: true,
     builtin: true,
   },
   {

@@ -378,9 +378,12 @@ function applySubTab(domain) {
   }
   if (tabId) {
     const entry = mountedEntryByTab(domain, tabId)
-    if (entry && !entry.rendered) {
+    if (entry && (!entry.rendered || entry.plugin.refreshOnActivate)) {
       // 块A: 懒加载 — 首次激活插件 tab 时才 import() pane 模块，然后渲染。
       // 先标记 rendered=true 防止快速切换重复触发；import 完成后异步渲染。
+      // Plugins that opt into `refreshOnActivate` (e.g. usage — 主人要求每次
+      // 切到该 tab 都刷新) re-render on EVERY activation so data stays fresh
+      // without a manual click (renderer replaces content in place, no flash).
       const lazy = LAZY_PLUGINS[entry.plugin.name]
       // Pass the plugin manifest as the 2nd arg so renderers can read
       // `plugin.settings` (需求14 compare reads settings.defaultBranches).
