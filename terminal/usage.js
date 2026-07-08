@@ -91,12 +91,15 @@ export function resolveClaudeCwdForTab(tab, project) {
 
 /**
  * Encode a cwd the way Claude does for its per-project jsonl directory:
- * every '/' becomes '-'. (`cwdToClaudeProjectDir` equivalent that takes an
- * explicit config dir instead of home, so Team switch (CLAUDE_CONFIG_DIR)
- * is honoured.)
+ * every '/' and '.' becomes '-'. The '.' replacement matters for paths with
+ * dotfiles / dot-segments (e.g. "/.../nanocode/.interrupt-probe" encodes to
+ * "...-nanocode--interrupt-probe"); without it such cwds failed to resolve
+ * their jsonl dir → empty/wrong session replay. (`cwdToClaudeProjectDir`
+ * equivalent that takes an explicit config dir instead of home, so Team
+ * switch (CLAUDE_CONFIG_DIR) is honoured.)
  */
 export function claudeProjectsDir(configDir, cwd) {
-  const encoded = String(cwd).replace(/\//g, '-')
+  const encoded = String(cwd).replace(/[/.]/g, '-')
   return join(configDir, 'projects', encoded)
 }
 
