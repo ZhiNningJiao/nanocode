@@ -10,7 +10,7 @@ import * as sessions from './sessions.js'
 import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
-import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary } from './usage.js'
+import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary, fetchAigwBudget } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand } from './remote.js'
@@ -830,6 +830,21 @@ export function createTerminalRoutes(store, opts = {}) {
       res.json(result)
     } catch (err) {
       console.error('[/api/usage/summary]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // GET /api/usage/aigw-budget — MES-13788 延续: AIGW /user/info 月度额度。
+  // Returns { available, max_budget, spend, remaining, pct_remaining, days_left,
+  // reset_at, tier, advice, user_email } from the gateway (real, not fabricated).
+  // The AI-readable /api/usage/summary also carries this as the `aigw-budget`
+  // source; this dedicated endpoint lets the UI budget card refresh on demand.
+  router.get('/api/usage/aigw-budget', async (_req, res) => {
+    try {
+      const result = await fetchAigwBudget({})
+      res.json(result)
+    } catch (err) {
+      console.error('[/api/usage/aigw-budget]', err)
       res.status(500).json({ error: err.message })
     }
   })
