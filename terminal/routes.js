@@ -17,6 +17,8 @@ import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri
 import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
 import { exportToEvents } from './opencode-adapter.js'
 import { listOpencodeSessions } from './opencode-sessions.js'
+import { createGitCompareRoutes } from './git-compare.js'
+import { createReposRoutes } from './repos-routes.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -1223,6 +1225,15 @@ export function createTerminalRoutes(store, opts = {}) {
   router.post('/api/projects/:id/tabs/:tabId/reset', (req, res) => {
     sessionController.handleReset(req, res)
   })
+
+  // ── Branch compare (git diff) — project-scoped ─────────────────────────────
+  router.use(createGitCompareRoutes(store))
+
+  // ── Repo-scoped compare — works from a top-level (~zhining) launch ─────────
+  // Independent of the project system: scans ~/code for git repos/worktrees
+  // and diffs two refs in a selected repo. Server is read-only to repos
+  // except `git fetch --all --prune` (no checkout/pull/working-tree changes).
+  router.use(createReposRoutes({ home }))
 
   return {
     router,

@@ -8,6 +8,8 @@ import { effectiveClaudeConfigDir, claudeProjectsDir, resolveClaudeConfigDirForT
 export function cwdToClaudeProjectDir(home, cwd) {
   // Backward-compatible: defaults to ~/.claude. Kept for existing tests/callers
   // that don't know about the Team switch (CLAUDE_CONFIG_DIR) setting.
+  // claudeProjectsDir now encodes cwd with both '/' and '.' → '-' (Claude CLI's
+  // actual encoding), fixing dot-path resolution (e.g. ".../nanocode/.probe").
   return claudeProjectsDir(join(home, '.claude'), cwd)
 }
 
@@ -708,9 +710,38 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     const tabs = store.listTabs(project.id).filter((t) => t.type === 'claude')
     if (!tabs.length) return null
 
+    const projectDir = cwdToClaudeProjectDir(home, project.cwd)
+
+    // The "latest conversation in this directory" is the newest .jsonl in the
+    // project dir (by mtime) — NOT merely the newest among tab-owned sessions.
+    // A conversation may have happened via the raw claude CLI (no tab), via the
+    // Recent-Agents resume flow, or a tab may have been re-pointed. Selecting a
+    // tab that OWNS the newest jsonl makes CASE A (history endpoint) read that
+    // newest conversation directly, satisfying "点进目录自动回放该目录最近一次对话".
+    const newest = findNewestJsonl(projectDir)
+    if (newest) {
+      for (const tab of tabs) {
+        if (tab.claudeSessionId && tab.claudeSessionId === newest.sessionId) {
+          return tab.id
+        }
+      }
+    }
+
+    // No tab owns the newest jsonl. Prefer a claude tab WITHOUT a valid own
+    // jsonl — the history endpoint's CASE B fallback will then resolve to the
+    // newest jsonl in the dir for that tab (auto-resume behaviour). This avoids
+    // landing on a tab whose own (stale) session would be read via CASE A.
+    for (const tab of tabs) {
+      if (!tab.claudeSessionId) return tab.id
+      const jsonlPath = join(projectDir, `${tab.claudeSessionId}.jsonl`)
+      if (!existsSync(jsonlPath)) return tab.id
+    }
+
+    // All tabs have their own valid jsonl but none matches the newest. Fall
+    // back to the tab whose own jsonl has the newest mtime (best-effort: shows
+    // a real conversation even if not the absolute newest in the dir).
     let bestTabId = null
     let bestMtime = 0
-
     for (const tab of tabs) {
       if (!tab.claudeSessionId) continue
       // 需求5: each claude tab may carry its own configDir + session cwd

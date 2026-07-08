@@ -9,6 +9,7 @@ import { initSplitPane } from './terminal-pane.js'
 import { TabManager, TYPE_ICON_SVG } from './tab-manager.js'
 import { createExplorer } from './explorer.js'
 import { initRightPanel, showRightPanelTab } from './right-panel.js'
+import { createGitCompare } from './git-compare.js'
 
 const mobileQuery = window.matchMedia('(max-width: 768px)')
 const isMobile = () => mobileQuery.matches
@@ -17,6 +18,7 @@ let initialized = false
 let tabManager = null
 let activePane = null
 let explorer = null
+let compare = null
 let currentProjectId = null
 
 const statusBash = document.getElementById('status-bash')
@@ -58,6 +60,7 @@ export async function initTerminalView(projectId) {
   } else {
     if (tabManager) tabManager.switchProject(projectId)
     if (explorer) explorer.switchProject(projectId)
+    if (compare) compare.switchProject(projectId)
   }
 }
 
@@ -71,6 +74,7 @@ export function switchTerminalProject(projectId) {
   currentProjectId = projectId
   if (tabManager) tabManager.switchProject(projectId)
   if (explorer) explorer.switchProject(projectId)
+  if (compare) compare.switchProject(projectId)
 }
 
 export function fitTerminals() {
@@ -95,6 +99,19 @@ function setupExplorer(projectId) {
   if (!root) return
   explorer = createExplorer(root, projectId)
   initRightPanel()
+
+  // Branch-compare panel (sibling of explorer in the right pane).
+  const compareRoot = document.getElementById('compare-root')
+  if (compareRoot) {
+    compare = createGitCompare(compareRoot)
+    document.addEventListener('nanocode:toggle-compare', (e) => {
+      const id = e.detail?.projectId || currentProjectId
+      if (!id) return
+      const willShow = compareRoot.hidden
+      if (willShow) compare.show(id)
+      else compare.hide()
+    })
+  }
 
   // Feature 2: listen for path-click events from chat bubble renderer
   // The event bubbles up from wherever in the DOM the clicked span lives.
