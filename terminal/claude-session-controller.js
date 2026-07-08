@@ -392,6 +392,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
+    const cacheTtl = store.getSetting('claude_cache_ttl') || ''
     const globalPerm = store.getSetting('global_permission') || 'full-auto'
     const tabLabel = cs.tabLabel || ''
 
@@ -414,6 +415,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     if (claudeModel) launchArgs.push('--model', claudeModel)
     if (claudeEffort) launchArgs.push('--effort', claudeEffort)
+    if (cacheTtl === '1h') launchArgs.push('--betas', 'extended-cache-ttl-2025-04-11')
     if (tabLabel) launchArgs.push('--name', tabLabel)
     // 需求8: persona injection (CLI flag). Re-applied every turn so the persona
     // survives resume/reconnect. Empty prompt = no flag (no-op).
@@ -579,6 +581,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
+    const cacheTtl = store.getSetting('claude_cache_ttl') || ''
     const globalPerm = store.getSetting('global_permission') || 'full-auto'
     const tabLabel = cs.tabLabel || ''
 
@@ -600,6 +603,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     if (claudeModel) launchArgs.push('--model', claudeModel)
     if (claudeEffort) launchArgs.push('--effort', claudeEffort)
+    if (cacheTtl === '1h') launchArgs.push('--betas', 'extended-cache-ttl-2025-04-11')
     if (tabLabel) launchArgs.push('--name', tabLabel)
     // 需求8: persona injection (CLI flag). Re-applied every turn so the persona
     // survives resume/reconnect. Empty prompt = no flag (no-op).

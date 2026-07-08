@@ -154,6 +154,7 @@ function launchBridge(sessionKey, opts) {
   if (opts.effort) args.push(...formatArg('--effort', opts.effort))
   // 需求8: persona prompt forwarded to the bridge → bridge SDK driver.
   if (opts.appendSystemPrompt) args.push(...formatArg('--append-system-prompt', opts.appendSystemPrompt))
+  if (opts.cacheTtl) args.push(...formatArg('--cache-ttl', opts.cacheTtl))
   if (opts.permissionMode) args.push(...formatArg('--permission-mode', opts.permissionMode))
   if (opts.sessionFallback) args.push(...formatArg('--session-fallback', opts.sessionFallback))
   if (opts.executableOverride) args.push(...formatArg('--executable', opts.executableOverride))
@@ -366,6 +367,7 @@ function buildOptions(cs, cwd, store, home) {
     // 需求8: forward the resolved persona prompt so the bridge's SDK driver
     // injects it via appendSystemPrompt each turn (keeps persona active).
     appendSystemPrompt: cs.personaPrompt || undefined,
+    cacheTtl: store.getSetting('claude_cache_ttl') || undefined,
     permissionMode: resolvePermissionMode(store),
     sessionFallback: store.getSetting('claude_session_fallback') || undefined,
     executableOverride: getClaudeCodeExecutableOverride() || undefined,

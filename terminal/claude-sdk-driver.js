@@ -36,6 +36,31 @@ function resolvePermissionMode(store) {
   return 'bypassPermissions'
 }
 
+// Resolve the SDK betas array for extended cache TTL.
+// The Claude Agent SDK does not expose a top-level cache_ttl option; it does
+// accept a `betas` array and forwards it to the Claude Code CLI as
+// `--betas <comma-list>`. The `extended-cache-ttl-2025-04-11` flag opts the
+// session into the 1-hour ephemeral cache TTL. When the user selects the 5
+// minute TTL we omit the flag (SDK/CLI default).
+function resolveCacheTtlBetas(store) {
+  const cacheTtl = store.getSetting('claude_cache_ttl')
+  if (cacheTtl === '1h') {
+    return ['extended-cache-ttl-2025-04-11']
+  }
+  return undefined
+}
+
+// Resolve the Anthropic API cache_control object from the nanocode setting.
+// Mirrors the two supported TTL tiers (5m / 1h) shown in the settings UI and
+// is attached to every SDK query so the API receives the requested TTL.
+function resolveCacheControl(store) {
+  const cacheTtl = store.getSetting('claude_cache_ttl')
+  if (cacheTtl === '5m' || cacheTtl === '1h') {
+    return { type: 'ephemeral', ttl: cacheTtl }
+  }
+  return undefined
+}
+
 // When a force interrupt is requested we ask the SDK to stop the current turn
 // via q.interrupt().  If the SDK does not settle the turn within this window
 // (unresponsive interrupt — the exact failure that locks the user out), we
@@ -365,6 +390,8 @@ export function createClaudeSdkDriver({
     const claudeEffort = store.getSetting('claude_effort') || ''
     const sessionFallback = store.getSetting('claude_session_fallback') || 'continue'
     const sdkPermissionMode = resolvePermissionMode(store)
+    const sdkBetas = resolveCacheTtlBetas(store)
+    const sdkCacheControl = resolveCacheControl(store)
     const useResumeOnFirstTurn = !isFirstTurn || (cs.explicitSessionId && !cs.skipAutoResume)
     const sessionOptions = useResumeOnFirstTurn
       ? { resume: cs.claudeSessionId }
@@ -397,6 +424,8 @@ export function createClaudeSdkDriver({
           ...(executableOverride ? { pathToClaudeCodeExecutable: executableOverride } : {}),
           permissionMode: sdkPermissionMode,
           allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
+          ...(sdkBetas ? { betas: sdkBetas } : {}),
+          ...(sdkCacheControl ? { cache_control: sdkCacheControl } : {}),
           stderr: (text) => {
             const trimmed = typeof text === 'string' ? text.trim() : ''
             if (!trimmed) return
@@ -562,7 +591,11 @@ export function createClaudeSdkDriver({
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
     const sdkPermissionMode = resolvePermissionMode(store)
+    const sdkBetas = resolveCacheTtlBetas(store)
+    const sdkCacheControl = resolveCacheControl(store)
     const sessionOptions = useResume
+      ? { resume: cs.claudeSessionId }
+      : { sessionId: cs.claudeSessionId }
       ? { resume: cs.claudeSessionId }
       : { sessionId: cs.claudeSessionId }
     const executableOverride = getClaudeCodeExecutableOverride()
@@ -581,6 +614,8 @@ export function createClaudeSdkDriver({
       ...(executableOverride ? { pathToClaudeCodeExecutable: executableOverride } : {}),
       permissionMode: sdkPermissionMode,
       allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
+      ...(sdkBetas ? { betas: sdkBetas } : {}),
+      ...(sdkCacheControl ? { cache_control: sdkCacheControl } : {}),
       stderr: (text) => {
         const trimmed = typeof text === 'string' ? text.trim() : ''
         if (!trimmed) return

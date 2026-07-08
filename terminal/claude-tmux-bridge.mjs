@@ -43,6 +43,7 @@ function parseArgs(argv) {
     else if (arg === '--append-system-prompt') args.appendSystemPrompt = argv[++i]
     else if (arg === '--permission-mode') args.permissionMode = argv[++i]
     else if (arg === '--session-fallback') args.sessionFallback = argv[++i]
+    else if (arg === '--cache-ttl') args.cacheTtl = argv[++i]
     else if (arg === '--executable') args.executableOverride = argv[++i]
     else if (arg === '--tab-label') args.tabLabel = argv[++i]
   }
@@ -117,6 +118,7 @@ const store = {
   getSetting(key) {
     if (key === 'claude_model') return currentModel
     if (key === 'claude_effort') return currentEffort
+    if (key === 'claude_cache_ttl') return args.cacheTtl || null
     // The SDK driver resolves global_permission to SDK permissionMode values.
     if (key === 'global_permission') return args.permissionMode || 'full-auto'
     if (key === 'claude_session_fallback') return args.sessionFallback || 'continue'

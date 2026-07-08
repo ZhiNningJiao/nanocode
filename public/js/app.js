@@ -539,6 +539,9 @@ function loadSettings(serverSettings) {
   loadFable5RenderModeSettings(serverSettings)
   // Claude Model / Codex Model / Effort selectors migrated to the team-model
   // plugin (MES-13740 R2). Loaded when the Team & Model pane renders.
+  // Claude prompt cache TTL (MES-13254) stays here — it's a caching knob, not
+  // a model selector.
+  loadClaudeCacheTtlSettings(serverSettings)
   loadGlobalPermissionModeSettings(serverSettings)
   loadLangSelect()
   loadTabTypesSettings()
@@ -1016,6 +1019,39 @@ async function loadAuthStatus() {
 // The Claude model (--model), Codex model, and effort-level selectors now live in
 // the Team & Model pane (Session domain → team-model tab). Storage keys are
 // unchanged (claude_model / codex_model / claude_effort). See plugins-panel.js.
+
+// ── Claude prompt cache TTL (MES-13254) — 5m / 1h. Controls the cache_control
+// ttl passed to the SDK; lives here (not the team-model plugin) since it's a
+// caching knob, not a model selector.
+function loadClaudeCacheTtlSettings(serverSettings) {
+  const mode = serverSettings?.claude_cache_ttl || '5m'
+  const radios = document.querySelectorAll('input[name="claude-cache-ttl"]')
+  for (const radio of radios) {
+    radio.checked = radio.value === mode
+  }
+}
+
+const claudeCacheTtlSaveBtn = document.getElementById('claude-cache-ttl-save-btn')
+if (claudeCacheTtlSaveBtn) {
+  claudeCacheTtlSaveBtn.addEventListener('click', async () => {
+    const selected = document.querySelector('input[name="claude-cache-ttl"]:checked')
+    const statusEl = document.getElementById('claude-cache-ttl-status')
+    try {
+      await updateSetting('claude_cache_ttl', selected?.value || '5m')
+      if (statusEl) {
+        statusEl.textContent = 'Saved'
+        statusEl.className = 'settings-status success'
+        setTimeout(() => { statusEl.textContent = '' }, 2500)
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = err.message
+        statusEl.className = 'settings-status error'
+        setTimeout(() => { statusEl.textContent = '' }, 3000)
+      }
+    }
+  })
+}
 
 // ─── Global Permission mode (drives Claude + Codex) ──────────────────────────
 
