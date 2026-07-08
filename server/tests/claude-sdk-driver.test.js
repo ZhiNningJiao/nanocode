@@ -295,6 +295,35 @@ describe('claude sdk driver', () => {
     assert.equal(opts.allowDangerouslySkipPermissions, false)
   })
 
+  // ── Claude cache TTL beta mapping ───────────────────────────────────────────
+  it('omits extended-cache-ttl beta when claude_cache_ttl is 5m or unset', async () => {
+    const opts5m = await runWithPermission({ claude_cache_ttl: '5m' })
+    assert.deepEqual(opts5m.betas, undefined)
+    const optsUnset = await runWithPermission({})
+    assert.deepEqual(optsUnset.betas, undefined)
+  })
+
+  it('adds extended-cache-ttl beta when claude_cache_ttl is 1h', async () => {
+    const opts = await runWithPermission({ claude_cache_ttl: '1h' })
+    assert.deepEqual(opts.betas, ['extended-cache-ttl-2025-04-11'])
+  })
+
+  // ── Anthropic cache_control mapping ───────────────────────────────────────────
+  it('sets cache_control to ephemeral 5m when claude_cache_ttl is 5m', async () => {
+    const opts = await runWithPermission({ claude_cache_ttl: '5m' })
+    assert.deepEqual(opts.cache_control, { type: 'ephemeral', ttl: '5m' })
+  })
+
+  it('sets cache_control to ephemeral 1h when claude_cache_ttl is 1h', async () => {
+    const opts = await runWithPermission({ claude_cache_ttl: '1h' })
+    assert.deepEqual(opts.cache_control, { type: 'ephemeral', ttl: '1h' })
+  })
+
+  it('omits cache_control when claude_cache_ttl is unset', async () => {
+    const opts = await runWithPermission({})
+    assert.equal(opts.cache_control, undefined)
+  })
+
   // ── SDK-wrapped result error suppression (model_not_found / rate_limit etc.) ──
   // When the SDK throws "Claude Code returned an error result: <reason>" (non-resume-miss),
   // the driver must NOT fall back to CLI. The result event was already broadcast, so the

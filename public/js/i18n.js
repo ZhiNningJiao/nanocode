@@ -46,6 +46,10 @@ const translations = {
     'settings.effort.label': 'Effort Level',
     'settings.effort.hint': 'Empty = CLI default',
     'settings.effort.default': 'Default',
+    'settings.cachettl.label': 'Cache TTL',
+    'settings.cachettl.hint': 'Takes effect on next session',
+    'settings.cachettl.5m': '5 minutes — write 1.25× / read 0.1×',
+    'settings.cachettl.1h': '1 hour — write 2× / read 0.1×',
     // Global permission
     'settings.permission.label': 'Permission Mode',
     'settings.permission.hint': 'Applies to both Claude and Codex. Takes effect on next session.',
@@ -422,6 +426,10 @@ const translations = {
     'settings.effort.label': 'Effort 级别',
     'settings.effort.hint': '空=CLI 默认',
     'settings.effort.default': '默认',
+    'settings.cachettl.label': '缓存 TTL',
+    'settings.cachettl.hint': '下次会话生效',
+    'settings.cachettl.5m': '5 分钟 — write 1.25× / read 0.1×',
+    'settings.cachettl.1h': '1 小时 — write 2× / read 0.1×',
     // Global permission
     'settings.permission.label': 'Permission 模式',
     'settings.permission.hint': '同时驱动 Claude 和 Codex，下次会话生效。',
