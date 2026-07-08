@@ -1590,14 +1590,15 @@ export function mapAigwBudgetResponse(body, { now = Date.now() } = {}) {
  * on any failure so the route can 200 with a clear reason. Accepts a fetchImpl
  * injection so unit tests can stub the network without a real gateway.
  */
-export async function fetchAigwBudget({ key, fetchImpl, now = Date.now() } = {}) {
-  const apiKey = (key ?? readAigwKey()).trim()
+export async function fetchAigwBudget({ key, home, fetchImpl, now = Date.now() } = {}) {
+  const base = getAigwBase({ home })
+  const apiKey = (key ?? readAigwKey({ home })).trim()
   if (!apiKey) {
-    return { available: false, keyPresent: false, base: AIGW_BASE, error: 'AIGW key not found (~/.config/meshy-aigw.key)' }
+    return { available: false, keyPresent: false, base, error: 'AIGW key not found (~/.config/meshy-aigw.key)' }
   }
   const f = fetchImpl || fetch
   try {
-    const res = await f(`${AIGW_BASE}/user/info`, {
+    const res = await f(`${base}/user/info`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(15000),
     })
@@ -1605,12 +1606,12 @@ export async function fetchAigwBudget({ key, fetchImpl, now = Date.now() } = {})
       let body = null
       try { body = await res.json() } catch {}
       const msg = body?.detail || body?.error || `HTTP ${res.status}`
-      return { available: false, keyPresent: true, base: AIGW_BASE, error: `AIGW /user/info ${msg}` }
+      return { available: false, keyPresent: true, base, error: `AIGW /user/info ${msg}` }
     }
     const data = await res.json()
-    return { ...mapAigwBudgetResponse(data, { now }), keyPresent: true, base: AIGW_BASE }
+    return { ...mapAigwBudgetResponse(data, { now }), keyPresent: true, base }
   } catch (err) {
-    return { available: false, keyPresent: true, base: AIGW_BASE, error: `AIGW /user/info fetch failed: ${err?.message || err}` }
+    return { available: false, keyPresent: true, base, error: `AIGW /user/info fetch failed: ${err?.message || err}` }
   }
 }
 
