@@ -538,16 +538,34 @@ function setupChatInput() {
         return `<div class="cq-item">` +
           `<span class="cq-pos">${i + 1}</span>` +
           `<span class="cq-text">${escapeHtml(truncated)}</span>` +
+          `<button class="cq-send-one" data-idx="${i}" aria-label="Send this message now" title="打断当前回合并立即发送此条（只停主回合，不杀后台 sub-agent）">发送</button>` +
           `<button class="cq-remove" data-idx="${i}" aria-label="Remove queued message" title="Remove from queue">×</button>` +
           `</div>`
       }).join('') +
-      `<div class="cq-hint">↑ 取回编辑 · 立刻发送=打断当前回合马上发 · 空闲时自动发送 · Esc 可清空</div>`
+      `<div class="cq-hint">↑ 取回编辑 · 立刻发送=打断当前回合马上发 · 单条发送=只发该条 · 空闲时自动发送 · Esc 可清空</div>`
     queueTray.querySelectorAll('.cq-remove').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
         _pendingQueue.splice(+btn.dataset.idx, 1)
         _persistQueueNow()
         updateQueueTray()
+      })
+    })
+    // Per-message "send now" button: interrupt the current turn and send ONLY
+    // this one queued message immediately, leaving the rest in the queue.
+    // Same atomic backend path as the global sendNowFlush (sendNow: true).
+    queueTray.querySelectorAll('.cq-send-one').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const idx = +btn.dataset.idx
+        if (idx < 0 || idx >= _pendingQueue.length) return
+        const text = _pendingQueue.splice(idx, 1)[0]
+        _persistQueueNow()
+        updateQueueTray()
+        if (activePane) activePane.sendInputWithEcho(text, { sendNow: true })
+        pushHistory(text)
+        resetHistoryNav()
+        chatInput.focus()
       })
     })
     // "立即发送" button: force-interrupt the current turn AND submit the queued
