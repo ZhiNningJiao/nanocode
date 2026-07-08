@@ -98,6 +98,14 @@ export class TabManager {
       const tab = await createTab(this.projectId, { type, ...extraOpts })
       this._pendingActiveId = tab.id
       // The WS broadcast that follows will add the tab + setActive.
+      // But the server broadcasts BEFORE the POST response returns, so the
+      // broadcast may have already arrived and added the tab without activating
+      // it (because _pendingActiveId was still null). If the tab is already in
+      // this.tabs, activate it now; otherwise the next broadcast will.
+      if (this.tabs.some((t) => t.id === tab.id)) {
+        this._pendingActiveId = null
+        this.setActive(tab.id)
+      }
       return tab.id
     } catch (err) {
       console.error('newTab failed', err)
