@@ -25,6 +25,8 @@ import {
   deleteMachine,
   buildConnectUri,
   buildSshCommand,
+  getMachine,
+  mergePersonalMachines,
 } from '../../terminal/remote.js'
 
 function mockStore() {
@@ -341,6 +343,82 @@ describe('remote machines (MES-13740 需求10)', () => {
       const r = buildSshCommand({ type: 'ssh', host: '1.2.3.4', user: 'r' })
       assert.ok(!r.ok)
       assert.ok(/key nor a password/.test(r.error))
+    })
+  })
+
+  // ── MES-13824 personal dev machines merge + getMachine ────────────────────
+  describe('mergePersonalMachines (MES-13824)', () => {
+    it('merges read-only personal machines ahead of the store list', () => {
+      addMachine(store, { alias: 'gpu1', peerId: '111' })
+      const personal = [
+        { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster' },
+      ]
+      const merged = mergePersonalMachines(listMachines(store), personal)
+      assert.equal(merged.length, 2)
+      assert.equal(merged[0].alias, 'win-212')
+      assert.equal(merged[0].id, 'personal:win-212')
+      assert.equal(merged[0].personal, true)
+      assert.equal(merged[0].readOnly, true)
+      assert.equal(merged[0].host, '172.30.20.212')
+      // store machine follows
+      assert.equal(merged[1].alias, 'gpu1')
+    })
+
+    it('drops personal entries that fail sanitizeMachine (missing key AND password)', () => {
+      addMachine(store, { alias: 'gpu1', peerId: '111' })
+      const personal = [
+        { alias: 'bad', type: 'ssh', host: '1.2.3.4', user: 'r' }, // no key, no password
+        { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' },
+      ]
+      const merged = mergePersonalMachines(listMachines(store), personal)
+      assert.equal(merged.length, 2) // 1 valid personal + 1 store
+      assert.equal(merged[0].alias, 'win-212')
+    })
+
+    it('returns the store list unchanged when personalMachines is null/empty', () => {
+      addMachine(store, { alias: 'gpu1', peerId: '111' })
+      assert.equal(mergePersonalMachines(listMachines(store), null).length, 1)
+      assert.equal(mergePersonalMachines(listMachines(store), []).length, 1)
+    })
+
+    it('does not mutate the store (personal machines are read-only seeds)', () => {
+      addMachine(store, { alias: 'gpu1', peerId: '111' })
+      const before = listMachines(store).length
+      mergePersonalMachines(listMachines(store), [
+        { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' },
+      ])
+      assert.equal(listMachines(store).length, before, 'store must be untouched')
+    })
+  })
+
+  describe('getMachine (personal dev machines, MES-13824)', () => {
+    it('resolves a personal: machine from the personalMachines list', () => {
+      const personal = [
+        { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' },
+      ]
+      const m = getMachine(store, 'personal:win-212', personal)
+      assert.ok(m, 'personal machine must resolve')
+      assert.equal(m.host, '172.30.20.212')
+      assert.equal(m.user, 'Administrator')
+      assert.equal(m.personal, true)
+      assert.equal(m.readOnly, true)
+      assert.equal(m.id, 'personal:win-212')
+    })
+
+    it('returns null for an unknown personal: id (no match in the list)', () => {
+      const m = getMachine(store, 'personal:nope', [{ alias: 'win-212', type: 'ssh', host: '1.2.3.4', user: 'r', key: '/k' }])
+      assert.equal(m, null)
+    })
+
+    it('returns null for a personal: id when no personalMachines passed', () => {
+      assert.equal(getMachine(store, 'personal:win-212'), null)
+    })
+
+    it('still resolves store machines by id (backward compatible)', () => {
+      const a = addMachine(store, { alias: 'gpu1', peerId: '111' }).machine
+      const m = getMachine(store, a.id)
+      assert.ok(m)
+      assert.equal(m.alias, 'gpu1')
     })
   })
 })

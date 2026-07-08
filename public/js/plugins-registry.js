@@ -84,7 +84,7 @@ export const BUILTIN_PLUGINS = [
     apiVersion: '1.0',
     group: 'monitor',
     tab: { id: 'usage', labelKey: 'plugin.usage.label' },
-    permissions: ['fs.read', 'network'],
+    permissions: ['fs.read', 'network', 'personal.aigw'],
     descriptionKey: 'plugin.usage.desc',
     // MES-13788 延续: re-fetch usage sources every time the tab becomes active
     // (主人要求: 每次拉开/切换到这个 tab 都刷新). The renderer is idempotent and
@@ -140,7 +140,7 @@ export const BUILTIN_PLUGINS = [
     apiVersion: '1.0',
     group: 'monitor',
     tab: { id: 'remote', labelKey: 'plugin.remote.label' },
-    permissions: ['network'],
+    permissions: ['network', 'personal.remote'],
     descriptionKey: 'plugin.remote.desc',
     builtin: true,
   },
