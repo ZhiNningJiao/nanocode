@@ -1,0 +1,28 @@
+{
+  "_comment": "Example personal config. Copy to ~/.config/nanocode/personal.json (chmod 600) and fill in real secrets. NEVER commit the real file — it is gitignored.",
+  "_fields": {
+    "linear.apiKey": "Linear API key (lf_xxx). Used by Linear helpers. Optional — falls back to ~/.config/linear-api.key.",
+    "aigw.base": "LiteLLM gateway base URL. Optional — defaults to https://aigw.meshy.team.",
+    "aigw.key": "AIGW virtual LLM key. Optional — falls back to ~/.config/meshy-aigw.key.",
+    "aigw.budgetUsd": "Local monthly budget in USD (key-side max_budget is null for virtual keys). Defaults to 1000.",
+    "claude.teams": "Extra Claude team config dirs beyond the auto-discovered ~/.claude + ~/.claude-team*. null = auto-discover only.",
+    "ntfy.url": "ntfy notification topic URL. Optional — null disables notifications."
+  },
+  "linear": {
+    "apiKey": "lf_REPLACE_ME"
+  },
+  "aigw": {
+    "base": "https://aigw.meshy.team",
+    "key": "REPLACE_ME_AIGW_KEY",
+    "budgetUsd": 1000
+  },
+  "claude": {
+    "teams": [
+      { "name": "Team1", "configDir": "~/.claude" },
+      { "name": "Team2", "configDir": "~/.claude-team2" }
+    ]
+  },
+  "ntfy": {
+    "url": null
+  }
+}

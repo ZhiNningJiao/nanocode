@@ -2,17 +2,19 @@
 
 import { Router } from 'express'
 import { execFile, spawn } from 'node:child_process'
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
-import { resolve, isAbsolute, join } from 'node:path'
+import { readFileSync, existsSync } from 'node:fs'
+import path, { resolve, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
+import { currentPlatform, listDirectory, listDrives } from './fsbrowse.js'
 import * as sessions from './sessions.js'
 import { createClaudeHistoryService } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
-import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './usage.js'
+import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
-import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri } from './remote.js'
+import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand } from './remote.js'
+import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
 import { exportToEvents } from './opencode-adapter.js'
 import { listOpencodeSessions } from './opencode-sessions.js'
 
@@ -44,6 +46,7 @@ export function createTerminalRoutes(store, opts = {}) {
     recentAgents,
     sessionController,
   })
+  const remoteSsh = createRemoteSshHandler(store)
 
   /** Parse ~/.ssh/config into an array of host objects. */
   function parseSshConfig(content) {
@@ -369,17 +372,27 @@ export function createTerminalRoutes(store, opts = {}) {
   // under /opt, /srv, /var/www, etc. The filesystem's own permission
   // checks (readdirSync → EACCES) remain the authorization boundary.
   // Relative paths or empty path default to $HOME for convenience.
+  //
+  // Cross-platform (MES-13804): on Windows, an empty path (or `?drives=1`)
+  // returns the list of available drive letters; every response carries a
+  // `parent` field (null at a drive root / `/`) so the frontend can disable
+  // the "up one level" button. Pure path logic lives in ./fsbrowse.js so the
+  // win32 branches are unit-testable on a Linux host.
   router.get('/api/fs', (req, res) => {
+    const platform = currentPlatform()
+    const pathMod = platform === 'win32' ? path.win32 : path
     const raw = req.query.path
     const input = raw && String(raw).trim() ? String(raw).trim() : null
-    const base = input ? (isAbsolute(input) ? resolve(input) : resolve(home, input)) : home
+    const wantsDrives = req.query.drives === '1' || (!input && platform === 'win32')
 
     try {
-      const entries = readdirSync(base, { withFileTypes: true })
-        .filter((dirent) => dirent.isDirectory() && !dirent.name.startsWith('.'))
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-        .map((dirent) => ({ name: dirent.name, isDir: true }))
-      res.json({ path: base, entries })
+      if (wantsDrives) {
+        return res.json({ drives: listDrives(platform), platform })
+      }
+      const base = input
+        ? (pathMod.isAbsolute(input) ? pathMod.resolve(input) : pathMod.resolve(home, input))
+        : home
+      res.json({ ...listDirectory(base, platform), platform })
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'not found' })
       if (err.code === 'ENOTDIR')
@@ -805,6 +818,22 @@ export function createTerminalRoutes(store, opts = {}) {
     }
   })
 
+  // GET /api/usage/summary — MES-13788 three-source usage+limit summary
+  // (CodexBar-style windows + reset + burn + projection). The AI-readable
+  // entry point: a secretary/agent fetches this to read Team1/Team2/AIGW usage
+  // + limits and decide degradation routing. Returns { generatedAt, schemaVersion,
+  // sources:[...], entries:[flat unified-schema windows] }. Each source degrades
+  // independently (OAuth → jsonl estimate; AIGW → unavailable) and never throws.
+  router.get('/api/usage/summary', async (_req, res) => {
+    try {
+      const result = await buildUsageSummary({ home, store })
+      res.json(result)
+    } catch (err) {
+      console.error('[/api/usage/summary]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
   router.get('/api/aigw/models', async (req, res) => {
     try {
       const result = await listAigwModels({})
@@ -1078,6 +1107,10 @@ export function createTerminalRoutes(store, opts = {}) {
 
   router.delete('/api/remote/machines/:id', (req, res) => {
     try {
+      // Tear down any live SSH PTY for this machine before the record vanishes,
+      // so a dangling terminal Tab reconnects cleanly (gets "machine not found")
+      // instead of reattaching to a stale shell pointed at a deleted host.
+      sessions.destroySession(`remote:ssh:${req.params.id}`)
       const result = deleteMachine(store, req.params.id)
       if (result.error) {
         const code = /not found/.test(result.error) ? 404 : 400
@@ -1086,6 +1119,28 @@ export function createTerminalRoutes(store, opts = {}) {
       res.json({ ok: true })
     } catch (err) {
       console.error('[DELETE /api/remote/machines/:id]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── POST /api/remote/machines/:id/connect ─────────────────────────────────
+  //
+  // Pre-flight check before the browser opens a terminal Tab for an ssh
+  // machine: validates the record is an ssh machine, resolves the ssh command
+  // (key existence / sshpass presence for password auth), and returns a safe
+  // summary (no secrets). The browser uses the failure to show an inline error
+  // instead of opening a dead terminal; a WS attach would also reject, but
+  // surfacing it via REST gives a cleaner UX (no flash of empty xterm).
+  router.post('/api/remote/machines/:id/connect', (req, res) => {
+    try {
+      const machine = getMachine(store, req.params.id)
+      if (!machine) return res.status(404).json({ error: 'machine not found' })
+      if (machine.type !== 'ssh') return res.status(400).json({ error: 'not an ssh machine' })
+      const built = buildSshCommand(machine, { sshpassPath: machine.sshPassword ? resolveSshpass() : null })
+      if (!built.ok) return res.status(400).json({ error: built.error })
+      res.json({ ok: true, summary: built.logSummary })
+    } catch (err) {
+      console.error('[POST /api/remote/machines/:id/connect]', err)
       res.status(500).json({ error: err.message })
     }
   })
@@ -1159,5 +1214,6 @@ export function createTerminalRoutes(store, opts = {}) {
     handleTerminalWs: sessionController.handleTerminalWs,
     handleTabsWs,
     setAgentHealthMonitor: sessionController.setAgentHealthMonitor,
+    handleRemoteSshWs: remoteSsh.handleRemoteSshWs,
   }
 }

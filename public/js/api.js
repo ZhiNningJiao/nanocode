@@ -84,6 +84,12 @@ export function fetchDir(path) {
   return request(url)
 }
 
+// MES-13804: top-level drive list for the cross-platform folder picker.
+// Windows → C:\, D:\, …; POSIX/mac → a single '/' root entry.
+export function fetchDrives() {
+  return request('/fs?drives=1')
+}
+
 export function renameFsPath(projectId, from, to) {
   return request(`/projects/${projectId}/files/rename`, {
     method: 'POST',

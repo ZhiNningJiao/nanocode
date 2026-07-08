@@ -197,50 +197,10 @@
               <div id="auth-status-display" style="font-size:13px;color:var(--text-secondary,#aaa);padding:4px 0" data-i18n="settings.auth.loading">Loading…</div>
             </div>
 
-            <!-- Claude Model selector -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.claude.model.label">Claude Model</span> <span class="settings-hint-inline" data-i18n="settings.claude.model.hint">Empty = CLI default</span></div>
-              <div class="settings-field">
-                <input type="text" id="claude-model-select" class="settings-input" placeholder="e.g. claude-fable-5 (empty = CLI default)">
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="claude-model-save-btn" data-i18n="btn.save">Save</button>
-                <span class="settings-status" id="claude-model-status"></span>
-              </div>
-            </div>
-
-            <!-- Codex Model selector (restored) -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.codex.model.label">Codex Model</span> <span class="settings-hint-inline" data-i18n="settings.codex.model.hint">Empty = Codex default</span></div>
-              <div class="settings-field">
-                <select id="codex-model-select" class="settings-input">
-                  <option value="" data-i18n="settings.codex.model.default">Default (Codex decides)</option>
-                </select>
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="codex-model-save-btn" data-i18n="btn.save">Save</button>
-                <span class="settings-status" id="codex-model-status"></span>
-              </div>
-            </div>
-
-            <!-- Effort selector -->
-            <div class="settings-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.effort.label">Effort Level</span> <span class="settings-hint-inline" data-i18n="settings.effort.hint">Empty = CLI default</span></div>
-              <div class="settings-field">
-                <select id="claude-effort-select" class="settings-input">
-                  <option value="" data-i18n="settings.effort.default">Default</option>
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                  <option value="xhigh">xhigh</option>
-                  <option value="max">max</option>
-                </select>
-              </div>
-              <div class="settings-actions">
-                <button type="button" class="btn btn-primary" id="claude-effort-save-btn" data-i18n="btn.save">Save</button>
-                <span class="settings-status" id="claude-effort-status"></span>
-              </div>
-            </div>
+            <!-- Claude Model / Codex Model / Effort Level selectors have migrated
+                 to the team-model plugin (Session → Team & Model tab). Storage keys
+                 are unchanged (claude_model / codex_model / claude_effort) so
+                 existing configs carry over with no migration step. MES-13740 R2. -->
 
             <!-- Global Permission mode (drives both Claude and Codex) -->
             <div class="settings-subsection">
@@ -396,31 +356,26 @@
             <div class="pane pane-right">
               <div class="right-panel" id="right-panel">
                 <div class="right-domain-strip" id="right-domain-strip" role="tablist">
-                  <button type="button" class="right-domain-btn active" data-domain="session" role="tab" data-i18n="domain.session">Session</button>
-                  <button type="button" class="right-domain-btn" data-domain="ops" role="tab" data-i18n="domain.ops">Ops</button>
-                  <button type="button" class="right-domain-btn" data-domain="artifacts" role="tab" data-i18n="domain.artifacts">Artifacts</button>
+                  <button type="button" class="right-domain-btn active" data-domain="work" role="tab" data-i18n="domain.work">Work</button>
+                  <button type="button" class="right-domain-btn" data-domain="monitor" role="tab" data-i18n="domain.monitor">Monitor</button>
                 </div>
                 <div class="right-domain-body" id="right-domain-body">
-                  <div class="right-domain active" data-domain="session">
-                    <div class="right-sub-tabs" data-domain-tabs="session" role="tablist"></div>
-                    <div class="right-sub-body" data-domain-body="session"></div>
-                  </div>
-                  <div class="right-domain" data-domain="ops">
-                    <div class="right-sub-tabs" data-domain-tabs="ops" role="tablist">
-                      <button type="button" class="right-sub-tab" data-rp-tab="plugin-manager" role="tab" data-i18n="plugin.manager.label">Plugins</button>
-                    </div>
-                    <div class="right-sub-body" data-domain-body="ops">
-                      <div class="right-panel-pane" data-rp-pane="plugin-manager" id="plugin-manager-pane"></div>
-                    </div>
-                  </div>
-                  <div class="right-domain" data-domain="artifacts">
-                    <div class="right-sub-tabs" data-domain-tabs="artifacts" role="tablist">
+                  <div class="right-domain active" data-domain="work">
+                    <div class="right-sub-tabs" data-domain-tabs="work" role="tablist">
                       <button type="button" class="right-sub-tab active" data-rp-tab="files" role="tab" data-i18n="rightpanel.files">Files</button>
                     </div>
-                    <div class="right-sub-body" data-domain-body="artifacts">
+                    <div class="right-sub-body" data-domain-body="work">
                       <div class="right-panel-pane active" data-rp-pane="files">
                         <div class="explorer-root" id="explorer-root"></div>
                       </div>
+                    </div>
+                  </div>
+                  <div class="right-domain" data-domain="monitor">
+                    <div class="right-sub-tabs" data-domain-tabs="monitor" role="tablist">
+                      <button type="button" class="right-sub-tab" data-rp-tab="plugin-manager" role="tab" data-i18n="plugin.manager.label">Plugins</button>
+                    </div>
+                    <div class="right-sub-body" data-domain-body="monitor">
+                      <div class="right-panel-pane" data-rp-pane="plugin-manager" id="plugin-manager-pane"></div>
                     </div>
                   </div>
                 </div>
@@ -533,11 +488,15 @@
               id="proj-cwd"
               type="text"
               autocomplete="off"
-              placeholder="/home/you/project or /opt/whatever"
+              placeholder="/home/you/project or C:\\Users\\you\\project"
             />
           </label>
           <p class="dialog-hint">Type any absolute path, or browse:</p>
           <div class="folder-browser">
+            <div class="folder-toolbar">
+              <button type="button" id="folder-up-btn" class="folder-up-btn" title="Up one level" disabled>&#8593;</button>
+              <button type="button" id="folder-drives-btn" class="folder-drives-btn" title="Computer / drives">Computer</button>
+            </div>
             <div class="folder-breadcrumb" id="folder-breadcrumb"></div>
             <div class="folder-list" id="folder-list"></div>
             <div class="folder-current" id="folder-current"></div>
@@ -608,6 +567,7 @@
     <script type="module" src="/js/i18n.js"></script>
     <script type="module" src="/js/app.js"></script>
     <script type="module" src="/js/tts.js"></script>
+    <script type="module" src="/js/ntfy-hook.js"></script>
     <script type="module" src="/js/agent-health.js"></script>
   </body>
 </html>
