@@ -1,20 +1,51 @@
 {
-  "_comment": "Example personal config. Copy to ~/.config/nanocode/personal.json (chmod 600) and fill in real secrets. NEVER commit the real file — it is gitignored.",
+  "_comment": "Example personal config. Copy to ~/.config/nanocode/personal.json (chmod 600) and fill in real secrets. NEVER commit the real file — it is gitignored (**/personal.json). Values live repo-OUTSIDE under ~/.config/; the repo only carries this example + the loader code.",
   "_fields": {
-    "linear.apiKey": "Linear API key (lf_xxx). Used by Linear helpers. Optional — falls back to ~/.config/linear-api.key.",
+    "linear.apiKey": "Linear API key (lin_xxx). Used by Linear helpers. Optional — falls back to ~/.config/linear-api.key.",
     "aigw.base": "LiteLLM gateway base URL. Optional — defaults to https://aigw.meshy.team.",
     "aigw.key": "AIGW virtual LLM key. Optional — falls back to ~/.config/meshy-aigw.key.",
     "aigw.budgetUsd": "Local monthly budget in USD (key-side max_budget is null for virtual keys). Defaults to 1000.",
+    "remote.machines": "Read-only SSH dev-machine seeds merged ahead of the address book. Each: {alias, type:'ssh', host, user, port?, key, note?}. The key is a PATH (never content); sshPassword (if used) is server-side only. Optional — null/absent = no personal machines.",
     "claude.teams": "Extra Claude team config dirs beyond the auto-discovered ~/.claude + ~/.claude-team*. null = auto-discover only.",
     "ntfy.url": "ntfy notification topic URL. Optional — null disables notifications."
   },
+  "_permissions": {
+    "_comment": "Permission gate (MES-13824): a plugin receives a field ONLY if its manifest declares the matching 'personal.*' permission. Secrets (linear.apiKey / aigw.key) are never sent to the frontend in plaintext — only masked (lin_…xxxx) + hasKey. Real values are server-side only (resolvePluginSecrets).",
+    "personal.linear": "unlocks linear (masked) — for a Linear plugin/helper",
+    "personal.aigw": "unlocks aigw (base/budget + masked key) — declared by the usage plugin",
+    "personal.remote": "unlocks remote.machines (host/user/port/key-path, no secrets) — declared by the remote plugin",
+    "personal.claude": "unlocks claude.teams",
+    "personal.ntfy": "unlocks ntfy.url"
+  },
   "linear": {
-    "apiKey": "lf_REPLACE_ME"
+    "apiKey": "lin_REPLACE_ME"
   },
   "aigw": {
     "base": "https://aigw.meshy.team",
     "key": "REPLACE_ME_AIGW_KEY",
     "budgetUsd": 1000
+  },
+  "remote": {
+    "machines": [
+      {
+        "alias": "win-212",
+        "type": "ssh",
+        "host": "172.30.20.212",
+        "user": "Administrator",
+        "port": 22,
+        "key": "~/.ssh/id_cluster",
+        "note": "Windows dev box (NAT: local 172.16.0.1 behind 212)"
+      },
+      {
+        "alias": "dev-box",
+        "type": "ssh",
+        "host": "10.18.8.55",
+        "user": "REPLACE_ME",
+        "port": 22,
+        "key": "~/.ssh/id_cluster",
+        "note": "dev box"
+      }
+    ]
   },
   "claude": {
     "teams": [
