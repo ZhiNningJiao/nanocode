@@ -1,15 +1,18 @@
 /**
- * Right panel — three-domain container (MES-13740 需求6).
+ * Right panel — dual-domain container (MES-13740 R2 B-2).
  *
- * Top-level domains (按"你在对谁做事"):
- *   - Session  — control the current agent (team/model plugin, resume selector)
- *   - Ops      — all agents & resources (usage plugin, plugin manager)
- *   - Artifacts— outputs (Files, Compare)
+ * Top-level groups (按"监视 AI 放一起 / Claude Code 相关放一起", 主人 2026-07-04):
+ *   - Work     — operate the current Claude agent + its outputs
+ *                (team-model, memory, persona, files, compare)
+ *   - Monitor  — watch all agents & resources
+ *                (usage, remote, services, plugin-manager; notify/tts settings)
  *
- * Each domain has its own second-level tab strip. Built-in tabs (Files, Compare,
- * plugin-manager) live in HTML; plugin tabs (team-model, usage) are mounted/
- * unmounted dynamically by the plugin registry. Enabling a plugin mounts its
- * tab in the plugin's declared `group` domain; disabling removes it.
+ * R2 B-2 collapsed the previous session/ops/artifacts tri-domain into this
+ * dual-group partition. Each group has its own second-level tab strip. Built-in
+ * tabs (Files, plugin-manager) live in HTML; plugin tabs (team-model, usage)
+ * are mounted/unmounted dynamically by the plugin registry. Enabling a plugin
+ * mounts its tab in the plugin's declared `group` domain; disabling removes it.
+ * B-1: enabling a plugin auto-activates its tab so the user sees what they turned on.
  *
  * This is the shell only — render cores (plugins-panel.js) and the file explorer
  * (explorer.js) are not rewritten. 壳动芯不动.
@@ -21,46 +24,92 @@ import {
   builtinPlugin,
   validateManifest,
 } from './plugins-registry.js'
-import { renderTeamModelPane, renderUsagePane, resetPluginLoadState } from './plugins-panel.js'
-import { renderMemoryPane, resetMemoryLoadState } from './memory-panel.js'
-import { renderPersonaPane, resetPersonaLoadState } from './persona-panel.js'
-import { renderComparePane, resetCompareLoadState } from './compare-panel.js'
-import { renderRemotePane, resetRemoteLoadState } from './remote-panel.js'
-import { renderNotifySettings } from './notify-panel.js'
-import { renderTtsSettings } from './tts-panel.js'
-import { renderServicesPane, resetServicesLoadState } from './services-panel.js'
+
+// 块A: 插件 pane 模块懒加载。
+// 之前顶部 eager import 全部 8 个 pane 模块（~30KB / 8 个 HTTP 请求），在页面加载时
+// 全部 fetch+parse+eval，即使用户从不打开右侧面板的插件 tab。现在改为首次使用时
+// 才 dynamic import()，import 后缓存到 _modCache，后续激活瞬间返回。
+// 效果：opencode/fable5 tab 打开时减少 8 个模块的加载开销（见 REPORT 块A 验证）。
+const _modCache = new Map() // cacheKey -> Promise<module>
+function _loadMod(cacheKey, importer) {
+  if (!_modCache.has(cacheKey)) {
+    _modCache.set(cacheKey, importer().catch((e) => { _modCache.delete(cacheKey); throw e }))
+  }
+  return _modCache.get(cacheKey)
+}
+function _isModLoaded(cacheKey) { return _modCache.has(cacheKey) }
+
+// 每个插件名 → { key, imp, render?, settingsRender?, reset? }
+//   key  : _modCache 的缓存键（同一模块文件共享一个键，如 team-model/usage 共享 plugins-panel）
+//   imp  : () => import('./xxx-panel.js')  首次调用时触发模块加载
+//   render(m, pane, plugin)        : 渲染 pane（插件 tab 激活时调用）
+//   settingsRender(m, body)        : 渲染设置面板（plugin manager 展开时调用）
+//   reset(m)                       : 清空加载状态（插件卸载时调用，仅模块已缓存时执行）
+const LAZY_PLUGINS = {
+  'team-model': {
+    key: 'plugins-panel', imp: () => import('./plugins-panel.js'),
+    render: (m, pane) => m.renderTeamModelPane(pane),
+    reset: (m) => m.resetPluginLoadState(),
+  },
+  usage: {
+    key: 'plugins-panel', imp: () => import('./plugins-panel.js'),
+    render: (m, pane) => m.renderUsagePane(pane),
+    reset: (m) => m.resetPluginLoadState(),
+  },
+  memory: {
+    key: 'memory-panel', imp: () => import('./memory-panel.js'),
+    render: (m, pane) => m.renderMemoryPane(pane),
+    reset: (m) => m.resetMemoryLoadState(),
+  },
+  persona: {
+    key: 'persona-panel', imp: () => import('./persona-panel.js'),
+    render: (m, pane) => m.renderPersonaPane(pane),
+    reset: (m) => m.resetPersonaLoadState(),
+  },
+  compare: {
+    key: 'compare-panel', imp: () => import('./compare-panel.js'),
+    render: (m, pane, plugin) => m.renderComparePane(pane, plugin),
+    reset: (m) => m.resetCompareLoadState(),
+  },
+  remote: {
+    key: 'remote-panel', imp: () => import('./remote-panel.js'),
+    render: (m, pane) => m.renderRemotePane(pane),
+    reset: (m) => m.resetRemoteLoadState(),
+  },
+  notify: {
+    key: 'notify-panel', imp: () => import('./notify-panel.js'),
+    settingsRender: (m, body) => m.renderNotifySettings(body),
+  },
+  tts: {
+    key: 'tts-panel', imp: () => import('./tts-panel.js'),
+    settingsRender: (m, body) => m.renderTtsSettings(body),
+  },
+  services: {
+    key: 'services-panel', imp: () => import('./services-panel.js'),
+    render: (m, pane) => m.renderServicesPane(pane),
+    reset: (m) => m.resetServicesLoadState(),
+  },
+}
 
 const DOMAIN_KEY = 'rightPanel:domain'
 const SUBTAB_KEY = (d) => `rightPanel:subtab:${d}`
 const ENABLED_KEY = 'rightPanel:plugins:enabled'
 
-const DOMAINS = ['session', 'ops', 'artifacts']
-// Built-in HTML tabs and their domain. NOTE: `compare` is now a plugin (需求14),
+const DOMAINS = ['work', 'monitor']
+// Built-in HTML tabs and their group. NOTE: `compare` is a plugin (需求14),
 // not a built-in HTML tab — it mounts/unmounts via the registry. Only `files`
-// (the explorer) and `plugin-manager` remain built-in.
+// (the explorer) and `plugin-manager` remain built-in. R2 B-2: files moved
+// from the old `artifacts` domain into `work` (it's a Claude Code output).
 const BUILTIN_TAB_DOMAIN = {
-  files: 'artifacts',
-  'plugin-manager': 'ops',
+  files: 'work',
+  'plugin-manager': 'monitor',
 }
-const PLUGIN_RENDERERS = {
-  'team-model': renderTeamModelPane,
-  usage: renderUsagePane,
-  memory: renderMemoryPane,
-  persona: renderPersonaPane,
-  compare: renderComparePane,
-  remote: renderRemotePane,
-  services: renderServicesPane,
-}
-// 需求13: per-plugin settings renderers. A plugin with an entry here surfaces an
-// expandable settings panel in the plugin manager. Settings-only plugins (no
-// `tab`, e.g. tts / notify) only appear via this map — they mount no tab.
-const PLUGIN_SETTINGS_RENDERERS = {
-  notify: renderNotifySettings,
-  tts: renderTtsSettings,
-}
+// 块A: PLUGIN_RENDERERS / PLUGIN_SETTINGS_RENDERERS 已移除，改为 LAZY_PLUGINS 懒加载
+// （见文件顶部）。调用点 showRightPanelTab / renderPluginManager / resetPluginLoadStateFor
+// 改为通过 LAZY_PLUGINS[name] 异步 import() 后调用。
 
-let activeDomain = 'artifacts'
-let activeSubTab = { session: null, ops: 'plugin-manager', artifacts: 'files' }
+let activeDomain = 'work'
+let activeSubTab = { work: 'files', monitor: 'plugin-manager' }
 let enabledNames = new Set()
 let mounted = new Map() // name -> { plugin, btn, pane, rendered }
 let initialized = false
@@ -141,6 +190,13 @@ function setEnabled(name, on) {
   persistEnabled()
   // Reflect toggle states without losing the manager's scroll.
   renderPluginManager(getPane('plugin-manager'))
+  // B-1: when a plugin is enabled via the toggle, jump to its tab so the
+  // user immediately sees what they just turned on. Settings-only plugins
+  // (no tab) have nothing to jump to.
+  if (on && plugin.tab) {
+    setDomain(plugin.group)
+    setSubTab(plugin.group, plugin.tab.id)
+  }
 }
 
 function mountPlugin(plugin, opts = {}) {
@@ -169,7 +225,7 @@ function mountPlugin(plugin, opts = {}) {
   pane.className = 'right-panel-pane'
   pane.dataset.rpPane = plugin.tab.id
 
-  // Keep the built-in plugin-manager tab last in Ops.
+  // Keep the built-in plugin-manager tab last in Monitor.
   const managerBtn = tabsEl.querySelector('[data-rp-tab="plugin-manager"]')
   if (managerBtn) tabsEl.insertBefore(btn, managerBtn)
   else tabsEl.appendChild(btn)
@@ -201,7 +257,7 @@ function unmountPlugin(plugin) {
   if (countTabsInDomain(domain) === 0) showDomainEmpty(domain)
 }
 
-// ── plugin manager (built-in Ops tab) ─────────────────────────────────────────
+// ── plugin manager (built-in Monitor tab) ────────────────────────────────────
 
 function renderPluginManager(pane) {
   if (!pane) return
@@ -260,8 +316,9 @@ function renderPluginManager(pane) {
     }
 
     // 需求13: per-plugin expandable settings panel.
-    const settingsRenderer = PLUGIN_SETTINGS_RENDERERS[plugin.name]
-    if (settingsRenderer) {
+    // 块A: 设置渲染器懒加载 — 展开时才 import() 模块（notify/tts 设置专属）。
+    const lazy = LAZY_PLUGINS[plugin.name]
+    if (lazy && lazy.settingsRender) {
       const disc = document.createElement('details')
       disc.className = 'pm-settings'
       const sum = document.createElement('summary')
@@ -273,8 +330,8 @@ function renderPluginManager(pane) {
       disc.appendChild(body)
       disc.addEventListener('toggle', () => {
         if (disc.open && !body.dataset.rendered) {
-          settingsRenderer(body)
           body.dataset.rendered = '1'
+          _loadMod(lazy.key, lazy.imp).then((m) => lazy.settingsRender(m, body))
         }
       })
       row.appendChild(disc)
@@ -322,12 +379,18 @@ function applySubTab(domain) {
   if (tabId) {
     const entry = mountedEntryByTab(domain, tabId)
     if (entry && !entry.rendered) {
-      const render = PLUGIN_RENDERERS[entry.plugin.name]
+      // 块A: 懒加载 — 首次激活插件 tab 时才 import() pane 模块，然后渲染。
+      // 先标记 rendered=true 防止快速切换重复触发；import 完成后异步渲染。
+      const lazy = LAZY_PLUGINS[entry.plugin.name]
       // Pass the plugin manifest as the 2nd arg so renderers can read
       // `plugin.settings` (需求14 compare reads settings.defaultBranches).
       // Existing renderers take (pane) and ignore the extra arg — backward-compatible.
-      if (render) render(entry.pane, entry.plugin)
-      entry.rendered = true
+      if (lazy && lazy.render) {
+        entry.rendered = true
+        _loadMod(lazy.key, lazy.imp).then((m) => lazy.render(m, entry.pane, entry.plugin))
+      } else {
+        entry.rendered = true
+      }
     }
     if (tabId === 'plugin-manager') {
       renderPluginManager(getPane('plugin-manager'))
@@ -401,12 +464,11 @@ function hideDomainEmpty(domain) {
 
 function resetPluginLoadStateFor(name) {
   // Cheap reset: clear shared load state so a re-mounted pane re-fetches.
-  if (name === 'team-model' || name === 'usage') resetPluginLoadState()
-  if (name === 'memory') resetMemoryLoadState()
-  if (name === 'persona') resetPersonaLoadState()
-  if (name === 'compare') resetCompareLoadState()
-  if (name === 'remote') resetRemoteLoadState()
-  if (name === 'services') resetServicesLoadState()
+  // 块A: 仅当模块已缓存时才 reset（模块未加载 → 状态本就是初始值，无需 import 来 reset）。
+  const lazy = LAZY_PLUGINS[name]
+  if (lazy && lazy.reset && _isModLoaded(lazy.key)) {
+    _loadMod(lazy.key, lazy.imp).then((m) => lazy.reset(m))
+  }
 }
 
 // ── persistence ───────────────────────────────────────────────────────────────
@@ -414,7 +476,11 @@ function resetPluginLoadStateFor(name) {
 function loadPersisted() {
   try {
     const d = localStorage.getItem(DOMAIN_KEY)
-    if (d && DOMAINS.includes(d)) activeDomain = d
+    // R2 B-2 migration: old tri-domain (session/ops/artifacts) → dual-group.
+    // session/artifacts were "operate the agent + outputs" → work; ops → monitor.
+    const migrated = d === 'session' || d === 'artifacts' ? 'work'
+      : d === 'ops' ? 'monitor' : d
+    if (migrated && DOMAINS.includes(migrated)) activeDomain = migrated
   } catch {}
   for (const d of DOMAINS) {
     try {

@@ -537,9 +537,8 @@ function loadSettings(serverSettings) {
   loadRenderModeSettings(serverSettings)
   loadCodexRenderModeSettings(serverSettings)
   loadFable5RenderModeSettings(serverSettings)
-  loadClaudeModelSettings(serverSettings)
-  loadCodexModelSettings(serverSettings)
-  loadClaudeEffortSettings(serverSettings)
+  // Claude Model / Codex Model / Effort selectors migrated to the team-model
+  // plugin (MES-13740 R2). Loaded when the Team & Model pane renders.
   loadGlobalPermissionModeSettings(serverSettings)
   loadLangSelect()
   loadTabTypesSettings()
@@ -1013,61 +1012,10 @@ async function loadAuthStatus() {
   }
 }
 
-// ─── P1-3: Model + Effort selectors ──────────────────────────────────────────
-
-function loadClaudeModelSettings(serverSettings) {
-  const sel = document.getElementById('claude-model-select')
-  if (sel) sel.value = serverSettings?.claude_model || ''
-}
-
-function loadClaudeEffortSettings(serverSettings) {
-  const sel = document.getElementById('claude-effort-select')
-  if (sel) sel.value = serverSettings?.claude_effort || ''
-}
-
-const claudeModelSaveBtn = document.getElementById('claude-model-save-btn')
-if (claudeModelSaveBtn) {
-  claudeModelSaveBtn.addEventListener('click', async () => {
-    const sel = document.getElementById('claude-model-select')
-    const statusEl = document.getElementById('claude-model-status')
-    try {
-      await updateSetting('claude_model', sel?.value || '')
-      if (statusEl) {
-        statusEl.textContent = 'Saved'
-        statusEl.className = 'settings-status success'
-        setTimeout(() => { statusEl.textContent = '' }, 2500)
-      }
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = err.message
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    }
-  })
-}
-
-const claudeEffortSaveBtn = document.getElementById('claude-effort-save-btn')
-if (claudeEffortSaveBtn) {
-  claudeEffortSaveBtn.addEventListener('click', async () => {
-    const sel = document.getElementById('claude-effort-select')
-    const statusEl = document.getElementById('claude-effort-status')
-    try {
-      await updateSetting('claude_effort', sel?.value || '')
-      if (statusEl) {
-        statusEl.textContent = 'Saved'
-        statusEl.className = 'settings-status success'
-        setTimeout(() => { statusEl.textContent = '' }, 2500)
-      }
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = err.message
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    }
-  })
-}
+// ─── P1-3: Model + Effort selectors — migrated to team-model plugin (MES-13740 R2).
+// The Claude model (--model), Codex model, and effort-level selectors now live in
+// the Team & Model pane (Session domain → team-model tab). Storage keys are
+// unchanged (claude_model / codex_model / claude_effort). See plugins-panel.js.
 
 // ─── Global Permission mode (drives Claude + Codex) ──────────────────────────
 
@@ -1099,34 +1047,7 @@ if (globalPermissionModeSaveBtn) {
   })
 }
 
-// ─── Codex Model selector ────────────────────────────────────────────────────
-
-function loadCodexModelSettings(serverSettings) {
-  const sel = document.getElementById('codex-model-select')
-  if (sel) sel.value = serverSettings?.codex_model || ''
-}
-
-const codexModelSaveBtn = document.getElementById('codex-model-save-btn')
-if (codexModelSaveBtn) {
-  codexModelSaveBtn.addEventListener('click', async () => {
-    const sel = document.getElementById('codex-model-select')
-    const statusEl = document.getElementById('codex-model-status')
-    try {
-      await updateSetting('codex_model', sel?.value || '')
-      if (statusEl) {
-        statusEl.textContent = 'Saved'
-        statusEl.className = 'settings-status success'
-        setTimeout(() => { statusEl.textContent = '' }, 2500)
-      }
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = err.message
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    }
-  })
-}
+// ─── Codex Model selector — migrated to team-model plugin (MES-13740 R2) ──────
 
 // ─── Settings section collapse/expand toggles ────────────────────────────────
 
@@ -1162,98 +1083,9 @@ function initSettingsSectionToggles() {
   })
 }
 
-// ─── Dynamic model list from /api/claude/init-snapshot ───────────────────────
-
-let _initSnapshotCache = null  // { data, ts }
-const TTL_SNAPSHOT_MS = 60 * 60 * 1000  // 1h client-side
-
-async function fetchInitSnapshot(forceRefresh = false) {
-  const now = Date.now()
-  if (!forceRefresh && _initSnapshotCache && (now - _initSnapshotCache.ts) < TTL_SNAPSHOT_MS) {
-    return _initSnapshotCache.data
-  }
-  try {
-    const url = forceRefresh ? '/api/claude/init-snapshot?refresh=1' : '/api/claude/init-snapshot'
-    const resp = await fetch(url)
-    if (!resp.ok) return null
-    const data = await resp.json()
-    _initSnapshotCache = { data, ts: Date.now() }
-    return data
-  } catch {
-    return null
-  }
-}
-
-function _applyDynamicModelOptions(snapshot) {
-  const inp = document.getElementById('claude-model-select')
-  if (!inp || !snapshot) return
-
-  // If user hasn't typed anything yet, pre-fill with the CLI-reported model
-  // so they can see what's active without having to look elsewhere.
-  // Don't overwrite a value the user already typed in.
-  if (!inp.value && snapshot.model) {
-    inp.value = snapshot.model
-  }
-
-  // Add/update hint below input showing current active CLI model
-  const hint = inp.parentElement?.querySelector('.settings-current-model-hint')
-  if (snapshot.model) {
-    if (!hint) {
-      const h = document.createElement('div')
-      h.className = 'settings-current-model-hint settings-hint-inline'
-      h.style.cssText = 'margin-top:4px;font-size:10px;'
-      h.textContent = `当前 CLI 默认: ${snapshot.model}`
-      inp.parentElement?.appendChild(h)
-    } else {
-      hint.textContent = `当前 CLI 默认: ${snapshot.model}`
-    }
-  }
-}
-
-// ─── Dynamic Codex model list from /api/codex/config ─────────────────────────
-
-async function fetchCodexConfig() {
-  try {
-    const resp = await fetch('/api/codex/config')
-    if (!resp.ok) return null
-    return await resp.json()
-  } catch {
-    return null
-  }
-}
-
-function _applyCodexModelOptions(config) {
-  const sel = document.getElementById('codex-model-select')
-  if (!sel) return
-
-  const currentVal = sel.value
-  const configModel = config?.model || null
-
-  // Build options: Default + config model if available (no invented model names)
-  const defaultLabel = configModel
-    ? `${t('settings.codex.model.default')} (config: ${configModel})`
-    : t('settings.codex.model.default')
-  const options = [{ value: '', label: defaultLabel }]
-
-  if (configModel) {
-    options.push({ value: configModel, label: configModel })
-  }
-
-  // Rebuild select options
-  sel.innerHTML = ''
-  for (const opt of options) {
-    const el = document.createElement('option')
-    el.value = opt.value
-    el.textContent = opt.label
-    sel.appendChild(el)
-  }
-
-  // Restore selection
-  if (currentVal) {
-    sel.value = currentVal
-    if (sel.value !== currentVal) sel.value = ''
-  }
-}
+// ─── Dynamic model lists — migrated to team-model plugin (MES-13740 R2).
+// The init-snapshot prefill (Claude model) and codex/config option building
+// now happen in the Team & Model pane. See plugins-panel.js.
 
 // ─── Settings panel tab switch ────────────────────────────────────────────────
 
@@ -1269,13 +1101,8 @@ async function openSettingsPanel() {
   loadSettings(serverSettings)
   loadServices()
   loadAuthStatus()  // P1-4: refresh auth status on each open
-  // Load dynamic model options in background
-  fetchInitSnapshot().then((snapshot) => {
-    if (snapshot) _applyDynamicModelOptions(snapshot)
-  })
-  fetchCodexConfig().then((config) => {
-    _applyCodexModelOptions(config)
-  })
+  // Dynamic model options (init-snapshot / codex config) now load inside the
+  // team-model plugin pane when it renders — not here. MES-13740 R2.
 }
 
 function closeSettingsPanel() {

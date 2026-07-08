@@ -1,4 +1,5 @@
 # Existing nanocode ignores
+node_modules
 node_modules/
 data/
 
@@ -19,3 +20,9 @@ nanocode-*.log
 server-*.log
 run-*.log
 round*.png
+
+# personal config — never commit real secrets
+**/personal.json
+!**/personal.example.json
+.nanocode-personal*
+*.local.secret*

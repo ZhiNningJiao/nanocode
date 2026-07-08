@@ -1244,21 +1244,15 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       let msg
       try { msg = JSON.parse(raw) } catch { return }
       if (msg.type === 'claude-input' && typeof msg.text === 'string' && msg.text.trim()) {
-        // Echo the user message locally (the driver also echoes, but echoing
-        // here keeps the UX snappy and matches the claude tab behaviour).
-        const userEvent = {
-          type: 'user',
-          message: { role: 'user', content: [{ type: 'text', text: msg.text }] },
-        }
-        claudeBroadcast(cs, userEvent)
-        // ── Atomic "send now" (立刻发送) — mirrors the claude WS handler ────────
-        // Capture busy state BEFORE dispatching: busy → dispatch queues, then
-        // interrupt the running turn + _forceFlushQueue so the queued message
-        // flushes as the next turn. idle → dispatch starts the send-now message
-        // itself; do NOT interrupt (would kill the user's message). This removes
-        // the WS-vs-HTTP race; the client no longer sends a separate interrupt.
+        // 块B修复 (r2-settings-ia): 不在 controller 侧 echo user 消息 — 原先
+        // claudeBroadcast(userEvent) 与 driver echo 双重 echo + 丢 nonce → live 渲染 3 份。
+        // 只保留 driver echo 并透传 nonce，客户端 nonce 去重 = 1 份。
+        // + queuefix: 原子 "send now" (立刻发送)。dispatch 前捕获 busy 状态：
+        //   busy → dispatch 入队，随即 interrupt 当前回合 + _forceFlushQueue 让排队消息作为下一回合发出；
+        //   idle → dispatch 直接起该消息，不 interrupt（否则会杀掉用户自己的消息）。
+        //   消除 WS-vs-HTTP race，客户端不再单发 interrupt。
         const wasBusy = msg._sendNow === true && cs.busy && !!cs.currentProc
-        dispatchOpencodeBlockTurn(cs, msg.text, sessionKey, project.cwd)
+        dispatchOpencodeBlockTurn(cs, msg.text, sessionKey, project.cwd, { nonce: msg._nonce || null })
         if (wasBusy) {
           try {
             cs._forceFlushQueue = true
@@ -1279,8 +1273,8 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     })
   }
 
-  dispatchOpencodeBlockTurn = function dispatchOpencodeBlockTurn(cs, text, sessionKey, cwd) {
-    opencodeBlockDriver.runOpencodeTurn(cs, text, sessionKey, cwd)
+  dispatchOpencodeBlockTurn = function dispatchOpencodeBlockTurn(cs, text, sessionKey, cwd, opts) {
+    opencodeBlockDriver.runOpencodeTurn(cs, text, sessionKey, cwd, opts)
   }
 
   // Interrupt the running claude turn for session `cs`. Pure helper (no HTTP)

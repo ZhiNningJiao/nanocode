@@ -18,6 +18,8 @@ import { t } from './i18n.js'
 
 const AIGW_KEY = 'aigw_model'
 const CLAUDE_MODEL_KEY = 'claude_model'
+const CODEX_MODEL_KEY = 'codex_model'
+const CLAUDE_EFFORT_KEY = 'claude_effort'
 const TEAM_KEY = 'claude_config_dir'
 
 let pluginsLoaded = false
@@ -42,11 +44,17 @@ export async function renderTeamModelPane(pane) {
   }
   try {
     await ensureSettings()
-    const [teamsRes, modelsRes] = await Promise.all([
-      fetch('/api/teams').then((r) => r.json()),
-      fetch('/api/aigw/models').then((r) => r.json()),
+    // Fetch all model-domain sources in parallel. Each degrades gracefully
+    // (never rejects) so a missing source doesn't hide the others. MES-13740 R2:
+    // init-snapshot (Claude CLI model hint) + codex/config (Codex model options)
+    // migrated here from the Settings page so the model domain has a single home.
+    const [teamsRes, modelsRes, snapshotRes, codexRes] = await Promise.all([
+      fetch('/api/teams').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+      fetch('/api/aigw/models').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+      fetch('/api/claude/init-snapshot').then((r) => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/codex/config').then((r) => r.ok ? r.json() : null).catch(() => null),
     ])
-    renderTeamModelContent(pane, teamsRes, modelsRes)
+    renderTeamModelContent(pane, teamsRes, modelsRes, snapshotRes, codexRes)
   } catch (err) {
     renderError(pane, err)
   }
@@ -67,10 +75,10 @@ function renderError(pane, err) {
   pane.appendChild(div)
 }
 
-function renderTeamModelContent(pane, teamsRes, modelsRes) {
+function renderTeamModelContent(pane, teamsRes, modelsRes, snapshotRes, codexRes) {
   pane.innerHTML = ''
   pane.appendChild(renderTeamSection(pane, teamsRes))
-  pane.appendChild(renderModelSection(modelsRes))
+  pane.appendChild(renderModelSection(modelsRes, snapshotRes, codexRes))
 }
 
 function renderTeamSection(pane, teamsRes) {
@@ -132,7 +140,7 @@ async function onTeamChange(pane, path) {
   }
 }
 
-function renderModelSection(modelsRes) {
+function renderModelSection(modelsRes, snapshotRes, codexRes) {
   const section = document.createElement('div')
   section.className = 'rp-section'
   const title = document.createElement('div')
@@ -145,6 +153,17 @@ function renderModelSection(modelsRes) {
   desc.textContent = t('plugins.model.desc')
   section.appendChild(desc)
 
+  const currentAigw = settings[AIGW_KEY] || ''
+  const currentClaude = settings[CLAUDE_MODEL_KEY] || ''
+  const currentCodex = settings[CODEX_MODEL_KEY] || ''
+  const currentEffort = settings[CLAUDE_EFFORT_KEY] || ''
+
+  // ── AIGW model (opencode / fable5 sessions via MESHY_AIGW_MODEL) ──
+  const aigwLabel = document.createElement('div')
+  aigwLabel.className = 'rp-subtitle'
+  aigwLabel.textContent = t('plugins.model.aigwTitle')
+  section.appendChild(aigwLabel)
+
   if (modelsRes?.error || !modelsRes?.models?.length) {
     const empty = document.createElement('div')
     empty.className = 'rp-empty'
@@ -152,35 +171,31 @@ function renderModelSection(modelsRes) {
       ? modelsRes.error
       : t('plugins.model.none')
     section.appendChild(empty)
-    return section
+  } else {
+    const select = document.createElement('select')
+    select.className = 'rp-select'
+    select.id = 'rp-aigw-model'
+    const noneOpt = document.createElement('option')
+    noneOpt.value = ''
+    noneOpt.textContent = t('plugins.model.default')
+    select.appendChild(noneOpt)
+    for (const m of modelsRes.models) {
+      const id = typeof m === 'string' ? m : m.id
+      const opt = document.createElement('option')
+      opt.value = id
+      opt.textContent = id
+      if (id === currentAigw) opt.selected = true
+      select.appendChild(opt)
+    }
+    select.addEventListener('change', () => onAigwModelChange(select.value))
+    section.appendChild(select)
   }
+  const aigwHint = document.createElement('div')
+  aigwHint.className = 'rp-hint'
+  aigwHint.textContent = t('plugins.model.hint')
+  section.appendChild(aigwHint)
 
-  const currentAigw = settings[AIGW_KEY] || ''
-  const currentClaude = settings[CLAUDE_MODEL_KEY] || ''
-  const select = document.createElement('select')
-  select.className = 'rp-select'
-  select.id = 'rp-aigw-model'
-  const noneOpt = document.createElement('option')
-  noneOpt.value = ''
-  noneOpt.textContent = t('plugins.model.default')
-  select.appendChild(noneOpt)
-  for (const m of modelsRes.models) {
-    const id = typeof m === 'string' ? m : m.id
-    const opt = document.createElement('option')
-    opt.value = id
-    opt.textContent = id
-    if (id === currentAigw) opt.selected = true
-    select.appendChild(opt)
-  }
-  select.addEventListener('change', () => onAigwModelChange(select.value))
-  section.appendChild(select)
-
-  const hint = document.createElement('div')
-  hint.className = 'rp-hint'
-  hint.textContent = t('plugins.model.hint')
-  section.appendChild(hint)
-
-  // Claude model (--model flag, already injected by SDK/tmux drivers)
+  // ── Claude model (--model flag) — migrated from Settings (MES-13740 R2) ──
   const claudeLabel = document.createElement('div')
   claudeLabel.className = 'rp-subtitle'
   claudeLabel.textContent = t('plugins.model.claudeTitle')
@@ -190,17 +205,94 @@ function renderModelSection(modelsRes) {
   claudeInput.type = 'text'
   claudeInput.className = 'rp-input'
   claudeInput.id = 'rp-claude-model'
-  claudeInput.value = currentClaude
+  // If the user has no saved model, pre-fill with the CLI-reported model from
+  // init-snapshot so they can see what's active without looking elsewhere.
+  // Don't overwrite a saved value. (Ported from Settings app.js.)
+  const snapshotModel = snapshotRes?.model || ''
+  claudeInput.value = currentClaude || snapshotModel
   claudeInput.placeholder = t('plugins.model.claudePlaceholder')
-  const saveBtn = document.createElement('button')
-  saveBtn.className = 'rp-btn rp-btn-sm'
-  saveBtn.textContent = t('plugins.model.save')
-  saveBtn.addEventListener('click', () => onClaudeModelChange(claudeInput.value))
+  const claudeSaveBtn = document.createElement('button')
+  claudeSaveBtn.className = 'rp-btn rp-btn-sm'
+  claudeSaveBtn.textContent = t('plugins.model.save')
+  claudeSaveBtn.addEventListener('click', () => onClaudeModelChange(claudeInput.value))
   const claudeRow = document.createElement('div')
   claudeRow.className = 'rp-btn-row'
   claudeRow.appendChild(claudeInput)
-  claudeRow.appendChild(saveBtn)
+  claudeRow.appendChild(claudeSaveBtn)
   section.appendChild(claudeRow)
+  // Show the current active CLI model as a hint (when no override is saved).
+  if (snapshotModel) {
+    const snapHint = document.createElement('div')
+    snapHint.className = 'rp-hint'
+    snapHint.textContent = `${t('plugins.model.cliCurrent')}: ${snapshotModel}`
+    section.appendChild(snapHint)
+  }
+
+  // ── Codex model — migrated from Settings (MES-13740 R2) ──
+  const codexLabel = document.createElement('div')
+  codexLabel.className = 'rp-subtitle'
+  codexLabel.textContent = t('plugins.model.codexTitle')
+  section.appendChild(codexLabel)
+
+  const codexSelect = document.createElement('select')
+  codexSelect.className = 'rp-select'
+  codexSelect.id = 'rp-codex-model'
+  const codexConfigModel = codexRes?.model || null
+  const codexDefaultOpt = document.createElement('option')
+  codexDefaultOpt.value = ''
+  codexDefaultOpt.textContent = codexConfigModel
+    ? `${t('plugins.model.codexDefault')} (config: ${codexConfigModel})`
+    : t('plugins.model.codexDefault')
+  codexSelect.appendChild(codexDefaultOpt)
+  if (codexConfigModel) {
+    const opt = document.createElement('option')
+    opt.value = codexConfigModel
+    opt.textContent = codexConfigModel
+    if (codexConfigModel === currentCodex) opt.selected = true
+    codexSelect.appendChild(opt)
+  }
+  if (currentCodex) {
+    codexSelect.value = currentCodex
+    if (codexSelect.value !== currentCodex) codexSelect.value = ''
+  }
+  codexSelect.addEventListener('change', () => onCodexModelChange(codexSelect.value))
+  section.appendChild(codexSelect)
+  const codexHint = document.createElement('div')
+  codexHint.className = 'rp-hint'
+  codexHint.textContent = t('plugins.model.codexHint')
+  section.appendChild(codexHint)
+
+  // ── Effort level — migrated from Settings (MES-13740 R2) ──
+  const effortLabel = document.createElement('div')
+  effortLabel.className = 'rp-subtitle'
+  effortLabel.textContent = t('plugins.model.effortTitle')
+  section.appendChild(effortLabel)
+
+  const effortSelect = document.createElement('select')
+  effortSelect.className = 'rp-select'
+  effortSelect.id = 'rp-claude-effort'
+  const effortOpts = [
+    ['', t('plugins.model.effortDefault')],
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['high', 'high'],
+    ['xhigh', 'xhigh'],
+    ['max', 'max'],
+  ]
+  for (const [val, label] of effortOpts) {
+    const opt = document.createElement('option')
+    opt.value = val
+    opt.textContent = label
+    if (val === currentEffort) opt.selected = true
+    effortSelect.appendChild(opt)
+  }
+  effortSelect.addEventListener('change', () => onEffortChange(effortSelect.value))
+  section.appendChild(effortSelect)
+  const effortHint = document.createElement('div')
+  effortHint.className = 'rp-hint'
+  effortHint.textContent = t('plugins.model.effortHint')
+  section.appendChild(effortHint)
+
   return section
 }
 
@@ -225,6 +317,26 @@ async function onAigwModelChange(model) {
   }
 }
 
+async function onCodexModelChange(model) {
+  try {
+    await updateSetting(CODEX_MODEL_KEY, model)
+    settings[CODEX_MODEL_KEY] = model
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), t('plugins.model.applied'))
+  } catch (err) {
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), String(err.message || err), true)
+  }
+}
+
+async function onEffortChange(effort) {
+  try {
+    await updateSetting(CLAUDE_EFFORT_KEY, effort)
+    settings[CLAUDE_EFFORT_KEY] = effort
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), t('plugins.model.applied'))
+  } catch (err) {
+    flashStatus(document.querySelector('.right-panel-pane[data-rp-pane="team-model"]'), String(err.message || err), true)
+  }
+}
+
 // ── Usage pane (Ops domain) ────────────────────────────────────────────────────
 
 export async function renderUsagePane(pane) {
@@ -236,20 +348,22 @@ export async function renderUsagePane(pane) {
   }
   try {
     await ensureSettings()
-    // Fetch both usage sources in parallel. Each endpoint degrades to
+    // Fetch usage sources in parallel. Each endpoint degrades to
     // { error } on failure (never rejects) so a missing opencode DB does not
-    // hide the claude panel, and vice-versa.
-    const [usage, opencode] = await Promise.all([
+    // hide the claude panel, and vice-versa. The summary endpoint drives the
+    // MES-13788 three-source CodexBar-style card at the top.
+    const [usage, opencode, summary] = await Promise.all([
       fetch('/api/usage/claude').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
       fetch('/api/usage/opencode').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
+      fetch('/api/usage/summary').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
     ])
-    renderUsageContent(pane, usage, opencode)
+    renderUsageContent(pane, usage, opencode, summary)
   } catch (err) {
     renderError(pane, err)
   }
 }
 
-function renderUsageContent(pane, usage, opencode) {
+function renderUsageContent(pane, usage, opencode, summary) {
   pane.innerHTML = ''
   const refreshBtn = document.createElement('button')
   refreshBtn.className = 'rp-refresh-btn'
@@ -257,9 +371,232 @@ function renderUsageContent(pane, usage, opencode) {
   refreshBtn.addEventListener('click', () => { usageLoaded = false; renderUsagePane(pane) })
   pane.appendChild(refreshBtn)
 
+  pane.appendChild(renderUsageSummarySection(summary))
   pane.appendChild(renderClaudeUsageSection(usage))
   pane.appendChild(renderOpencodeUsageSection(opencode))
   pane.appendChild(renderAigwProbeSection(pane))
+}
+
+// ── MES-13788 three-source usage summary (CodexBar-style) ─────────────────────
+// Renders one card per source (Team1 / Team2 / AIGW) with per-window bars,
+// reset countdown, burn rate and hit projection. Estimates are labelled.
+// Mobile 390×844 + touch ≥44px are handled by the .rp-usage-* CSS.
+function renderUsageSummarySection(summary) {
+  const section = document.createElement('div')
+  section.className = 'rp-section rp-usage-summary'
+  const title = document.createElement('div')
+  title.className = 'rp-section-title'
+  title.textContent = t('usage.summary.title')
+  section.appendChild(title)
+  const desc = document.createElement('div')
+  desc.className = 'rp-hint'
+  desc.textContent = t('usage.summary.desc')
+  section.appendChild(desc)
+
+  if (!summary || summary.error) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = summary?.error || t('usage.summary.loading')
+    section.appendChild(empty)
+    return section
+  }
+
+  const sources = Array.isArray(summary.sources) ? summary.sources : []
+  if (!sources.length) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = t('usage.summary.loading')
+    section.appendChild(empty)
+    return section
+  }
+  for (const src of sources) {
+    section.appendChild(renderUsageSourceCard(src))
+  }
+  return section
+}
+
+function renderUsageSourceCard(src) {
+  const card = document.createElement('div')
+  card.className = 'rp-usage-source'
+  card.dataset.source = src.source || ''
+
+  const head = document.createElement('div')
+  head.className = 'rp-usage-source-head'
+  const name = document.createElement('span')
+  name.className = 'rp-usage-source-name'
+  name.textContent = src.label || src.source || ''
+  head.appendChild(name)
+
+  // status badge: unavailable / oauth-down / estimated
+  const badge = document.createElement('span')
+  badge.className = 'rp-usage-badge'
+  if (src.source === 'aigw-litellm' && !src.available) {
+    badge.classList.add('rp-usage-badge-down')
+    badge.textContent = t('usage.summary.unavailable')
+    badge.title = src.error || t('usage.summary.aigwDown')
+  } else if (src.kind === 'claude-oauth' && src.oauthAvailable === false) {
+    badge.classList.add('rp-usage-badge-est')
+    badge.textContent = t('usage.summary.estimated')
+    badge.title = src.oauthError || t('usage.summary.oauthDown')
+  } else {
+    badge.classList.add('rp-usage-badge-ok')
+    badge.textContent = src.kind === 'claude-oauth' ? 'OAuth' : (src.available ? 'API' : '—')
+  }
+  head.appendChild(badge)
+  card.appendChild(head)
+
+  const windows = Array.isArray(src.windows) ? src.windows : []
+  if (!windows.length) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = src.error || t('usage.summary.unavailable')
+    card.appendChild(empty)
+    return card
+  }
+  for (const w of windows) {
+    card.appendChild(renderUsageWindowRow(w))
+  }
+  // provenance note (compact) for the unavailable/estimated case
+  if (src.error) {
+    const note = document.createElement('div')
+    note.className = 'rp-hint rp-usage-note'
+    note.textContent = src.error
+    card.appendChild(note)
+  }
+  return card
+}
+
+function renderUsageWindowRow(w) {
+  const row = document.createElement('div')
+  row.className = 'rp-usage-window'
+  row.dataset.window = w.windowType || ''
+  if (w.severity) row.dataset.severity = w.severity
+
+  const head = document.createElement('div')
+  head.className = 'rp-usage-window-head'
+  const type = document.createElement('span')
+  type.className = 'rp-usage-window-type'
+  const typeKey = { '5h': 'usage.summary.window.5h', 'weekly': 'usage.summary.window.weekly', 'monthly': 'usage.summary.window.monthly' }[w.windowType]
+  type.textContent = typeKey ? t(typeKey) : (w.windowType || '')
+  head.appendChild(type)
+
+  // pct label (right side)
+  const pct = document.createElement('span')
+  pct.className = 'rp-usage-window-pct'
+  const utilPct = computeWindowPct(w)
+  if (utilPct != null) {
+    pct.textContent = `${Math.round(utilPct)}%`
+  } else if (w.used != null && w.limit == null) {
+    pct.textContent = fmtTokens(w.used)
+  } else {
+    pct.textContent = '—'
+  }
+  head.appendChild(pct)
+  row.appendChild(head)
+
+  // bar
+  const bar = document.createElement('div')
+  bar.className = 'rp-usage-bar'
+  const fill = document.createElement('div')
+  fill.className = 'rp-usage-bar-fill'
+  if (utilPct != null) fill.style.width = `${Math.min(100, Math.max(0, utilPct))}%`
+  if (w.severity === 'critical') fill.classList.add('rp-usage-bar-critical')
+  else if (w.severity === 'warning') fill.classList.add('rp-usage-bar-warning')
+  bar.appendChild(fill)
+  row.appendChild(bar)
+
+  // meta line: used/limit · reset · burn · projected
+  const meta = document.createElement('div')
+  meta.className = 'rp-usage-window-meta'
+  meta.appendChild(usageMetaCell(t('usage.summary.used'), fmtUsedLimit(w)))
+  meta.appendChild(usageMetaCell(t('usage.summary.reset'), fmtResetCountdown(w.resetAt)))
+  if (w.burnRatePerMin != null) {
+    meta.appendChild(usageMetaCell(t('usage.summary.burn'), `${fmtTokens(w.burnRatePerMin)} ${t('usage.summary.tokensMin')}`))
+  }
+  if (w.projectedHitAt) {
+    meta.appendChild(usageMetaCell(t('usage.summary.projected'), fmtProjectedHit(w.projectedHitAt)))
+  }
+  row.appendChild(meta)
+
+  if (w.estimated) {
+    const est = document.createElement('span')
+    est.className = 'rp-usage-est-tag'
+    est.textContent = t('usage.summary.estimated')
+    row.appendChild(est)
+  }
+  return row
+}
+
+function usageMetaCell(label, value) {
+  const cell = document.createElement('span')
+  cell.className = 'rp-usage-meta-cell'
+  const lab = document.createElement('span')
+  lab.className = 'rp-usage-meta-label'
+  lab.textContent = label
+  const val = document.createElement('span')
+  val.className = 'rp-usage-meta-value'
+  val.textContent = value
+  cell.appendChild(lab)
+  cell.appendChild(val)
+  return cell
+}
+
+function computeWindowPct(w) {
+  if (typeof w.utilization === 'number') return w.utilization
+  if (typeof w.used === 'number' && typeof w.limit === 'number' && w.limit > 0) {
+    return (w.used / w.limit) * 100
+  }
+  return null
+}
+
+function fmtUsedLimit(w) {
+  const u = w.used
+  const l = w.limit
+  const unit = w.unit || ''
+  const fmtByUnit = (n) => {
+    if (n == null) return '—'
+    if (unit === 'percent') return `${Math.round(n)}%`
+    if (unit === 'usd' || unit === 'credits') return n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${Number(n).toFixed(2)}`
+    return fmtTokens(n)
+  }
+  if (l != null) return `${fmtByUnit(u)} ${t('usage.summary.of')} ${fmtByUnit(l)}`
+  if (u != null) return fmtByUnit(u)
+  return '—'
+}
+
+function fmtResetCountdown(resetAt) {
+  if (!resetAt) return t('usage.summary.noReset')
+  const ts = Date.parse(resetAt)
+  if (!Number.isFinite(ts)) return t('usage.summary.noReset')
+  const diff = ts - Date.now()
+  if (diff <= 0) return t('usage.summary.noReset')
+  return fmtDuration(diff)
+}
+
+function fmtDuration(ms) {
+  const s = Math.max(0, Math.round(ms / 1000))
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m`
+  return `<1m`
+}
+
+function fmtProjectedHit(iso) {
+  const ts = Date.parse(iso)
+  if (!Number.isFinite(ts)) return '—'
+  const diff = ts - Date.now()
+  if (diff <= 0) return 'now'
+  return fmtDuration(diff)
+}
+
+function fmtTokens(n) {
+  const v = Number(n) || 0
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
+  return `${Math.round(v)}`
 }
 
 function renderClaudeUsageSection(usage) {
