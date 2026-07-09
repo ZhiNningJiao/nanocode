@@ -97,17 +97,6 @@ export function renameFsPath(projectId, from, to) {
   })
 }
 
-// ─── Git compare (branch diff) ────────────────────────────────────────────
-
-export function fetchGitBranches(projectId) {
-  return request(`/projects/${projectId}/git/branches`)
-}
-
-export function fetchGitCompare(projectId, base, head) {
-  const q = new URLSearchParams({ base, head })
-  return request(`/projects/${projectId}/git/compare?${q}`)
-}
-
 // ─── Repo-scoped git compare (top-level launch) ──────────────────────────
 // These are independent of the project system: the server scans ~/code for
 // git repos/worktrees, so compare works even when the session cwd (~zhining)

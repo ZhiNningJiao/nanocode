@@ -474,16 +474,6 @@ export function createExplorer(container, projectId) {
     refreshBtn.addEventListener('click', () => refreshAll())
     actions.appendChild(refreshBtn)
 
-    const compareBtn = document.createElement('button')
-    compareBtn.type = 'button'
-    compareBtn.className = 'explorer-icon-btn'
-    compareBtn.title = 'Compare branches (git diff)'
-    compareBtn.innerHTML = svgIcon('git-compare')
-    compareBtn.addEventListener('click', () => {
-      document.dispatchEvent(new CustomEvent('nanocode:toggle-compare', { detail: { projectId: project } }))
-    })
-    actions.appendChild(compareBtn)
-
     headerEl.appendChild(actions)
   }
 
@@ -982,7 +972,7 @@ export function createExplorer(container, projectId) {
     if (!persisted) {
       // Fresh load with no persisted state: the boot path only calls
       // renderTree() (via loadDir), so render() — which draws the header
-      // (compare / new file / upload / refresh) — never runs. Render once
+      // (new file / upload / refresh) — never runs. Render once
       // here so the explorer header is visible on first visit.
       render()
       return
@@ -1206,8 +1196,6 @@ function svgIcon(name) {
       return `<svg width="14" height="14" viewBox="0 0 24 24" ${stroke}><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`
     case 'edit':
       return `<svg width="14" height="14" viewBox="0 0 24 24" ${stroke}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`
-    case 'git-compare':
-      return `<svg width="14" height="14" viewBox="0 0 24 24" ${stroke}><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7a2 2 0 0 0 2 2h7"/><path d="M18 15.5a2 2 0 0 1-2 2H9"/></svg>`
     default:
       return ''
   }

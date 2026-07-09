@@ -1,31 +1,22 @@
 /**
- * Branch-compare (git diff) API — project-scoped, runs git in the project cwd.
+ * Shared git-compare helpers — ref validation + diff computation.
  *
- *   GET /api/projects/:id/git/branches  → { current, defaultBranch, branches[] }
- *   GET /api/projects/:id/git/compare?base=&head=
- *       → { base, head, ahead, behind, files: [{ path, status, additions, deletions, patch }] }
+ * Used by the repo-scoped compare API (repos-routes.js), which imports
+ * `computeDiff` and `isValidRef`. The project-scoped routes that used to
+ * live here were removed with the duplicate Explorer git-compare UI.
  *
  * Security: refs are passed to git as separate argv (no shell), and validated
  * against a strict allow-list regex so option-injection (e.g. "--upload-pack")
- * is impossible. Remote-SSH projects are rejected (no local repo to diff).
+ * is impossible.
  */
-
-import { Router } from 'express'
-import { execFile } from 'node:child_process'
-import { promisify } from 'util'
-import { existsSync } from 'node:fs'
-
-const execFileAsync = promisify(execFile)
 
 // Refs: allow letters, digits, . _ / - ~ (covers branch names, tags, short SHAs).
 // Reject anything that could be mistaken for a git option (leading '-') or
-// contain shell meta — though execFile never spawns a shell, this is defense
-// in depth against `--upload-pack`-style argument injection.
+// contain shell meta — defense in depth against `--upload-pack`-style
+// argument injection.
 const REF_RE = /^[A-Za-z0-9._/~-]+$/
 const MAX_REF_LEN = 200
 const MAX_PATCH_BYTES = 200 * 1024 // 200 KB per-file patch cap
-const GIT_TIMEOUT_MS = 20_000
-const GIT_MAX_BUFFER = 32 * 1024 * 1024 // 32 MB (large diffs)
 
 export function isValidRef(ref) {
   if (!ref || typeof ref !== 'string') return false
@@ -107,72 +98,6 @@ export function splitDiffByFile(diff) {
     if (path) map.set(path, chunkLines.join('\n'))
   }
   return map
-}
-
-export function createGitCompareRoutes(store) {
-  const router = Router()
-
-  function resolveCwd(req) {
-    const project = store.getProject(req.params.id)
-    if (!project) return { error: { status: 404, message: 'project not found' } }
-    if (project.ssh_host) return { error: { status: 400, message: 'remote projects unsupported' } }
-    if (!project.cwd || !existsSync(project.cwd)) {
-      return { error: { status: 404, message: 'project cwd not found' } }
-    }
-    return { cwd: project.cwd }
-  }
-
-  async function git(args, cwd) {
-    return execFileAsync('git', args, { cwd, maxBuffer: GIT_MAX_BUFFER, timeout: GIT_TIMEOUT_MS })
-  }
-
-  // GET /api/projects/:id/git/branches
-  router.get('/api/projects/:id/git/branches', async (req, res) => {
-    const r = resolveCwd(req)
-    if (r.error) return res.status(r.error.status).json({ error: r.error.message })
-    const cwd = r.cwd
-    try {
-      await git(['rev-parse', '--is-inside-work-tree'], cwd)
-    } catch {
-      return res.status(400).json({ error: 'not a git repository' })
-    }
-    try {
-      const [branchOut, headOut] = await Promise.all([
-        git(['branch', '--format=%(refname:short)'], cwd),
-        git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd),
-      ])
-      const current = headOut.stdout.trim() || null
-      const branches = branchOut.stdout
-        .split('\n')
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((name) => ({ name, isCurrent: name === current }))
-      let defaultBranch = null
-      for (const cand of ['main', 'master']) {
-        if (branches.some((b) => b.name === cand)) { defaultBranch = cand; break }
-      }
-      if (!defaultBranch && branches.length) defaultBranch = branches[0].name
-      res.json({ current, defaultBranch, branches })
-    } catch (e) {
-      res.status(500).json({ error: 'git branch failed', detail: e.message })
-    }
-  })
-
-  // GET /api/projects/:id/git/compare?base=&head=
-  router.get('/api/projects/:id/git/compare', async (req, res) => {
-    const r = resolveCwd(req)
-    if (r.error) return res.status(r.error.status).json({ error: r.error.message })
-    const base = typeof req.query.base === 'string' ? req.query.base.trim() : ''
-    const head = typeof req.query.head === 'string' ? req.query.head.trim() : ''
-    try {
-      const result = await computeDiff((args) => git(args, r.cwd), base, head)
-      res.json(result)
-    } catch (e) {
-      res.status(e.status || 500).json({ error: e.message, detail: e.detail })
-    }
-  })
-
-  return router
 }
 
 /**

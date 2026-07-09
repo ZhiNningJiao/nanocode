@@ -19,7 +19,6 @@ import { loadPersonalConfig, projectForPlugin } from './personal-config.js'
 import { builtinPlugin } from '../public/js/plugins-registry.js'
 import { exportToEvents } from './opencode-adapter.js'
 import { listOpencodeSessions } from './opencode-sessions.js'
-import { createGitCompareRoutes } from './git-compare.js'
 import { createReposRoutes } from './repos-routes.js'
 
 /**
@@ -1240,9 +1239,6 @@ export function createTerminalRoutes(store, opts = {}) {
   router.post('/api/projects/:id/tabs/:tabId/reset', (req, res) => {
     sessionController.handleReset(req, res)
   })
-
-  // ── Branch compare (git diff) — project-scoped ─────────────────────────────
-  router.use(createGitCompareRoutes(store))
 
   // ── Repo-scoped compare — works from a top-level (~zhining) launch ─────────
   // Independent of the project system: scans ~/code for git repos/worktrees
