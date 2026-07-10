@@ -114,6 +114,7 @@ const translations = {
     // TodoWrite interactive checklist (Claude Code parity)
     'cbr.todo.empty': '(no tasks)',
     'cbr.todo.progress': (done, total) => `${done}/${total} done`,
+    'cbr.todo.expand': 'Tap to expand task list',
     // Composer mode / model badges
     'composer.mode.plan': 'Plan',
     'composer.mode.normal': 'Normal',
@@ -502,6 +503,7 @@ const translations = {
     // TodoWrite 交互清单（对齐 Claude Code）
     'cbr.todo.empty': '（无任务）',
     'cbr.todo.progress': (done, total) => `${done}/${total} 已完成`,
+    'cbr.todo.expand': '点击展开任务列表',
     // 输入区模式 / 模型徽标
     'composer.mode.plan': '计划',
     'composer.mode.normal': '普通',
