@@ -9,6 +9,7 @@ import { initSplitPane } from './terminal-pane.js'
 import { TabManager, TYPE_ICON_SVG } from './tab-manager.js'
 import { createExplorer } from './explorer.js'
 import { initRightPanel, showRightPanelTab } from './right-panel.js'
+import { t } from './i18n.js'
 
 const mobileQuery = window.matchMedia('(max-width: 768px)')
 const isMobile = () => mobileQuery.matches
@@ -424,7 +425,10 @@ const _SLASH_FALLBACK = [
   { cmd: '/help',     hint: 'Show help and available commands' },
   { cmd: '/exit',     hint: 'Exit Claude Code' },
   { cmd: '/status',   hint: 'Show session status and info' },
+  { cmd: '/plan',        hint: 'Enter plan mode (review before executing)' },
+  { cmd: '/rewind',      hint: 'Rewind conversation to an earlier checkpoint' },
   { cmd: '/resume',   hint: 'Resume previous session' },
+  { cmd: '/permissions', hint: 'Manage tool permissions' },
   { cmd: '/model',    hint: 'Switch Claude model' },
 ]
 
@@ -453,9 +457,11 @@ const _SLASH_HINTS = {
   '/memory':        'Edit Claude memory files',
   '/model':         'Switch Claude model',
   '/permissions':   'Manage tool permissions',
+  '/plan':          'Enter plan mode (review before executing)',
   '/pr-comments':   'Review and reply to PR comments',
   '/release-notes': 'Show recent release notes',
   '/review':        'Review code changes',
+  '/rewind':        'Rewind conversation to an earlier checkpoint',
   '/settings':      'Edit Claude Code settings',
   '/todos':         'Show and manage TODO items',
   '/vim':           'Toggle vim keybindings mode',
@@ -891,26 +897,54 @@ function setupChatInput() {
     }
   })
 
-  // ── Live model badge ─────────────────────────────────────────────────────
+  // ── Model badge / in-tab model picker (CC parity #4) ─────────────────────
   // Shows which Claude model is actually replying on the active tab, updated in
   // real time from nanocode:claude-model (dispatched by the block renderer on
   // every assistant message_start — so mid-session /model switches show up on
   // the very next turn). One model remembered per tab; tab switches re-render.
+  // The badge doubles as a touch-friendly model picker trigger: tapping it opens
+  // the same two-step model/effort picker as `/model`, so switching models never
+  // requires typing a slash command (mobile-first). On claude tabs it stays
+  // visible even before the first reply so the affordance is always reachable.
   const modelBadgeEl = document.getElementById('model-badge')
   const _modelByTab = new Map()
 
   function _updateModelBadge() {
     if (!modelBadgeEl) return
     const activeId = tabManager ? tabManager.activeId : null
-    const model = (isBlockAgentTab && activeId) ? _modelByTab.get(activeId) : null
+    if (!isBlockAgentTab || !activeId) {
+      // Non-claude tabs: hide the badge (no model concept / no picker).
+      modelBadgeEl.hidden = true
+      modelBadgeEl.classList.remove('model-badge--pickable')
+      return
+    }
+    const model = _modelByTab.get(activeId)
     if (model) {
       // "claude-fable-5" → "fable-5": keep the pill short (mobile-friendly).
       modelBadgeEl.textContent = model.replace(/^claude-/, '')
-      modelBadgeEl.title = model
-      modelBadgeEl.hidden = false
+      modelBadgeEl.title = t('composer.model.tooltip')
     } else {
-      modelBadgeEl.hidden = true
+      // No reply yet — still show a tappable "model" affordance on claude tabs.
+      modelBadgeEl.textContent = 'model'
+      modelBadgeEl.title = t('composer.model.tooltip')
     }
+    modelBadgeEl.hidden = false
+    modelBadgeEl.classList.add('model-badge--pickable')
+  }
+
+  if (modelBadgeEl) {
+    modelBadgeEl.setAttribute('role', 'button')
+    modelBadgeEl.setAttribute('tabindex', '0')
+    modelBadgeEl.setAttribute('aria-label', t('composer.model.tooltip'))
+    const openPicker = (e) => {
+      if (modelBadgeEl.hidden || !isBlockAgentTab) return
+      e.preventDefault()
+      showModelPicker()
+    }
+    modelBadgeEl.addEventListener('click', openPicker)
+    modelBadgeEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') openPicker(e)
+    })
   }
 
   document.addEventListener('nanocode:claude-model', (e) => {
@@ -921,6 +955,8 @@ function setupChatInput() {
   })
 
   document.addEventListener('nanocode:tab-active', () => _updateModelBadge())
+  // Reflect model concept when the active tab type changes at init.
+  _updateModelBadge()
 
   // Listen for subagent-phase transitions.
   // When the main Claude turn has handed off to a subagent (Task tool) and is now
