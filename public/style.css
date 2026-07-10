@@ -6600,6 +6600,60 @@ body.workspace-active .landing-overlay { display: none; }
 .cbr-todo-prio-medium { background: var(--warning); }
 .cbr-todo-prio-low { background: var(--text-muted); }
 
+/* R3: TodoWrite collapsed compact header — the `line` fold must keep a
+   "TodoWrite · 2/6 ✓ + chevron" row instead of vanishing to a blank strip.
+   Overrides the generic 8px line strip for todo blocks. */
+.cbr-todo-collapsed { display: none; }
+.cbr-block-tool--todo[data-fold="line"] {
+  height: auto !important;
+  min-height: 36px !important;
+  max-height: none !important;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--s-2);
+  border-left: 3px solid var(--primary);
+  background: color-mix(in srgb, var(--bg-secondary) 80%, var(--primary) 20%);
+}
+/* The generic ::after click-area overlay is for the 8px strip; not needed here. */
+.cbr-block-tool--todo[data-fold="line"]::after { display: none; }
+/* Hide the tiny line subhint — the collapsed header replaces it. */
+.cbr-block-tool--todo[data-fold="line"] .cbr-tool-subhint--line { display: none; }
+.cbr-block-tool--todo[data-fold="line"] .cbr-todo-collapsed {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.cbr-todo-collapsed-label {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+.cbr-todo-collapsed-progress {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  flex: 1 1 auto;
+}
+.cbr-todo-collapsed-chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+/* Mobile: collapsed header + chevron ≥44px touch target (CC parity #1). */
+@media (max-width: 768px) {
+  .cbr-block-tool--todo[data-fold="line"] { min-height: 44px !important; }
+  .cbr-block-tool--todo[data-fold="line"] .cbr-todo-collapsed { min-height: 44px; }
+  .cbr-todo-collapsed-chevron {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 /* Subagent activity block (nested events with parent_tool_use_id) */
 .cbr-block-subagent-activity {
   background: var(--bg-secondary);
