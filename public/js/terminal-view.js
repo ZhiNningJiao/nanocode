@@ -389,11 +389,20 @@ fetch('/api/claude/slash-commands')
   .then((r) => r.ok ? r.json() : null)
   .then((data) => {
     if (data && Array.isArray(data.commands) && data.commands.length > 0) {
-      CLAUDE_SLASH_COMMANDS = data.commands.map(({ cmd }) => ({
+      const live = data.commands.map(({ cmd }) => ({
         cmd,
         hint: _SLASH_HINTS[cmd] || '',
       }))
-      console.log(`[slash-commands] loaded ${CLAUDE_SLASH_COMMANDS.length} commands from server`)
+      // Union: the server list (claude CLI commands + installed skill commands)
+      // REPLACES the fallback by default, but we must keep the CC-parity builtin
+      // commands (/rewind /plan /resume /permissions) discoverable even when the
+      // live CLI doesn't surface them — they are transparent passthrough to the
+      // CLI, and the user needs to see them in the autocomplete. Merge any
+      // fallback command not already present in the live list (dedup by cmd).
+      const liveCmds = new Set(live.map((c) => c.cmd))
+      const extra = _SLASH_FALLBACK.filter((c) => !liveCmds.has(c.cmd))
+      CLAUDE_SLASH_COMMANDS = [...live, ...extra]
+      console.log(`[slash-commands] loaded ${live.length} from server + ${extra.length} builtin fallback = ${CLAUDE_SLASH_COMMANDS.length}`)
     }
   })
   .catch(() => { /* keep fallback */ })
@@ -1141,7 +1150,14 @@ function setupChatInput() {
       for (const cmd of CLAUDE_SLASH_COMMANDS) {
         const target = cmd.cmd.slice(1)  // command name without /
         const score = _slashFuzzyScore(target, q)
-        if (score >= 0) scored.push({ cmd, score })
+        // The scorer returns -1 for "no match" (not all query chars found) and
+        // any other value for a match — including NEGATIVE values for the best
+        // matches (prefix match fast path returns 0 - q.length; consecutive
+        // char bonuses are -2). The old `score >= 0` threshold wrongly excluded
+        // those best matches, so e.g. typing "/rew" hid "/rewind" (a prefix
+        // match, score -3) while showing fuzzy gap matches like "/review"
+        // (score +6). Accept every non-failure score so prefix matches rank first.
+        if (score !== -1) scored.push({ cmd, score })
       }
       if (!scored.length) {
         hideSlashCommands()
