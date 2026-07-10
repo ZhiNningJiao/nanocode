@@ -3225,6 +3225,10 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   background: var(--primary-subtle);
   color: var(--text);
 }
+/* Mobile: ≥44px touch target for tappable slash suggestions (CC parity #3). */
+@media (max-width: 768px) {
+  .suggestion-item { min-height: 44px; padding: 10px 12px; }
+}
 .suggestion-text mark {
   background: rgba(45, 191, 211, 0.22);
   color: var(--text);
@@ -4256,7 +4260,7 @@ body.workspace-active .landing-overlay { display: none; }
   outline: none;
 }
 @media (max-width: 768px) {
-  .model-badge--pickable { min-height: 34px; padding: 8px 10px; }
+  .model-badge--pickable { min-height: 44px; padding: 10px 12px; }
 }
 
 /* ── Permission-mode badge (Claude Code parity, gap #3) ──────────────────── */
@@ -4309,7 +4313,7 @@ body.workspace-active .landing-overlay { display: none; }
   background: var(--warning-bg, rgba(224, 162, 48, 0.12));
 }
 @media (max-width: 768px) {
-  .mode-badge--pickable { min-height: 34px; padding: 8px 10px; }
+  .mode-badge--pickable { min-height: 44px; padding: 10px 12px; }
 }
 
 /* Mode-switch confirmation toast (rendered inline in the transcript) */
