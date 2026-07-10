@@ -2,6 +2,7 @@ import {
   buildAskUserQuestionResult,
   normalizeAskUserQuestionPayload,
 } from './ask-user-question.js'
+import { t } from '../i18n.js'
 
 function makeBlock(extraClasses = '') {
   const article = document.createElement('article')
@@ -180,6 +181,75 @@ function buildToolSubhint(part, escHtml) {
 
   if (!raw.trim()) return ''
   return escHtml(raw)
+}
+
+/**
+ * Build an interactive TodoWrite checklist (Claude Code parity, gap #1).
+ *
+ * Renders each todo as its own row with a status glyph mirroring the CLI Ink
+ * icon set (Be.tick / Be.pointer / Be.arrowDown → completed / in_progress /
+ * pending). While a todo is in_progress we prefer its `activeForm` text (the
+ * present-tense "Doing X" phrasing the model supplies) so the row reads like
+ * the live CLI panel. Priority (high/medium/low) drives a small dot colour.
+ *
+ * Returns an HTML string (safe — every field is escaped). Falls back to a
+ * simple empty-state note when there are no todos.
+ *
+ * @param {Array} todos - TodoWrite `todos[]` array.
+ * @param {{ escHtml: Function }} deps
+ */
+export function renderTodoList(todos, { escHtml }) {
+  const list = Array.isArray(todos) ? todos : []
+  if (list.length === 0) {
+    return `<div class="cbr-todo-list cbr-todo-empty">${escHtml(t('cbr.todo.empty'))}</div>`
+  }
+
+  const done = list.filter((td) => td && td.status === 'completed').length
+
+  // Inline SVG glyphs — 14×14, currentColor so status class drives the hue.
+  const ICON_COMPLETED =
+    `<svg class="cbr-todo-glyph" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+  const ICON_IN_PROGRESS =
+    `<svg class="cbr-todo-glyph" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`
+  const ICON_PENDING =
+    `<svg class="cbr-todo-glyph" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="7"/></svg>`
+
+  const rows = list.map((td) => {
+    const status = (td && td.status) || 'pending'
+    const priority = (td && td.priority) || ''
+    // in_progress rows prefer the present-tense activeForm ("Fixing the bug").
+    let text = ''
+    if (status === 'in_progress' && td && td.activeForm) {
+      text = String(td.activeForm)
+    } else {
+      text = String((td && (td.content || td.title || td.subject)) || '')
+    }
+
+    let icon = ICON_PENDING
+    let statusClass = 'cbr-todo-pending'
+    if (status === 'completed') { icon = ICON_COMPLETED; statusClass = 'cbr-todo-completed' }
+    else if (status === 'in_progress') { icon = ICON_IN_PROGRESS; statusClass = 'cbr-todo-in-progress' }
+
+    const prioClass = priority ? ` cbr-todo-prio-${escHtml(priority)}` : ''
+    const prioDot = priority
+      ? `<span class="cbr-todo-prio-dot${prioClass}" title="${escHtml(priority)} priority" aria-hidden="true"></span>`
+      : ''
+
+    return (
+      `<li class="cbr-todo-item ${statusClass}">` +
+      `<span class="cbr-todo-icon" aria-hidden="true">${icon}</span>` +
+      `<span class="cbr-todo-text">${escHtml(text)}</span>` +
+      prioDot +
+      `</li>`
+    )
+  }).join('')
+
+  return (
+    `<div class="cbr-todo-list" role="group" aria-label="Todo list">` +
+    `<div class="cbr-todo-progress">${escHtml(t('cbr.todo.progress', done, list.length))}</div>` +
+    `<ul class="cbr-todo-items">${rows}</ul>` +
+    `</div>`
+  )
 }
 
 function bindToolFoldCycle(article, { cycleToolFold, getToolFoldLevel }) {
