@@ -93,6 +93,7 @@ function resolvePermissionMode(store) {
   if (globalPerm === 'auto-edits') return 'acceptEdits'
   if (globalPerm === 'ask') return 'default'
   if (globalPerm === 'full-auto') return 'bypassPermissions'
+  if (globalPerm === 'plan') return 'plan'
 
   const legacy = store.getSetting('claude_permission_mode')
   if (legacy === 'accept-edits') return 'acceptEdits'
@@ -514,6 +515,10 @@ export function createClaudeTmuxDriver({ store, home, claudeBroadcast, broadcast
           // --resume when these change between turns.
           model: store.getSetting('claude_model') || null,
           effort: store.getSetting('claude_effort') || null,
+          // Same live-sync for the permission mode so a Shift+Tab plan-mode
+          // toggle (CC parity) reaches long-lived bridges too. Value is the
+          // resolved SDK PermissionMode (default/acceptEdits/bypassPermissions/plan).
+          permissionMode: resolvePermissionMode(store),
         })
         } catch (err) {
           // Socket already dead when we tried to dispatch — fail fast instead

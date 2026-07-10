@@ -958,6 +958,104 @@ function setupChatInput() {
   // Reflect model concept when the active tab type changes at init.
   _updateModelBadge()
 
+  // ── Permission-mode badge / Shift+Tab cycle (CC parity, gap #3) ──────────
+  // Shows the active permission mode (normal / plan / bypass) as a colour-
+  // coded pill next to the composer. Shift+Tab on a block-agent tab cycles the
+  // mode (aligning with Claude Code's cycleMode); tapping the badge does the
+  // same (mobile-first). The mode persists via the same global_permission
+  // setting the settings panel uses; the tmux bridge live-rebuilds the
+  // streaming session with the new permissionMode on the next idle turn, so a
+  // toggle here reaches the live agent without restarting the tab.
+  const modeBadgeEl = document.getElementById('mode-badge')
+  // global_permission store values, cycled in this order. 'ask' = normal
+  // (default, asks before each tool), 'plan' = plan mode (review, no execute),
+  // 'full-auto' = bypass (auto-accept all). Matches resolvePermissionMode.
+  const _PERM_CYCLE = ['ask', 'plan', 'full-auto']
+  let _permMode = 'full-auto' // resolved on init from /api/settings
+
+  function _permModeLabel(mode) {
+    if (mode === 'plan') return t('composer.mode.plan')
+    if (mode === 'ask') return t('composer.mode.normal')
+    return t('composer.mode.bypass')
+  }
+  function _permModeVariant(mode) {
+    if (mode === 'plan') return 'plan'
+    if (mode === 'ask') return 'normal'
+    return 'bypass'
+  }
+
+  function _updateModeBadge() {
+    if (!modeBadgeEl) return
+    if (!isBlockAgentTab) {
+      // Non-agent tabs: no permission-mode concept — hide and clean classes.
+      modeBadgeEl.hidden = true
+      modeBadgeEl.classList.remove('mode-badge--pickable', 'mode-badge--plan', 'mode-badge--normal', 'mode-badge--bypass')
+      return
+    }
+    modeBadgeEl.textContent = _permModeLabel(_permMode)
+    modeBadgeEl.title = t('composer.mode.tooltip')
+    modeBadgeEl.hidden = false
+    modeBadgeEl.classList.add('mode-badge--pickable')
+    modeBadgeEl.classList.remove('mode-badge--plan', 'mode-badge--normal', 'mode-badge--bypass')
+    modeBadgeEl.classList.add('mode-badge--' + _permModeVariant(_permMode))
+  }
+
+  function _showModeToast(mode) {
+    const msgKey = mode === 'plan' ? 'composer.mode.planMsg'
+      : mode === 'ask' ? 'composer.mode.normalMsg'
+      : 'composer.mode.bypassMsg'
+    const el = document.createElement('div')
+    el.className = 'cbr-mode-toast cbr-mode-toast--' + _permModeVariant(mode)
+    el.textContent = t(msgKey)
+    _appendToScroll(el)
+    setTimeout(() => el.remove(), 4000)
+  }
+
+  async function cyclePermMode() {
+    const idx = _PERM_CYCLE.indexOf(_permMode)
+    const next = _PERM_CYCLE[(idx + 1) % _PERM_CYCLE.length]
+    _permMode = next
+    _updateModeBadge()
+    _showModeToast(next)
+    try {
+      await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'global_permission', value: next }),
+      })
+    } catch (err) {
+      console.error('[mode-badge] failed to persist global_permission:', err)
+    }
+  }
+
+  if (modeBadgeEl) {
+    modeBadgeEl.setAttribute('role', 'button')
+    modeBadgeEl.setAttribute('tabindex', '0')
+    modeBadgeEl.setAttribute('aria-label', t('composer.mode.tooltip'))
+    const onCycle = (e) => {
+      if (modeBadgeEl.hidden || !isBlockAgentTab) return
+      e.preventDefault()
+      cyclePermMode()
+    }
+    modeBadgeEl.addEventListener('click', onCycle)
+    modeBadgeEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') onCycle(e)
+    })
+  }
+
+  // Sync badge visibility on tab switch; resolve the persisted mode at init.
+  document.addEventListener('nanocode:tab-active', () => _updateModeBadge())
+  ;(async () => {
+    try {
+      const res = await fetch('/api/settings')
+      if (res.ok) {
+        const s = await res.json()
+        if (s && s.global_permission) _permMode = s.global_permission
+      }
+    } catch { /* server not ready yet: keep default, badge still renders */ }
+    _updateModeBadge()
+  })()
+
   // Listen for subagent-phase transitions.
   // When the main Claude turn has handed off to a subagent (Task tool) and is now
   // idle-waiting, active=true. The outer turn is still in progress (isClaudeThinking
@@ -1765,6 +1863,16 @@ function setupChatInput() {
     }
 
     if (e.key === 'Tab') {
+      // Shift+Tab on a block-agent tab cycles the permission mode (CC parity,
+      // aligning with Claude Code's cycleMode) instead of cycling tabs. Plain
+      // Tab still cycles tabs forward; Shift+Tab on bash/codex tabs still
+      // cycles backward — only agent tabs repurpose the chord for mode switch.
+      if (e.shiftKey && isBlockAgentTab) {
+        e.preventDefault()
+        hideSuggestions()
+        cyclePermMode()
+        return
+      }
       // Tab cycles bash tabs (Shift+Tab cycles backward). Always intercepted
       // regardless of composer content — explicit user intent per design.
       e.preventDefault()
