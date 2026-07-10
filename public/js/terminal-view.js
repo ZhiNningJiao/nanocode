@@ -1163,8 +1163,11 @@ function setupChatInput() {
         hideSlashCommands()
         return
       }
-      // Sort: lower score = better match
-      scored.sort((a, b) => a.score - b.score)
+      // Sort: lower score = better match. Tiebreaker: shorter command name wins
+      // so an exact/prefix match like "/plan" ranks above longer siblings like
+      // "/plan-ceo-review" when both score equally (both are prefix matches, same
+      // 0 - q.length fast-path score). This makes the parity builtins discoverable.
+      scored.sort((a, b) => a.score - b.score || a.cmd.cmd.length - b.cmd.cmd.length)
       matches = scored.map(({ cmd, score }) => ({ cmd, score, matchRanges: [] }))
     }
 
