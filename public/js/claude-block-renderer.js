@@ -33,6 +33,7 @@ import {
   createThinkingBlock,
   createToolUseBlock,
   createUserBlock,
+  renderTodoList,
 } from './claude-block-renderer/dom-render.js'
 import { ReplayCache } from './claude-block-renderer/replay-cache.js'
 import { pairToolResult, stampToolUseIdentity } from './claude-block-renderer/tool-result-pair.js'
@@ -2131,6 +2132,11 @@ export class ClaudeBlockRenderer {
         const filePath = part.input.file_path || part.input.path || ''
         const content = part.input.content != null ? String(part.input.content) : ''
         inputHtml = renderWritePreview(filePath, content)
+      } else if (part.name === 'TodoWrite') {
+        // Gap #1: interactive checklist instead of raw JSON. The always-visible
+        // subhint (buildToolSubhint) keeps the one-line "N tasks" summary for
+        // the folded state; expanding reveals the per-item status list.
+        inputHtml = renderTodoList(part.input && part.input.todos, { escHtml })
       } else if (part.name === 'MultiEdit') {
         // P1-1: MultiEdit — each edit block rendered as a separate diff
         const filePath = part.input.file_path || part.input.path || ''
