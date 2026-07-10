@@ -3228,6 +3228,34 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 /* Mobile: ≥44px touch target for tappable slash suggestions (CC parity #3). */
 @media (max-width: 768px) {
   .suggestion-item { min-height: 44px; padding: 10px 12px; }
+  /* R3: the dropdown anchors to .input-wrap which is squeezed to ~87px by the
+     mode/model/mute/compact buttons in .input-row. Re-anchor it to the full-
+     width .input-row so the panel "占满可用宽" and long command names
+     (/permissions) are never clipped to /permis. */
+  .input-row { position: relative; }
+  .input-wrap { position: static; }
+  /* R3: stack command name above hint so long names (/permissions) are never
+     clipped to /permis by the flex row. Command name keeps full width and is
+     never truncated; the hint wraps to a second line and truncates instead. */
+  .claude-slash-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .claude-slash-cmd {
+    flex: 0 0 auto;
+    min-width: 0;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .claude-slash-hint {
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 .suggestion-text mark {
   background: rgba(45, 191, 211, 0.22);
