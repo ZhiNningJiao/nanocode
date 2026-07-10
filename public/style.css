@@ -4239,6 +4239,26 @@ body.workspace-active .landing-overlay { display: none; }
   user-select: none;
 }
 
+/* Pickable variant — the badge doubles as the in-tab model picker trigger. */
+.model-badge--pickable {
+  cursor: pointer;
+  /* Guarantee a ≥44px-ish touch target on mobile without bloating the pill on
+     desktop: vertical hit area comes from padding + line-height. */
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.model-badge--pickable:hover,
+.model-badge--pickable:focus-visible {
+  color: var(--text, #e8e8e4);
+  border-color: var(--info, #4a88c4);
+  outline: none;
+}
+@media (max-width: 768px) {
+  .model-badge--pickable { min-height: 34px; padding: 8px 10px; }
+}
+
 /* Language selector in settings */
 .settings-lang-row {
   display: flex;
