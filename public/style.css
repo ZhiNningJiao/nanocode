@@ -6046,6 +6046,22 @@ body.workspace-active .landing-overlay { display: none; }
 }
 .cbr-tool-fold-btn:hover { color: var(--primary); }
 
+/* Mobile: raise the fold/close chevron to a ≥44px touch target so the
+   TodoWrite (and every tool) block is clearly closeable/collapsible with a
+   thumb — Claude Code parity requirement. The header row is already 44px, but
+   the chevron itself reads as the close affordance, so give it a tappable
+   square at the trailing edge with a subtle background on touch screens. */
+@media (max-width: 768px) {
+  .cbr-tool-fold-btn {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+  }
+  .cbr-tool-fold-btn:active { background: var(--primary-subtle, rgba(45, 191, 211, 0.15)); }
+}
+
 /* ── Three-level fold: data-fold attribute ─────────────────────── */
 
 /* Default (no attribute): treat as full — prevents invisible body when
