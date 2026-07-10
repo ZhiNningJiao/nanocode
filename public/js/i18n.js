@@ -111,6 +111,15 @@ const translations = {
     'plugins.model.effortHint': 'Thinking effort for new Claude sessions. Empty = CLI default.',
     'plugins.model.save': 'Save',
     'plugins.model.applied': 'Model saved.',
+    // TodoWrite interactive checklist (Claude Code parity)
+    'cbr.todo.empty': '(no tasks)',
+    'cbr.todo.progress': (done, total) => `${done}/${total} done`,
+    // Composer mode / model badges
+    'composer.mode.plan': 'Plan',
+    'composer.mode.normal': 'Normal',
+    'composer.mode.bypass': 'Bypass',
+    'composer.mode.tooltip': 'Permission mode (Shift+Tab to cycle)',
+    'composer.model.tooltip': 'Tap to switch model',
     'usage.refresh': 'Refresh',
     'usage.claude.title': 'Claude Token Usage',
     'usage.claude.none': 'No usage data found.',
@@ -487,6 +496,15 @@ const translations = {
     'plugins.model.effortHint': '新 Claude 会话的思考强度。留空 = CLI 默认。',
     'plugins.model.save': '保存',
     'plugins.model.applied': '模型已保存。',
+    // TodoWrite 交互清单（对齐 Claude Code）
+    'cbr.todo.empty': '（无任务）',
+    'cbr.todo.progress': (done, total) => `${done}/${total} 已完成`,
+    // 输入区模式 / 模型徽标
+    'composer.mode.plan': '计划',
+    'composer.mode.normal': '普通',
+    'composer.mode.bypass': '直通',
+    'composer.mode.tooltip': '权限模式（Shift+Tab 循环切换）',
+    'composer.model.tooltip': '点击切换模型',
     'usage.refresh': '刷新',
     'usage.claude.title': 'Claude Token 用量',
     'usage.claude.none': '未找到用量数据。',
