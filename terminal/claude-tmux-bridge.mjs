@@ -105,9 +105,17 @@ const cs = {
 // conversation context survives the model swap.
 let currentModel = args.model || null
 let currentEffort = args.effort || null
+// Permission mode is also live-updatable (CC parity: Shift+Tab plan-mode
+// toggle). The controller forwards the resolved SDK PermissionMode on every
+// user frame; when it changes we rebuild the streaming session, same as
+// model/effort. Value is a resolved SDK value (default/acceptEdits/
+// bypassPermissions/plan) — the store returns it verbatim under the
+// global_permission key and resolvePermissionMode passes it through.
+let currentPermissionMode = args.permissionMode || null
 // What the LIVE streaming session was built with (null until first build).
 let appliedModel = currentModel
 let appliedEffort = currentEffort
+let appliedPermissionMode = currentPermissionMode
 
 // Minimal store implementation for the SDK driver running inside the bridge.
 // It mirrors the settings the main nanocode process would read; model/effort
@@ -118,7 +126,9 @@ const store = {
     if (key === 'claude_model') return currentModel
     if (key === 'claude_effort') return currentEffort
     // The SDK driver resolves global_permission to SDK permissionMode values.
-    if (key === 'global_permission') return args.permissionMode || 'full-auto'
+    // We hold the ALREADY-resolved SDK value here (live-updatable); the driver's
+    // resolvePermissionMode passes resolved values through unchanged.
+    if (key === 'global_permission') return currentPermissionMode || args.permissionMode || 'full-auto'
     if (key === 'claude_session_fallback') return args.sessionFallback || 'continue'
     if (key === 'auto_flush_queue_on_interrupt') return '1'
     // Legacy setting; intentionally null so global_permission wins.
@@ -231,14 +241,15 @@ async function handleUserMessage(text) {
     // idle — tearing down a live streaming session mid-turn would kill the
     // active generation. If we're busy the message queues as usual and the
     // switch applies on the next idle turn.
-    if (!cs.busy && (currentModel !== appliedModel || currentEffort !== appliedEffort)) {
+    if (!cs.busy && (currentModel !== appliedModel || currentEffort !== appliedEffort || currentPermissionMode !== appliedPermissionMode)) {
       if (cs._streamingSession) {
         try { cs._streamingSession.close() } catch {}
         cs._streamingSession = null
       }
       appliedModel = currentModel
       appliedEffort = currentEffort
-      broadcastSystem('tmux_model_switch', `Rebuilding session with model=${currentModel || '(CLI default)'} effort=${currentEffort || '(default)'}`)
+      appliedPermissionMode = currentPermissionMode
+      broadcastSystem('tmux_model_switch', `Rebuilding session with model=${currentModel || '(CLI default)'} effort=${currentEffort || '(default)'} perm=${currentPermissionMode || '(default)'}`)
     }
     await dispatchTurn(text)
     broadcastRaw({ type: 'turn-done' })
@@ -266,6 +277,7 @@ const server = createServer((socket) => {
         // every user frame (older controllers omit them — keep launch values).
         if ('model' in msg) currentModel = msg.model || null
         if ('effort' in msg) currentEffort = msg.effort || null
+        if ('permissionMode' in msg) currentPermissionMode = msg.permissionMode || null
         handleUserMessage(msg.text.trim())
       } else if (msg.type === 'interrupt') {
         handleInterrupt(msg)
