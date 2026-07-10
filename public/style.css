@@ -6362,6 +6362,99 @@ body.workspace-active .landing-overlay { display: none; }
   background: var(--bg-tertiary);
 }
 
+/* ── TodoWrite interactive checklist (Claude Code parity, gap #1) ──────────── */
+.cbr-todo-list {
+  padding: var(--s-2) var(--s-3);
+}
+
+.cbr-todo-empty {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.cbr-todo-progress {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: var(--s-2);
+}
+
+.cbr-todo-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cbr-todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  /* ≥44px touch target: min row height + comfortable padding on mobile taps */
+  min-height: 32px;
+  padding: 6px 4px;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  border-radius: var(--radius-sm, 5px);
+}
+
+.cbr-todo-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.cbr-todo-glyph { display: block; }
+
+.cbr-todo-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* Completed: green tick, dimmed strikethrough text */
+.cbr-todo-completed .cbr-todo-icon { color: var(--success); }
+.cbr-todo-completed .cbr-todo-text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+/* In-progress: accented arrow, emphasised text */
+.cbr-todo-in-progress .cbr-todo-icon { color: var(--info); }
+.cbr-todo-in-progress .cbr-todo-text {
+  color: var(--text-primary, var(--text));
+  font-weight: 600;
+}
+.cbr-todo-in-progress {
+  background: var(--info-bg, rgba(74, 136, 196, 0.08));
+}
+
+/* Pending: muted open circle */
+.cbr-todo-pending .cbr-todo-icon { color: var(--text-muted); }
+.cbr-todo-pending .cbr-todo-text { color: var(--text-secondary); }
+
+/* Priority dot */
+.cbr-todo-prio-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-top: 6px;
+  background: var(--text-muted);
+}
+.cbr-todo-prio-high { background: var(--error); }
+.cbr-todo-prio-medium { background: var(--warning); }
+.cbr-todo-prio-low { background: var(--text-muted); }
+
 /* Subagent activity block (nested events with parent_tool_use_id) */
 .cbr-block-subagent-activity {
   background: var(--bg-secondary);
