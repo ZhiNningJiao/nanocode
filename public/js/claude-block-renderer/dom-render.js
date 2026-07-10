@@ -417,7 +417,12 @@ export function createToolUseBlock({
   const extraClass = isSubagentPrompt ? ' cbr-block-subagent-prompt' : ''
   const activityClass = isSubagentActivity ? ' cbr-block-subagent-activity' : ''
   const loadingClass = isLoading ? ' cbr-tool-loading-state' : ''
-  const article = makeBlock('cbr-block-tool' + extraClass + activityClass + loadingClass)
+  // R3: TodoWrite gets a dedicated collapsed header so the `line` fold keeps a
+  // compact "TodoWrite · 2/6 ✓ + chevron" row instead of vanishing to a blank
+  // 4px strip like generic tool blocks.
+  const isTodo = part.name === 'TodoWrite'
+  const todoClass = isTodo ? ' cbr-block-tool--todo' : ''
+  const article = makeBlock('cbr-block-tool' + extraClass + activityClass + loadingClass + todoClass)
 
   // Build subhint: always-visible one-line command/path summary.
   // Two copies:
@@ -432,6 +437,24 @@ export function createToolUseBlock({
   const subhintOuter = subhintText
     ? `<div class="cbr-tool-subhint cbr-tool-subhint--line" aria-hidden="true">${subhintText}</div>`
     : ''
+
+  // R3: TodoWrite collapsed compact header — lives outside the card (which is
+  // display:none in line fold) so it stays visible when collapsed. Clicking it
+  // cycles the fold back to full (handled by bindToolFoldCycle on the article).
+  let todoCollapsed = ''
+  if (isTodo) {
+    const tdList = Array.isArray(part.input && part.input.todos) ? part.input.todos : []
+    const tdDone = tdList.filter((td) => td && td.status === 'completed').length
+    const tdTotal = tdList.length
+    todoCollapsed =
+      `<div class="cbr-todo-collapsed" role="button" aria-label="${escHtml(t('cbr.todo.expand'))}">` +
+      `<span class="cbr-todo-collapsed-label">${toolName}</span>` +
+      `<span class="cbr-todo-collapsed-progress">${escHtml(t('cbr.todo.progress', tdDone, tdTotal))}</span>` +
+      `<span class="cbr-todo-collapsed-chevron">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
+      `</span>` +
+      `</div>`
+  }
 
   article.innerHTML =
     `<div class="cbr-tool-card">` +
@@ -448,7 +471,8 @@ export function createToolUseBlock({
     `<div class="cbr-tool-body">${inputHtml}</div>` +
     `<div class="cbr-tool-output"></div>` +
     `</div>` +
-    subhintOuter
+    subhintOuter +
+    todoCollapsed
 
   if (isSubagentPrompt && !getSubagentPromptVisible()) {
     article.style.display = 'none'
