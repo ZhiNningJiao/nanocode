@@ -434,8 +434,12 @@
                   enterkeyhint="send"
                 ></textarea>
               </div>
+              <!-- Permission-mode badge (CC parity): shows plan / normal / bypass.
+                   Shift+Tab on a claude tab cycles the mode; tap also cycles. -->
+              <span class="mode-badge" id="mode-badge" hidden></span>
               <!-- Live model badge: shows which Claude model is actually replying
-                   (fed by message_start / assistant events via nanocode:claude-model) -->
+                   (fed by message_start / assistant events via nanocode:claude-model).
+                   Doubles as the in-tab model picker trigger. -->
               <span class="model-badge" id="model-badge" hidden></span>
               <!-- Global mute + TTS buttons -->
               <button class="tts-btn mute-btn" id="mute-btn" aria-label="Toggle mute" title="Sound on — click to mute">

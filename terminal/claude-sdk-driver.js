@@ -27,6 +27,15 @@ function resolvePermissionMode(store) {
   if (globalPerm === 'auto-edits') return 'acceptEdits'
   if (globalPerm === 'ask') return 'default'
   if (globalPerm === 'full-auto') return 'bypassPermissions'
+  if (globalPerm === 'plan') return 'plan'
+  // Already-resolved SDK values pass through unchanged. The tmux bridge stores
+  // the resolved permissionMode (e.g. 'bypassPermissions' / 'plan') under the
+  // global_permission key when it forwards per-turn switches; without this
+  // pass-through those values would fall through to the bypass default.
+  if (globalPerm === 'acceptEdits' || globalPerm === 'bypassPermissions' ||
+      globalPerm === 'default' || globalPerm === 'plan') {
+    return globalPerm
+  }
 
   // Fallback: legacy claude_permission_mode (kept for old stores).
   const legacy = store.getSetting('claude_permission_mode')
