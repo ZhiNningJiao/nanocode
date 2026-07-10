@@ -4259,6 +4259,83 @@ body.workspace-active .landing-overlay { display: none; }
   .model-badge--pickable { min-height: 34px; padding: 8px 10px; }
 }
 
+/* ── Permission-mode badge (Claude Code parity, gap #3) ──────────────────── */
+/* Colour-coded pill next to the composer: normal / plan / bypass. Tappable
+   (mobile) and Shift+Tab cycles it on agent tabs. Mirrors the model-badge
+   pill geometry so the two sit side by side without visual clash. */
+.mode-badge {
+  align-self: center;
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  color: var(--text-secondary, #9aa0a6);
+  background: var(--bg-elevated, rgba(255,255,255,0.04));
+  user-select: none;
+  white-space: nowrap;
+}
+.mode-badge--pickable {
+  cursor: pointer;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.mode-badge--pickable:hover,
+.mode-badge--pickable:focus-visible {
+  outline: none;
+  border-color: var(--info, #4a88c4);
+}
+
+/* Normal (ask) — neutral, the default "asks before each tool" mode. */
+.mode-badge--normal {
+  color: var(--text-secondary, #9aa0a6);
+  border-color: var(--border, rgba(255,255,255,0.14));
+}
+/* Plan — accent/info: review before executing. */
+.mode-badge--plan {
+  color: var(--info, #4a88c4);
+  border-color: var(--info, #4a88c4);
+  background: var(--info-bg, rgba(74, 136, 196, 0.12));
+}
+/* Bypass — warning: auto-accept all actions. */
+.mode-badge--bypass {
+  color: var(--warning, #e0a230);
+  border-color: var(--warning, #e0a230);
+  background: var(--warning-bg, rgba(224, 162, 48, 0.12));
+}
+@media (max-width: 768px) {
+  .mode-badge--pickable { min-height: 34px; padding: 8px 10px; }
+}
+
+/* Mode-switch confirmation toast (rendered inline in the transcript) */
+.cbr-mode-toast {
+  align-self: flex-start;
+  max-width: 92%;
+  margin: var(--s-2) 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm, 5px);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  border: 1px solid var(--border, rgba(255,255,255,0.10));
+  background: var(--bg-secondary, rgba(255,255,255,0.03));
+  color: var(--text-secondary, #9aa0a6);
+}
+.cbr-mode-toast--plan {
+  border-color: var(--info, #4a88c4);
+  color: var(--info, #4a88c4);
+  background: var(--info-bg, rgba(74, 136, 196, 0.10));
+}
+.cbr-mode-toast--bypass {
+  border-color: var(--warning, #e0a230);
+  color: var(--warning, #e0a230);
+  background: var(--warning-bg, rgba(224, 162, 48, 0.10));
+}
+
 /* Language selector in settings */
 .settings-lang-row {
   display: flex;
