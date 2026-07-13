@@ -331,6 +331,29 @@ export function createTerminalRoutes(store, opts = {}) {
   })
 
   /**
+   * PATCH /api/projects/:id/tabs/:tabId/failover
+   * Toggle per-session team-failover opt-in (secretary sessions only; default
+   * off; inherited by child tabs). Body: { allowTeamFailover: boolean }.
+   * When on, a 429 / org spend limit switches team + copies transcript + resumes.
+   */
+  router.patch('/api/projects/:id/tabs/:tabId/failover', (req, res) => {
+    const project = store.getProject(req.params.id)
+    if (!project) return res.status(404).json({ error: 'project not found' })
+    const tab = store.getTab ? store.getTab(req.params.id, req.params.tabId) : null
+    if (!tab) return res.status(404).json({ error: 'tab not found' })
+    if (tab.type !== 'claude') return res.status(400).json({ error: 'not a claude tab' })
+    const allow = req.body?.allowTeamFailover === true
+    const updated = store.updateTabMetadata
+      ? store.updateTabMetadata(req.params.id, req.params.tabId, { allowTeamFailover: allow })
+      : null
+    if (sessionController.setAllowTeamFailover) {
+      sessionController.setAllowTeamFailover(req.params.id, req.params.tabId, allow)
+    }
+    broadcastTabs(req.params.id)
+    res.json(updated || { id: req.params.tabId, allowTeamFailover: allow })
+  })
+
+  /**
    * /ws/tabs handler — clients send `{type:'subscribe', projectId}` and
    * receive `{type:'tabs:update', projectId, tabs:[]}` on every mutation
    * (and once immediately as a snapshot).

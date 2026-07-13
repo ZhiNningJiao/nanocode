@@ -141,6 +141,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     if (resetTurnCount) cs._replayUserTextCounts = new Map()
   }
 
+  // team-failover opt-in toggle for a live session (secretary sessions). Applies
+  // immediately to the running cs so the next turn honours it.
+  function setAllowTeamFailover(projectId, tabId, allow) {
+    const cs = claudeSessions.get(sessionKeyFor(projectId, tabId))
+    if (cs) cs.allowTeamFailover = !!allow
+  }
+
   function primeReplayHistory(projectId, tabId, events) {
     const sessionKey = sessionKeyFor(projectId, tabId)
     const seed = buildReplaySeed(events)
@@ -952,6 +959,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // claude --resume finds the jsonl in the matching project-slug dir and keeps
         // the conversation's file context — falling back to the project cwd.
         claudeConfigDir: tab?.claudeConfigDir || null,
+        // team-failover opt-in (secretary sessions only; default off; inherited by
+        // child tabs). When true, a 429 triggers switch-team + copy transcript +
+        // resume on the other org's quota. See terminal/team-failover.js.
+        allowTeamFailover: !!tab?.allowTeamFailover,
         cwd: (tab?.claudeSessionCwd && typeof tab.claudeSessionCwd === 'string' && tab.claudeSessionCwd.trim()) ? tab.claudeSessionCwd.trim() : project.cwd,
         currentProc: null,
         tabLabel: tab?.label || '',
@@ -1627,6 +1638,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   }
 
   return {
+    setAllowTeamFailover,
     claudeSessions,
     codexSessions,
     handleInterrupt,
