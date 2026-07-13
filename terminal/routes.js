@@ -2,7 +2,8 @@
 
 import { Router } from 'express'
 import { execFile, spawn } from 'node:child_process'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, unlinkSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path, { resolve, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { currentPlatform, listDirectory, listDrives } from './fsbrowse.js'
@@ -483,6 +484,23 @@ export function createTerminalRoutes(store, opts = {}) {
 
   let _slashFetchInFlight = false
 
+  // Probe helpers (slash-commands / init-snapshot) spawn `claude --print`, which
+  // writes a throwaway transcript to <configDir>/projects/<slug>/<id>.jsonl.
+  // Without cleanup these pile up and clutter the resume list. We spawn each probe
+  // with a KNOWN --session-id and delete that transcript once the probe exits.
+  const _probeProjectsDir = join(
+    process.env.CLAUDE_CONFIG_DIR || join(home, '.claude'),
+    'projects',
+    home.replace(/[/.]/g, '-'),
+  )
+  function _cleanupProbeSession(sid) {
+    if (!sid) return
+    try {
+      const p = join(_probeProjectsDir, `${sid}.jsonl`)
+      if (existsSync(p)) unlinkSync(p)
+    } catch {}
+  }
+
   /** Spawn claude once, pull slash_commands from the init event.
    *  Resolves with an array of { cmd, hint } objects, or null on failure. */
   function _fetchSlashCommandsFromClaude() {
@@ -495,10 +513,12 @@ export function createTerminalRoutes(store, opts = {}) {
         message: { role: 'user', content: [{ type: 'text', text: 'OK' }] },
       })
 
+      const probeSid = randomUUID()
       let proc
       try {
         proc = spawn('claude', [
           '--print',
+          '--session-id', probeSid,
           '--output-format=stream-json',
           '--input-format=stream-json',
           '--verbose',
@@ -508,6 +528,7 @@ export function createTerminalRoutes(store, opts = {}) {
           env: { ...process.env },
           cwd: home,
         })
+        proc.on('close', () => _cleanupProbeSession(probeSid))
       } catch (err) {
         console.warn('[slash-commands] failed to spawn claude:', err.message)
         _slashFetchInFlight = false
@@ -632,10 +653,12 @@ export function createTerminalRoutes(store, opts = {}) {
         message: { role: 'user', content: [{ type: 'text', text: 'OK' }] },
       })
 
+      const probeSid = randomUUID()
       let proc
       try {
         proc = spawn('claude', [
           '--print',
+          '--session-id', probeSid,
           '--output-format=stream-json',
           '--input-format=stream-json',
           '--verbose',
@@ -645,6 +668,7 @@ export function createTerminalRoutes(store, opts = {}) {
           env: { ...process.env },
           cwd: home,
         })
+        proc.on('close', () => _cleanupProbeSession(probeSid))
       } catch (err) {
         console.warn('[init-snapshot] failed to spawn claude:', err.message)
         _initSnapshotInFlight = false
