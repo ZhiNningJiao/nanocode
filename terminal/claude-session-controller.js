@@ -11,6 +11,8 @@ import { createCodexSdkDriver } from './codex-sdk-driver.js'
 import { createOpencodeBlockDriver } from './opencode-block-driver.js'
 import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
+import { copyTranscriptToTeam, teamModelDefaults } from './team-failover.js'
+import { loadPersonalConfig } from './personal-config.js'
 
 export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl }) {
   const IS_WIN = platform() === 'win32'
@@ -146,6 +148,37 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   function setAllowTeamFailover(projectId, tabId, allow) {
     const cs = claudeSessions.get(sessionKeyFor(projectId, tabId))
     if (cs) cs.allowTeamFailover = !!allow
+  }
+
+  // Manually move the current conversation to another team NOW: copy the
+  // transcript into the target team's projects dir, switch the tab + live cs to
+  // that team's CLAUDE_CONFIG_DIR, and upgrade the model to that team's default
+  // (Team1→fable/high, other→opus/high). The next turn resumes on the target
+  // org's quota. Reuses the failover machinery; also clears any auto-failover
+  // state so the manual choice sticks.
+  function switchTeam(projectId, tabId, targetConfigDir) {
+    const tab = store.getTab ? store.getTab(projectId, tabId) : null
+    if (!tab || tab.type !== 'claude') return { ok: false, error: 'not a claude tab' }
+    if (!targetConfigDir || !existsSync(targetConfigDir)) return { ok: false, error: 'target team not found' }
+    const cs = claudeSessions.get(sessionKeyFor(projectId, tabId))
+    const project = store.getProject ? store.getProject(projectId) : null
+    const fromDir = cs ? resolveClaudeConfigDir({ cs, store, home }) : (tab.claudeConfigDir || join(home, '.claude'))
+    if (fromDir === targetConfigDir) return { ok: false, error: 'already on that team' }
+    const cwd = (cs && cs.cwd) || tab.claudeSessionCwd || project?.cwd || home
+    const sid = (cs && cs.claudeSessionId) || tab.claudeSessionId
+    const copied = copyTranscriptToTeam(sid, cwd, fromDir, targetConfigDir)
+    const md = teamModelDefaults(targetConfigDir, { home, personalTeams: loadPersonalConfig({ home })?.claude?.teams || [] })
+    store.updateTabMetadata(projectId, tabId, { claudeConfigDir: targetConfigDir })
+    if (cs) {
+      cs.claudeConfigDir = targetConfigDir
+      cs.claudeModelOverride = md.model
+      cs.claudeEffortOverride = md.effort
+      cs.explicitSessionId = true
+      cs._failedOver = false
+      cs._originalConfigDir = null
+    }
+    console.log(`[team-switch] ${projectId}:${tabId} ${fromDir} → ${targetConfigDir} (${md.model}) copied=${copied}`)
+    return { ok: true, team: targetConfigDir, model: md.model, copied }
   }
 
   function primeReplayHistory(projectId, tabId, events) {
@@ -1639,6 +1672,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
   return {
     setAllowTeamFailover,
+    switchTeam,
     claudeSessions,
     codexSessions,
     handleInterrupt,

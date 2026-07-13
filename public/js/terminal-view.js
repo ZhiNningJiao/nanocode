@@ -132,6 +132,13 @@ function setupTabs(projectId) {
       } else {
         setStatus(false)
       }
+      // Expose the active claude tab so the Team & Model pane can offer a
+      // per-session "switch this conversation to another team" button + the
+      // failover opt-in toggle. Null for non-claude tabs.
+      window.__nanocodeActiveClaudeTab = (tabMeta && tabMeta.type === 'claude')
+        ? { projectId: currentProjectId, tabId: tabMeta.id, claudeConfigDir: tabMeta.claudeConfigDir || null, allowTeamFailover: !!tabMeta.allowTeamFailover }
+        : null
+      document.dispatchEvent(new CustomEvent('nanocode:active-claude-tab', { detail: window.__nanocodeActiveClaudeTab }))
       // Notify chat input bar about tab type change
       document.dispatchEvent(new CustomEvent('nanocode:tab-active', {
         detail: { type: tabMeta?.type || 'bash', tabId: tabMeta?.id },
