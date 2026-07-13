@@ -1,6 +1,8 @@
 import { query as defaultQuery } from '@anthropic-ai/claude-agent-sdk'
 import { createPersistentSpawnHook } from './claude-persistent-spawn.js'
 import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
+import { pickFallbackTeam, teamModelDefaults, copyTranscriptToTeam, teamHasHeadroom, isRateLimitError } from './team-failover.js'
+import { loadPersonalConfig } from './personal-config.js'
 
 // One persistent-spawn hook shared across all streaming sessions.
 // createPersistentSpawnHook() registers its process.once('exit') guard at
@@ -386,8 +388,10 @@ export function createClaudeSdkDriver({
     const isFirstTurn = cs.turnCount === 0
     cs.turnCount += 1
 
-    const claudeModel = store.getSetting('claude_model') || ''
-    const claudeEffort = store.getSetting('claude_effort') || ''
+    // team-failover: after a fail-over the model/effort is upgraded to the target
+    // team's default (Team1→fable, other→opus; both high) via cs overrides.
+    const claudeModel = cs.claudeModelOverride || store.getSetting('claude_model') || ''
+    const claudeEffort = cs.claudeEffortOverride || store.getSetting('claude_effort') || ''
     const sessionFallback = store.getSetting('claude_session_fallback') || 'continue'
     const sdkPermissionMode = resolvePermissionMode(store)
     const sdkBetas = resolveCacheTtlBetas(store)
@@ -588,8 +592,10 @@ export function createClaudeSdkDriver({
   // we'd wrongly `resume` a brand-new session id → claude errors "No conversation
   // found" and the fresh tab can never start. Trust the caller's decision.
   function buildStreamingOptions(cs, cwd, useResume) {
-    const claudeModel = store.getSetting('claude_model') || ''
-    const claudeEffort = store.getSetting('claude_effort') || ''
+    // team-failover: after a fail-over the model/effort is upgraded to the target
+    // team's default (Team1→fable, other→opus; both high) via cs overrides.
+    const claudeModel = cs.claudeModelOverride || store.getSetting('claude_model') || ''
+    const claudeEffort = cs.claudeEffortOverride || store.getSetting('claude_effort') || ''
     const sdkPermissionMode = resolvePermissionMode(store)
     const sdkBetas = resolveCacheTtlBetas(store)
     const sdkCacheControl = resolveCacheControl(store)
@@ -717,6 +723,28 @@ export function createClaudeSdkDriver({
     cs.busy = true
     cs.currentProc = null
 
+    // team-failover switch-back: if we previously failed over to another team and
+    // the original team's OAuth windows now have headroom, copy the transcript
+    // back and switch home before this turn (restores the original model too).
+    if (cs._failedOver && cs._originalConfigDir) {
+      try {
+        if (await teamHasHeadroom(cs._originalConfigDir)) {
+          const back = cs._originalConfigDir
+          if (copyTranscriptToTeam(cs.claudeSessionId, cwd, cs.claudeConfigDir, back)) {
+            const md = teamModelDefaults(back, { home, personalTeams: loadPersonalConfig({ home })?.claude?.teams || [] })
+            cs.claudeConfigDir = back
+            cs.claudeModelOverride = md.model
+            cs.claudeEffortOverride = md.effort
+            cs._failedOver = false
+            cs._originalConfigDir = null
+            cs.explicitSessionId = true
+            claudeBroadcast(cs, { type: 'system', subtype: 'team_failback', text: `✅ ${back.split('/').pop()} 额度恢复，已切回（${md.model}）` })
+            console.log(`[team-failover] ${sessionKey}: switched back to ${back} (${md.model})`)
+          }
+        }
+      } catch (e) { console.warn(`[team-failover] switch-back check failed: ${e?.message || e}`) }
+    }
+
     const isFirstTurn = cs.turnCount === 0
     cs.turnCount += 1
 
@@ -726,6 +754,7 @@ export function createClaudeSdkDriver({
     let sawResult = false
     let finalSubtype = 'success'
     let _cliFallbackTriggered = false
+    let _failoverTriggered = false
 
     // Collect broadcast events for this turn (to detect sawResult etc.)
     // We hook into the onEvent path by tracking result events here.
@@ -768,7 +797,32 @@ export function createClaudeSdkDriver({
       finalSubtype = wasInterrupted ? 'error_during_execution' : 'error'
       const text = err?.message || String(err)
 
-      if (!wasInterrupted) {
+      // team-failover: opted-in (secretary) sessions that hit a 429 / org monthly
+      // spend limit switch to the other team, copy the transcript there, upgrade
+      // the model to that team's default, and retry the turn on the other org's
+      // quota. Workers never carry the flag (default off) so they just error out.
+      if (!wasInterrupted && cs.allowTeamFailover && !cs._failedOver && isRateLimitError(text)) {
+        try {
+          const fromDir = resolveClaudeConfigDir({ cs, store, home })
+          const toDir = pickFallbackTeam(fromDir, { home, store })
+          if (toDir && copyTranscriptToTeam(cs.claudeSessionId, cwd, fromDir, toDir)) {
+            const md = teamModelDefaults(toDir, { home, personalTeams: loadPersonalConfig({ home })?.claude?.teams || [] })
+            cs._originalConfigDir = fromDir
+            cs.claudeConfigDir = toDir
+            cs.claudeModelOverride = md.model
+            cs.claudeEffortOverride = md.effort
+            cs._failedOver = true
+            cs.explicitSessionId = true // resume the copied transcript on the new team
+            _failoverTriggered = true
+            claudeBroadcast(cs, { type: 'system', subtype: 'team_failover', text: `⚠️ 撞限额，已切到 ${toDir.split('/').pop()} 用 ${md.model} 续会话` })
+            console.warn(`[team-failover] ${sessionKey}: 429/limit → failover ${fromDir} → ${toDir} (${md.model})`)
+          } else {
+            console.warn(`[team-failover] ${sessionKey}: rate-limited but no fallback team / copy failed`)
+          }
+        } catch (e) { console.warn(`[team-failover] failover failed: ${e?.message || e}`) }
+      }
+
+      if (!wasInterrupted && !_failoverTriggered) {
         const isResumeMiss = (
           text.includes('No conversation found') ||
           text.includes('no conversation') ||
@@ -829,6 +883,14 @@ export function createClaudeSdkDriver({
         // If the session is now dead, it'll be rebuilt on next turn.
       }
     } finally {
+      if (_failoverTriggered) {
+        // Team switched + transcript copied — retry the SAME turn on the new team.
+        cs.busy = false
+        cs.currentProc = null
+        cs.turnCount -= 1
+        setImmediate(() => rerunTurn(cs, userText, sessionKey, cwd))
+        return
+      }
       if (_cliFallbackTriggered) {
         cs.busy = false
         cs.currentProc = null
