@@ -788,6 +788,11 @@ export function scanAllOpencodeUsage(home) {
 
 const CLAUDE_OAUTH_USAGE_URL = process.env.CLAUDE_OAUTH_USAGE_URL || 'https://api.anthropic.com/api/oauth/usage'
 const CLAUDE_OAUTH_BETA = 'oauth-2025-04-20'
+// Public PKCE client (no secret) — the Claude Code CLI's own OAuth client. Lets
+// the usage monitor refresh an expired access token via the stored refresh token
+// so it keeps showing real OAuth windows instead of degrading to jsonl estimate.
+const CLAUDE_OAUTH_TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL || 'https://platform.claude.com/v1/oauth/token'
+const CLAUDE_OAUTH_CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID || '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const WINDOW_5H_MS = 5 * 60 * 60 * 1000
 const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000
 // LiteLLM admin/billing endpoints probed in order by the legacy probeAigwSpend
@@ -838,27 +843,72 @@ export function readClaudeOAuthCredentials(configDir) {
  * Live network is not unit-tested (needs a real token); the response→windows
  * mapping is exercised via the pure `mapClaudeOAuthToWindows` instead.
  */
+/**
+ * Refresh an expired Claude OAuth access token using the stored refresh token
+ * (public PKCE client — no secret needed). On success, persists the rotated
+ * tokens back to <configDir>/.credentials.json (backup first) and returns the
+ * fresh cred; on ANY failure returns null so the caller degrades to jsonl
+ * estimation. Never throws. A dead/rotated refresh token (invalid_grant) → null
+ * → user must re-login that team (`CLAUDE_CONFIG_DIR=<dir> claude` then /login).
+ */
+export async function refreshClaudeOAuthToken(configDir, { fetchImpl } = {}) {
+  try {
+    const credPath = join(configDir, '.credentials.json')
+    if (!existsSync(credPath)) return null
+    const raw = JSON.parse(readFileSync(credPath, 'utf8'))
+    const o = raw?.claudeAiOauth
+    if (!o?.refreshToken) return null
+    const f = fetchImpl || fetch
+    const res = await f(CLAUDE_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: o.refreshToken, client_id: CLAUDE_OAUTH_CLIENT_ID }),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) return null
+    const body = await res.json().catch(() => null)
+    if (!body?.access_token) return null
+    o.accessToken = body.access_token
+    if (body.refresh_token) o.refreshToken = body.refresh_token
+    if (typeof body.expires_in === 'number') o.expiresAt = Date.now() + body.expires_in * 1000
+    try { copyFileSync(credPath, credPath + '.bak-refresh') } catch {}
+    writeFileSync(credPath, JSON.stringify(raw))
+    return {
+      accessToken: o.accessToken,
+      expiresAt: Number(o.expiresAt) || null,
+      subscriptionType: o.subscriptionType || null,
+      rateLimitTier: o.rateLimitTier || null,
+      scopes: Array.isArray(o.scopes) ? o.scopes : [],
+    }
+  } catch { return null }
+}
+
 export async function fetchClaudeOAuthUsage(configDir, { fetchImpl } = {}) {
-  const cred = readClaudeOAuthCredentials(configDir)
+  let cred = readClaudeOAuthCredentials(configDir)
   if (!cred) return { error: 'no Claude OAuth credentials at <configDir>/.credentials.json' }
-  // If the token is past expiry, skip the network call and degrade directly
-  // (we cannot refresh without the OAuth client secret). Still return a
-  // structured error so the caller can fall back to jsonl.
+  // Token past expiry: refresh it (public PKCE client) rather than giving up.
+  // Only if refresh fails (dead refresh token) do we degrade to jsonl estimation.
   if (cred.expiresAt && cred.expiresAt < Date.now()) {
-    return { error: 'Claude OAuth token expired (no client secret to refresh)', expired: true }
+    const refreshed = await refreshClaudeOAuthToken(configDir, { fetchImpl })
+    if (!refreshed) return { error: 'Claude OAuth token expired and refresh failed (re-login needed)', expired: true }
+    cred = refreshed
   }
   if (!cred.scopes.includes('user:profile')) {
     return { error: 'Claude OAuth token lacks user:profile scope (cannot read usage)' }
   }
   const f = fetchImpl || fetch
+  const call = (token) => f(CLAUDE_OAUTH_USAGE_URL, {
+    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': CLAUDE_OAUTH_BETA },
+    signal: AbortSignal.timeout(12000),
+  })
   try {
-    const res = await f(CLAUDE_OAUTH_USAGE_URL, {
-      headers: {
-        Authorization: `Bearer ${cred.accessToken}`,
-        'anthropic-beta': CLAUDE_OAUTH_BETA,
-      },
-      signal: AbortSignal.timeout(12000),
-    })
+    let res = await call(cred.accessToken)
+    // 401 despite a non-expired timestamp → token revoked/rotated on the server.
+    // Try one refresh + retry before degrading.
+    if (res.status === 401) {
+      const refreshed = await refreshClaudeOAuthToken(configDir, { fetchImpl })
+      if (refreshed) { cred = refreshed; res = await call(cred.accessToken) }
+    }
     if (!res.ok) {
       let body = null
       try { body = await res.json() } catch {}
