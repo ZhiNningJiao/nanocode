@@ -341,45 +341,47 @@ async function onEffortChange(effort) {
 
 export async function renderUsagePane(pane) {
   if (!pane) return
-  if (!usageLoaded) {
-    pane.innerHTML = ''
-    pane.appendChild(buildSkeleton())
-    usageLoaded = true
-  }
-  try {
-    await ensureSettings()
-    // Fetch usage sources in parallel. Each endpoint degrades to
-    // { error } on failure (never rejects) so a missing opencode DB does not
-    // hide the claude panel, and vice-versa. The summary endpoint drives the
-    // MES-13788 three-source CodexBar-style card at the top. The dedicated
-    // /api/usage/aigw-budget endpoint drives the headline remaining-$ card
-    // (MES-13788 延续: /user/info 剩余额度 + 自适配档).
-    const [usage, opencode, summary, budget] = await Promise.all([
-      fetch('/api/usage/claude').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
-      fetch('/api/usage/opencode').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
-      fetch('/api/usage/summary').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
-      fetch('/api/usage/aigw-budget').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
-    ])
-    renderUsageContent(pane, usage, opencode, summary, budget)
-  } catch (err) {
-    renderError(pane, err)
-  }
-}
-
-function renderUsageContent(pane, usage, opencode, summary, budget) {
   pane.innerHTML = ''
+  usageLoaded = true
+
   const refreshBtn = document.createElement('button')
   refreshBtn.className = 'rp-refresh-btn'
   refreshBtn.textContent = t('usage.refresh')
-  refreshBtn.addEventListener('click', () => { usageLoaded = false; renderUsagePane(pane) })
+  refreshBtn.addEventListener('click', () => renderUsagePane(pane))
   pane.appendChild(refreshBtn)
 
-  // Headline: AIGW monthly budget (remaining $ + bar + tier badge + reset/days).
-  pane.appendChild(renderAigwBudgetSection(budget))
-  pane.appendChild(renderUsageSummarySection(summary))
-  pane.appendChild(renderClaudeUsageSection(usage))
-  pane.appendChild(renderOpencodeUsageSection(opencode))
-  pane.appendChild(renderAigwProbeSection(pane))
+  // Per-section slots rendered INDEPENDENTLY: a slow source must never block a
+  // fast one. /api/usage/summary hits AIGW (~10s); /api/usage/claude reads jsonl
+  // (~0.4s). The old code awaited Promise.all([all four]) then painted once, so
+  // Claude Token usage sat behind the 10s summary and looked "missing". Now each
+  // fetch fills its own slot as it resolves — fastest paints first.
+  const slot = () => {
+    const d = document.createElement('div')
+    const stub = document.createElement('div')
+    stub.className = 'rp-empty'
+    stub.textContent = t('usage.summary.loading')
+    d.appendChild(stub)
+    pane.appendChild(d)
+    return d
+  }
+  const budgetSlot = slot()
+  const summarySlot = slot()
+  const claudeSlot = slot()
+  const opencodeSlot = slot()
+  const probeSlot = slot()
+
+  try { await ensureSettings() } catch {}
+
+  const fill = (s, el) => { s.innerHTML = ''; s.appendChild(el) }
+  const j = (url) => fetch(url).then((r) => r.json()).catch(() => ({ error: 'fetch failed' }))
+
+  // Probe section needs no fetch — render immediately.
+  fill(probeSlot, renderAigwProbeSection(pane))
+  // Fire each source independently; whichever resolves first paints first.
+  j('/api/usage/aigw-budget').then((d) => fill(budgetSlot, renderAigwBudgetSection(d)))
+  j('/api/usage/claude').then((d) => fill(claudeSlot, renderClaudeUsageSection(d)))
+  j('/api/usage/opencode').then((d) => fill(opencodeSlot, renderOpencodeUsageSection(d)))
+  j('/api/usage/summary').then((d) => fill(summarySlot, renderUsageSummarySection(d)))
 }
 
 // ── AIGW monthly budget card (MES-13788 延续: /user/info 剩余额度 + 自适配档) ──
