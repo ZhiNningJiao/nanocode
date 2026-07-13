@@ -545,6 +545,17 @@ function renderUsageSummarySection(summary) {
   return section
 }
 
+// Friendly model label: claude-opus-4-8 → "Opus 4.8", claude-sonnet-4-6 →
+// "Sonnet 4.6", claude-fable-5 → "Fable 5". Unknown models shown verbatim.
+function prettyModelName(model) {
+  const s = String(model || '')
+  const fam = /opus/i.test(s) ? 'Opus' : /sonnet/i.test(s) ? 'Sonnet'
+    : /haiku/i.test(s) ? 'Haiku' : /fable/i.test(s) ? 'Fable' : null
+  if (!fam) return s
+  const ver = s.match(/(\d+(?:[-.]\d+)?)/)
+  return ver ? `${fam} ${ver[1].replace('-', '.')}` : fam
+}
+
 function renderUsageSourceCard(src) {
   const card = document.createElement('div')
   card.className = 'rp-usage-source'
@@ -585,6 +596,32 @@ function renderUsageSourceCard(src) {
   }
   for (const w of windows) {
     card.appendChild(renderUsageWindowRow(w))
+  }
+  // Per-model breakdown for this team (Fable / Opus / Sonnet / Haiku …). OAuth
+  // exposes no per-model limit, so this is token usage + message rows, from the
+  // team's own jsonl — not a limit bar.
+  if (Array.isArray(src.byModel) && src.byModel.length) {
+    const subTitle = document.createElement('div')
+    subTitle.className = 'rp-subtitle'
+    subTitle.textContent = t('usage.claude.byModel')
+    card.appendChild(subTitle)
+    const list = document.createElement('div')
+    list.className = 'rp-list'
+    for (const m of src.byModel) {
+      const r = document.createElement('div')
+      r.className = 'rp-list-row'
+      const nm = document.createElement('span')
+      nm.className = 'rp-list-name'
+      nm.textContent = prettyModelName(m.model)
+      nm.title = m.model
+      const val = document.createElement('span')
+      val.className = 'rp-list-val'
+      val.textContent = `${fmtTokens(m.tokens)} · ${fmtNum(m.rows)} msgs`
+      r.appendChild(nm)
+      r.appendChild(val)
+      list.appendChild(r)
+    }
+    card.appendChild(list)
   }
   // provenance note (compact) for the unavailable/estimated case
   if (src.error) {
