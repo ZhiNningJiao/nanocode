@@ -295,10 +295,20 @@ export function listTeams(home, store) {
   const homeDir = home || homedir()
   const teams = []
   const seen = new Set()
+  // Friendly-name overrides from personal config, keyed by configDir. Lets the
+  // auto-discovered ~/.claude / ~/.claude-team* show real org names (e.g.
+  // "Meshy-Algorithm") instead of the generic "Team 1 / Team 2".
+  const personal = loadPersonalConfig({ home: homeDir })
+  const personalTeams = Array.isArray(personal?.claude?.teams) ? personal.claude.teams : []
+  const nameByPath = {}
+  for (const t of personalTeams) {
+    const dir = t?.configDir || t?.path
+    if (dir && t?.name) nameByPath[dir] = t.name
+  }
   const pushTeam = (id, name, path) => {
     if (!path || seen.has(path)) return
     seen.add(path)
-    teams.push({ id, name, path, exists: existsSync(path) })
+    teams.push({ id, name: nameByPath[path] || name, path, exists: existsSync(path) })
   }
   // 1. auto-discover ~/.claude (team1) + ~/.claude-team*
   const defaultDir = join(homeDir, '.claude')
@@ -313,18 +323,14 @@ export function listTeams(home, store) {
     const id = m ? m[1] : d.name
     pushTeam(id, `Team ${id}`, fullPath)
   }
-  // 2. merge teams declared in the personal config (adds/labels extra teams)
-  const personal = loadPersonalConfig({ home: homeDir })
-  if (Array.isArray(personal?.claude?.teams)) {
-    for (const t of personal.claude.teams) {
-      const dir = t?.configDir || t?.path
-      if (!dir) continue
-      // derive a friendly id from the dir basename: .claude-team3 -> team3
-      const base = String(dir).split('/').filter(Boolean).pop() || dir
-      const m = String(base).match(/claude[-_](.+)$/)
-      const id = m ? m[1] : base
-      pushTeam(id, t.name || `Team ${id}`, dir)
-    }
+  // 2. merge extra teams declared only in the personal config
+  for (const t of personalTeams) {
+    const dir = t?.configDir || t?.path
+    if (!dir) continue
+    const base = String(dir).split('/').filter(Boolean).pop() || dir
+    const m = String(base).match(/claude[-_](.+)$/)
+    const id = m ? m[1] : base
+    pushTeam(id, t.name || `Team ${id}`, dir)
   }
   const active = effectiveClaudeConfigDir(store, homeDir)
   return { teams, activePath: active }
