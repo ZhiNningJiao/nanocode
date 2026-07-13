@@ -78,7 +78,84 @@ function renderError(pane, err) {
 function renderTeamModelContent(pane, teamsRes, modelsRes, snapshotRes, codexRes) {
   pane.innerHTML = ''
   pane.appendChild(renderTeamSection(pane, teamsRes))
+  pane.appendChild(renderSessionTeamSection(pane, teamsRes))
   pane.appendChild(renderModelSection(modelsRes, snapshotRes, codexRes))
+}
+
+// Per-session team controls for the ACTIVE claude tab: move THIS conversation to
+// another team now (copy transcript + switch org quota + upgrade model), and a
+// failover opt-in toggle (auto-switch on 429 / org spend limit). Reads the active
+// claude tab exposed by terminal-view (window.__nanocodeActiveClaudeTab).
+function renderSessionTeamSection(pane, teamsRes) {
+  const section = document.createElement('div')
+  section.className = 'rp-section'
+  const title = document.createElement('div')
+  title.className = 'rp-section-title'
+  title.textContent = t('plugins.sessionTeam.title')
+  section.appendChild(title)
+
+  const active = (typeof window !== 'undefined' && window.__nanocodeActiveClaudeTab) || null
+  if (!active || !active.tabId) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = t('plugins.sessionTeam.noTab')
+    section.appendChild(empty)
+    return section
+  }
+  const teams = (teamsRes?.teams || []).filter((x) => x.exists)
+  const curDir = active.claudeConfigDir || (teams.find((x) => x.id === 'team1')?.path) || ''
+  const nameOf = (dir) => teams.find((x) => x.path === dir)?.name || (dir ? dir.split('/').pop() : '—')
+
+  const cur = document.createElement('div')
+  cur.className = 'rp-hint'
+  cur.textContent = t('plugins.sessionTeam.current') + '：' + nameOf(curDir)
+  section.appendChild(cur)
+
+  // Switch buttons for every OTHER team.
+  for (const team of teams) {
+    if (team.path === curDir) continue
+    const btn = document.createElement('button')
+    btn.className = 'rp-btn'
+    btn.textContent = t('plugins.sessionTeam.switchTo') + ' ' + team.name
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      try {
+        const r = await fetch(`/api/projects/${active.projectId}/tabs/${active.tabId}/switch-team`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetConfigDir: team.path }),
+        })
+        const j = await r.json().catch(() => ({}))
+        flashStatus(pane, j.ok ? `${t('plugins.sessionTeam.switched')} ${team.name}（${j.model || ''}）` : (j.error || 'failed'), !j.ok)
+        if (j.ok) { active.claudeConfigDir = team.path; usageLoaded = false }
+        renderTeamModelPane(pane)
+      } catch (err) { flashStatus(pane, String(err.message || err), true); btn.disabled = false }
+    })
+    section.appendChild(btn)
+  }
+
+  // Failover opt-in toggle (auto-switch on 429 / org spend limit).
+  const row = document.createElement('label')
+  row.className = 'rp-option'
+  const cb = document.createElement('input')
+  cb.type = 'checkbox'
+  cb.checked = !!active.allowTeamFailover
+  cb.addEventListener('change', async () => {
+    try {
+      await fetch(`/api/projects/${active.projectId}/tabs/${active.tabId}/failover`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowTeamFailover: cb.checked }),
+      })
+      active.allowTeamFailover = cb.checked
+      flashStatus(pane, cb.checked ? t('plugins.sessionTeam.failoverOn') : t('plugins.sessionTeam.failoverOff'))
+    } catch (err) { flashStatus(pane, String(err.message || err), true) }
+  })
+  const lab = document.createElement('span')
+  lab.className = 'rp-option-label'
+  lab.textContent = t('plugins.sessionTeam.failover')
+  row.appendChild(cb)
+  row.appendChild(lab)
+  section.appendChild(row)
+  return section
 }
 
 function renderTeamSection(pane, teamsRes) {

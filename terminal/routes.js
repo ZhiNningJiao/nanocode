@@ -354,6 +354,24 @@ export function createTerminalRoutes(store, opts = {}) {
   })
 
   /**
+   * PATCH /api/projects/:id/tabs/:tabId/switch-team
+   * Manually move the current conversation to another team NOW (copy transcript
+   * + switch CLAUDE_CONFIG_DIR + upgrade model to the target team's default).
+   * Body: { targetConfigDir: string }. Next turn resumes on the target org.
+   */
+  router.patch('/api/projects/:id/tabs/:tabId/switch-team', (req, res) => {
+    const project = store.getProject(req.params.id)
+    if (!project) return res.status(404).json({ error: 'project not found' })
+    const targetConfigDir = typeof req.body?.targetConfigDir === 'string' ? req.body.targetConfigDir.trim() : ''
+    if (!targetConfigDir) return res.status(400).json({ error: 'targetConfigDir required' })
+    if (!sessionController.switchTeam) return res.status(500).json({ error: 'switchTeam unavailable' })
+    const result = sessionController.switchTeam(req.params.id, req.params.tabId, targetConfigDir)
+    if (!result.ok) return res.status(400).json(result)
+    broadcastTabs(req.params.id)
+    res.json(result)
+  })
+
+  /**
    * /ws/tabs handler — clients send `{type:'subscribe', projectId}` and
    * receive `{type:'tabs:update', projectId, tabs:[]}` on every mutation
    * (and once immediately as a snapshot).
