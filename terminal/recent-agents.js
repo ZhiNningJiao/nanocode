@@ -42,6 +42,7 @@ export function cwdFromDirName(dirName) {
 }
 
 export function extractSummary(jsonlPath) {
+  let fallback = null   // a bare warmup "OK" — used only if nothing better follows
   try {
     const MAX_BYTES = 16384
     const fd = openSync(jsonlPath, 'r')
@@ -57,19 +58,24 @@ export function extractSummary(jsonlPath) {
       try { row = JSON.parse(line) } catch { continue }
       if (row.type === 'user' && row.message?.content) {
         const parts = row.message.content
+        let text = null
         if (Array.isArray(parts)) {
           for (const p of parts) {
-            if (p.type === 'text' && typeof p.text === 'string' && p.text.trim()) {
-              return p.text.trim().slice(0, 80)
-            }
+            if (p.type === 'text' && typeof p.text === 'string' && p.text.trim()) { text = p.text.trim(); break }
           }
         } else if (typeof parts === 'string' && parts.trim()) {
-          return parts.trim().slice(0, 80)
+          text = parts.trim()
+        }
+        if (text) {
+          // Skip a bare warmup/probe "OK" so the picker title shows the first
+          // MEANINGFUL user prompt. Fall back to "OK" only if that's all there is.
+          if (/^ok$/i.test(text)) { if (fallback === null) fallback = text; continue }
+          return text.slice(0, 80)
         }
       }
     }
   } catch {}
-  return null
+  return fallback ? fallback.slice(0, 80) : null
 }
 
 export function scanRecentAgents(home, now = Date.now()) {
