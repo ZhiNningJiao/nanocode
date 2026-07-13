@@ -1239,6 +1239,25 @@ export async function buildClaudeSourceSummary({ configDir, source, label, home,
     base.subscriptionType = cred.subscriptionType
     base.rateLimitTier = cred.rateLimitTier
   }
+  // Per-model token breakdown for THIS team (Fable / Opus / Sonnet / Haiku …),
+  // from the team's own jsonl. OAuth gives no per-model limit, so this is token
+  // counts + message rows — surfaced under each team card in the UI.
+  try {
+    const scan = scanClaudeUsage(dir, {})
+    base.byModel = (scan.byModel || [])
+      .filter((m) => m.model && m.model !== '<synthetic>')
+      .map((m) => ({
+        model: m.model,
+        tokens: (m.input || 0) + (m.output || 0) + (m.cacheCreation || 0) + (m.cacheRead || 0),
+        input: m.input || 0,
+        output: m.output || 0,
+        cacheRead: m.cacheRead || 0,
+        rows: m.rows || 0,
+      }))
+      .slice(0, 8)
+    base.rows = scan.totals?.rows || 0
+    base.filesScanned = scan.files || 0
+  } catch { base.byModel = [] }
   // collect the 7d timeline once (used for both 5h and weekly burn)
   const timeline = collectClaudeTimeline(dir, { sinceMs: now - WINDOW_7D_MS })
   const oauth = await fetchClaudeOAuthUsage(dir)
