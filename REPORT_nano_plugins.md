@@ -386,5 +386,6 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 8 | `22c0db0` | 15:06:57 | **S2 原型** | feat(rewind): S2 checkpoint/rewind plugin — port Claude Code rewind to nanocode（9 文件 / +~600 行，§10） |
 | 9 | `11983da` | 15:07:36 | S2 文档 | docs: update FLAG with S2 rewind delivery |
 | 10 | (本次) | 15:1x | S2 文档 | docs: §11 push 历史 + 第 4 次独立复验（555/0 真跑） |
+| 11 | (本会话) | 15:5x | 续验 | docs: 第 7 次独立复验（GLM 接手从零复现）—— npm test 555/0 + 9478 烟测真发现 codex/claude 会话 + fork sync f893f9b |
 
 **里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
