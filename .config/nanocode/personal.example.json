@@ -7,7 +7,9 @@
     "aigw.budgetUsd": "Local monthly budget in USD (key-side max_budget is null for virtual keys). Defaults to 1000.",
     "remote.machines": "Read-only SSH dev-machine seeds merged ahead of the address book. Each: {alias, type:'ssh', host, user, port?, key, note?}. The key is a PATH (never content); sshPassword (if used) is server-side only. Optional — null/absent = no personal machines.",
     "claude.teams": "Extra Claude team config dirs beyond the auto-discovered ~/.claude + ~/.claude-team*. null = auto-discover only.",
-    "ntfy.url": "ntfy notification topic URL. Optional — null disables notifications."
+    "ntfy.url": "ntfy notification topic URL. Optional — null disables notifications.",
+    "akari.serverUrl": "akari dispatch server URL. Optional — defaults to http://10.18.8.55:9481 (env AKARI_SERVER_URL). Not a secret.",
+    "akari.lensUrl": "akari lens dashboard URL for the one-click jump button. Optional — defaults to http://10.18.8.55:9482 (env AKARI_LENS_URL)."
   },
   "_permissions": {
     "_comment": "Permission gate (MES-13824): a plugin receives a field ONLY if its manifest declares the matching 'personal.*' permission. Secrets (linear.apiKey / aigw.key) are never sent to the frontend in plaintext — only masked (lin_…xxxx) + hasKey. Real values are server-side only (resolvePluginSecrets).",
@@ -15,7 +17,8 @@
     "personal.aigw": "unlocks aigw (base/budget + masked key) — declared by the usage plugin",
     "personal.remote": "unlocks remote.machines (host/user/port/key-path, no secrets) — declared by the remote plugin",
     "personal.claude": "unlocks claude.teams",
-    "personal.ntfy": "unlocks ntfy.url"
+    "personal.ntfy": "unlocks ntfy.url",
+    "personal.akari": "unlocks akari.serverUrl + akari.lensUrl (not secrets — projected in full for display + the lens jump)"
   },
   "linear": {
     "apiKey": "lin_REPLACE_ME"
@@ -55,5 +58,9 @@
   },
   "ntfy": {
     "url": null
+  },
+  "akari": {
+    "serverUrl": "http://10.18.8.55:9481",
+    "lensUrl": "http://10.18.8.55:9482"
   }
 }

@@ -16,6 +16,8 @@
  *   remote.machines -> personal.remote.machines[]  -> null (no dev machines declared)
  *   claude.teams   -> personal.claude.teams[]       -> null (auto-discover ~/.claude + ~/.claude-team*)
  *   ntfy.url       -> personal.ntfy.url            -> null (backend still reads store setting ntfy_url)
+ *   akari.serverUrl-> personal.akari.serverUrl     -> $AKARI_SERVER_URL -> http://10.18.8.55:9481
+ *   akari.lensUrl  -> personal.akari.lensUrl       -> $AKARI_LENS_URL   -> http://10.18.8.55:9482
  *
  * The loader NEVER throws — a missing/parse-broken personal file degrades to
  * the scattered fallbacks. Secrets are only the same secrets the caller could
@@ -42,6 +44,13 @@ export const PERSONAL_CONFIG_PATH = join(PERSONAL_CONFIG_DIR, 'personal.json')
 
 export const DEFAULT_AIGW_BASE = 'https://aigw.meshy.team'
 export const DEFAULT_AIGW_BUDGET_USD = 1000
+
+// MES-14049 — akari 检察插件 defaults. The akari server URL is NOT a secret (it's
+// an internal dispatch server), so it is projected to the frontend in full for
+// display + the lens jump button. Env overrides let operators repoint without a
+// personal.json edit.
+export const DEFAULT_AKARI_SERVER_URL = 'http://10.18.8.55:9481'
+export const DEFAULT_AKARI_LENS_URL = 'http://10.18.8.55:9482'
 
 // Cache keyed by resolved path so repeated calls in one request don't re-read
 // the tiny file. Reset via `resetPersonalConfigCache()` in tests.
@@ -92,6 +101,7 @@ export function personalConfigPath({ home, configPath } = {}) {
  *     remote: { machines: [...] | null },             // null = no dev machines
  *     claude: { teams: [{name,configDir}] | null },   // null => auto-discover
  *     ntfy:   { url: string | null },
+ *     akari:  { serverUrl, lensUrl },                  // dispatch + lens URLs (not secrets)
  *     _source:{ personalFileExists, path, home }
  *   }
  *
@@ -177,12 +187,26 @@ export function loadPersonalConfig({ home, configPath } = {}) {
       ? file.ntfy.url.trim()
       : null
 
+  // akari (MES-14049) --------------------------------------------------
+  // The dispatch server URL + lens dashboard URL. Not secrets — projected in
+  // full to the frontend (display + lens jump). Env overrides take precedence
+  // over the personal file so an operator can repoint without editing it.
+  const akariServerUrl =
+    (typeof file?.akari?.serverUrl === 'string' && file.akari.serverUrl.trim()) ||
+    process.env.AKARI_SERVER_URL ||
+    DEFAULT_AKARI_SERVER_URL
+  const akariLensUrl =
+    (typeof file?.akari?.lensUrl === 'string' && file.akari.lensUrl.trim()) ||
+    process.env.AKARI_LENS_URL ||
+    DEFAULT_AKARI_LENS_URL
+
   const cfg = Object.freeze({
     aigw: Object.freeze({ base: aigwBase, key: aigwKey, budgetUsd: aigwBudgetUsd }),
     linear: Object.freeze({ apiKey: linearApiKey }),
     remote: Object.freeze({ machines: remoteMachines }),
     claude: Object.freeze({ teams: claudeTeams }),
     ntfy: Object.freeze({ url: ntfyUrl }),
+    akari: Object.freeze({ serverUrl: akariServerUrl, lensUrl: akariLensUrl }),
     _source: Object.freeze({
       personalFileExists: !!file,
       path,
@@ -214,6 +238,7 @@ export const PERSONAL_CONFIG_PERMISSIONS = {
   'personal.remote': ['remote'],
   'personal.claude': ['claude'],
   'personal.ntfy': ['ntfy'],
+  'personal.akari': ['akari'],
 }
 
 /**
@@ -275,6 +300,11 @@ export function projectForPlugin(config, manifest) {
   }
   if (perms.has('personal.ntfy')) {
     out.ntfy = { url: config.ntfy.url }
+  }
+  // MES-14049: akari server/lens URLs are NOT secrets — projected in full so
+  // the panel can show the server address and render a one-click lens jump.
+  if (perms.has('personal.akari')) {
+    out.akari = { serverUrl: config.akari.serverUrl, lensUrl: config.akari.lensUrl }
   }
   return Object.freeze(out)
 }
