@@ -219,9 +219,27 @@ function renderWakerUsage(h) {
     grid.appendChild(stat('dry ticks', String(h.dryCount)))
   }
 
+  // Inject count (total successful injections)
+  if (h.injectCount != null) {
+    grid.appendChild(stat('injected', String(h.injectCount)))
+  }
+
+  // Gate stats (min_gap, hourly_cap, busy skip breakdowns)
+  const g = h.gateStats
+  if (g && typeof g === 'object') {
+    if (g.min_gap) grid.appendChild(stat('gate:gap', String(g.min_gap)))
+    if (g.hourly_cap) grid.appendChild(stat('gate:cap', String(g.hourly_cap)))
+    if (g.busy) grid.appendChild(stat('gate:busy', String(g.busy)))
+  }
+
   // Coverage (agent tags the waker monitors)
   if (Array.isArray(h.coverage) && h.coverage.length) {
     grid.appendChild(stat('coverage', String(h.coverage.length)))
+  }
+
+  // Current interval
+  if (h.intervalLabel) {
+    grid.appendChild(stat('interval', h.intervalLabel))
   }
 
   wrap.appendChild(grid)
@@ -355,6 +373,7 @@ function renderControls(health) {
     ? t('plugin.historian.stop')
     : t('plugin.historian.start')
   toggleBtn.addEventListener('click', async () => {
+    if (alive && !confirm('Stop the waker? Briefing injection will cease.')) return
     toggleBtn.disabled = true
     try {
       const action = alive ? 'stop' : 'start'
@@ -403,22 +422,24 @@ function renderControls(health) {
   intervalRow.className = 'historian-controls'
   intervalRow.style.marginTop = '6px'
 
+  const curInterval = health?.intervalLabel || 'auto'
+
   const dayBtn = document.createElement('button')
-  dayBtn.className = 'rp-btn'
+  dayBtn.className = `rp-btn${curInterval === 'day' ? ' rp-btn-active' : ''}`
   dayBtn.textContent = t('plugin.historian.dayMode')
   dayBtn.title = 'WAKE_WORK_INTERVAL=270 WAKE_OFF_INTERVAL=270'
   dayBtn.addEventListener('click', () => setIntervalBtn(270, dayBtn, wrap))
   intervalRow.appendChild(dayBtn)
 
   const nightBtn = document.createElement('button')
-  nightBtn.className = 'rp-btn'
+  nightBtn.className = `rp-btn${curInterval === 'night' ? ' rp-btn-active' : ''}`
   nightBtn.textContent = t('plugin.historian.nightMode')
   nightBtn.title = 'WAKE_WORK_INTERVAL=1200 WAKE_OFF_INTERVAL=1200'
   nightBtn.addEventListener('click', () => setIntervalBtn(1200, nightBtn, wrap))
   intervalRow.appendChild(nightBtn)
 
   const autoBtn = document.createElement('button')
-  autoBtn.className = 'rp-btn'
+  autoBtn.className = `rp-btn${curInterval === 'auto' ? ' rp-btn-active' : ''}`
   autoBtn.textContent = t('plugin.historian.autoMode')
   autoBtn.title = 'Dynamic interval (default)'
   autoBtn.addEventListener('click', () => setIntervalBtn(0, autoBtn, wrap))

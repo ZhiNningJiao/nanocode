@@ -126,6 +126,41 @@ export async function getWakerHealth() {
     result.dryCount = parseInt(dcRaw.trim(), 10) || 0
   } catch { /* ok */ }
 
+  // Read inject count (total successful injections)
+  try {
+    const icRaw = await readFile(path.join(WAKER_STATE_DIR, 'inject_count'), 'utf8')
+    result.injectCount = parseInt(icRaw.trim(), 10) || 0
+  } catch { /* ok */ }
+
+  // Read gate stats (min_gap, hourly_cap, busy skip counts)
+  try {
+    const gateRaw = await readFile(path.join(WAKER_STATE_DIR, 'gate_stats'), 'utf8')
+    try {
+      result.gateStats = JSON.parse(gateRaw.trim())
+    } catch {
+      result.gateStats = gateRaw.trim()
+    }
+  } catch { /* ok */ }
+
+  // Read current interval override from .waker_env
+  try {
+    const envContent = await readFile(path.join(HOME, 'code', '.waker_env'), 'utf8')
+    const workMatch = envContent.match(/WAKE_WORK_INTERVAL=(\d+)/)
+    const offMatch = envContent.match(/WAKE_OFF_INTERVAL=(\d+)/)
+    if (workMatch) {
+      const interval = parseInt(workMatch[1], 10)
+      result.currentInterval = interval
+      result.intervalLabel = interval === 270 ? 'day' : interval === 1200 ? 'night' : `${interval}s`
+    } else {
+      result.currentInterval = 0
+      result.intervalLabel = 'auto'
+    }
+    if (offMatch) result.offInterval = parseInt(offMatch[1], 10)
+  } catch {
+    result.currentInterval = 0
+    result.intervalLabel = 'auto'
+  }
+
   return result
 }
 
