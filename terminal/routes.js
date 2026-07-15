@@ -150,6 +150,98 @@ export function createTerminalRoutes(store, opts = {}) {
     res.status(204).send()
   })
 
+  // ── Session inject (localhost-only) ───────────────────────────────────────
+  // POST /api/sessions/:id/inject — inject a user message into an ACTIVE
+  // session's input channel, the server-side equivalent of the WS
+  // 'claude-input' (claude tabs) / 'input' (bash tabs) message. Lets an
+  // external crontab watchdog wake a stuck/idle secretary session: nanocode
+  // --watch restarts kill every internal listener, so an HTTP inject is the
+  // only reliable external wake path.
+  //
+  // SECURITY: localhost only — rejects any non-127.0.0.1 caller with 403,
+  // regardless of token. The route still sits under the global /api token
+  // check, so when auth is enabled the caller must ALSO supply the token.
+  //
+  // :id  — the URL-encoded sessionKey returned by GET /api/sessions
+  //        (shaped `${projectId}:claude:${tabId}` / `...:bash:${tabId}` / ...).
+  // body — { text: string, sendNow?: boolean }
+  //        sendNow=true forces an atomic interrupt+flush if the session is
+  //        mid-turn (mirrors the "立刻发送" button; never kills the process or
+  //        sub-agents). Default false queues behind a running turn.
+  function isLocalhostReq(req) {
+    const ip = req.socket?.remoteAddress || ''
+    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
+  }
+
+  // GET /api/sessions — list active (live-attached) sessions for the inject
+  // workflow. localhost-only so the session registry isn't exposed remotely.
+  router.get('/api/sessions', (req, res) => {
+    if (!isLocalhostReq(req)) {
+      return res.status(403).json({ error: 'forbidden: localhost only' })
+    }
+    const out = []
+    for (const [key, cs] of sessionController.claudeSessions) {
+      const parts = key.split(':')
+      out.push({
+        sessionKey: key,
+        type: 'claude',
+        projectId: parts[0] || null,
+        tabId: parts[2] || null,
+        claudeSessionId: cs.claudeSessionId || null,
+        busy: !!cs.busy,
+        cwd: cs.cwd || null,
+        tabLabel: cs.tabLabel || '',
+      })
+    }
+    for (const [key, cs] of sessionController.codexSessions) {
+      const parts = key.split(':')
+      out.push({
+        sessionKey: key,
+        type: 'codex',
+        projectId: parts[0] || null,
+        tabId: parts[2] || null,
+        busy: !!cs.busy,
+        cwd: cs.cwd || null,
+        tabLabel: cs.tabLabel || '',
+      })
+    }
+    for (const key of sessions.listAllSessionKeys()) {
+      const parts = key.split(':')
+      out.push({ sessionKey: key, type: 'bash', projectId: parts[0] || null, tabId: parts[2] || null })
+    }
+    res.json({ sessions: out })
+  })
+
+  // POST /api/sessions/:id/inject
+  router.post('/api/sessions/:id/inject', (req, res) => {
+    if (!isLocalhostReq(req)) {
+      return res.status(403).json({ error: 'forbidden: localhost only' })
+    }
+    // Express already URL-decodes path params once, so this works whether the
+    // caller sends raw colons (uuid:claude:uuid) or percent-encoded (%3A).
+    const sessionKey = req.params.id
+    const { text, sendNow } = req.body || {}
+    // Claude session (primary use case: secretary wake). Reuses the exact
+    // WS 'claude-input' dispatch path via injectClaudeMessage.
+    const result = sessionController.injectClaudeMessage(sessionKey, text, {
+      sendNow: sendNow === true,
+    })
+    if (result.ok) return res.json(result)
+    // Fall through to bash PTY session: write raw bytes (equivalent to WS
+    // 'input') if such a session exists.
+    if (result.error === 'session not found') {
+      const sess = sessions.get(sessionKey)
+      if (sess && typeof sess.write === 'function') {
+        sess.write(typeof text === 'string' ? text : '')
+        return res.json({ ok: true, sessionKey, type: 'bash', dispatched: true })
+      }
+    }
+    if (result.error === 'empty text') {
+      return res.status(400).json({ ok: false, error: 'empty text' })
+    }
+    res.status(404).json({ ok: false, error: result.error || 'session not found' })
+  })
+
   // --- Tab registry (per-project, persisted in store) ---
   //
   // Tabs are server-side metadata so that opening the workspace on a second
