@@ -584,3 +584,78 @@ commit needed (akari's 3 new commits don't touch the plugin's wire format).
 **Task COMPLETE**: plugin implemented, tested (562/0), smoke-verified (good +
 degraded, 0 console errors, fields identical to direct curl 9481), vision-model
 verdict PASS both panels, pushed to fork, Linear MES-14049 self-reported.
+
+## 2026-07-15 11:38 UTC — fresh independent re-verification (opencode/GLM, not trusting prior FLAG)
+
+"用最新的 akari" live check: fetched `~/code/akari` `origin/main` afresh → STILL
+`031f757fe` (no advance past the 11:31 baseline). `git diff
+efb142f1e..origin/main(031f757fe)` on the 6 API-wire files (health.rs,
+worker_state.rs, worker_status.rs, lane.rs + health_handler/small_handlers) =
+EMPTY — plugin still aligned with LATEST akari (用最新的 akari satisfied, no
+code change). Local HEAD `0c58d31` == fork remote HEAD (0 unpushed, working
+tree clean). All plugin files present.
+
+Reproduced the actual user scenario end-to-end (not trusting the prior FLAG):
+
+- `npm test` → **562 pass / 0 fail** (`run_nano_akari.log`; grep of
+  `not ok|# fail [1-9]|RESULT: FAIL|Traceback|NaN|NOT FOUND` returns only
+  subtest *names* containing "Error" — all marked `ok`, `# fail 0`, zero
+  real failures).
+- Live akari 9481 confirmed real (常驻 server, untouched):
+  - `/api/health` → version 0.7.0, build efb142f1e, dispatch_caps {lane_cap 4,
+    max_vision_workers 6, default_worker_model litellm/SGLang-GLM-5.2},
+    agent_concurrency {in_flight 0, permits_available 4}, provider_fallback true
+  - `/api/concurrency` → {running 0, peak 2, open_lanes 0}
+  - `/api/lanes` → 4 Free lanes, markers wf-parallel-2w-smoke:robot:*,
+    head d6804691, at_main true
+
+Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
+- `/api/akari/config` → 200 `{serverUrl 9481, lensUrl 9482}` (config-driven defaults)
+- `/api/services` → `akari: {status: "up"}` (driven by real /api/health probe —
+  task contract "up/down 用 /api/health" satisfied)
+- `/api/services-config` → managed `akari` row `{host 10.18.8.55, port 9481,
+  managed true, kind http}` (read-only, derived from live URL)
+- `/api/akari/state` → 200 `reachable:true`; every field **IDENTICAL** to direct
+  `curl 9481` side-by-side (version 0.7.0 · build efb142f1e · dispatch_caps
+  {lane_cap 4, max_vision_workers 6, model litellm/SGLang-GLM-5.2} ·
+  agent_concurrency {in_flight 0, permits_available 4} · fallback true ·
+  concurrency {running 0, peak 2, open_lanes 0} · workers {agents_running 0} ·
+  4 Free lanes head d6804691 @main true) — faithful passthrough confirmed
+- `akari-panel.js` → HTTP 200 (served)
+- Playwright good smoke (460px harness): all sections render (Health
+  version 0.7.0 / build efb142f1e / agent cap 4 / vision cap 6 / lane cap 4 /
+  in-flight 0 / permits 4 / fallback on / model litellm/SGLang-GLM-5.2;
+  Concurrency running 0 / peak 2 / open lanes 0; Workers (0); Lanes/Fleet (4)
+  markers wf-parallel-2w-smoke:robot:* head d6804691 @main ✓; Lens↗ button
+  present), **0 console errors**; screenshot `akari_panel_good.png` (208KB, fresh 11:37)
+
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`):
+- `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
+- `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
+  "fetch failed" (structured bundle, no thrown error)
+- `/api/services` → `akari: {status: "down"}` after probe cycle
+- Playwright panel: calm "akari server unreachable — the panel will retry
+  quietly and recover automatically" + per-section "fetch failed",
+  **0 console errors (no spam)** — graceful degradation as required
+- screenshot `akari_panel_degraded.png` (158KB, fresh 11:37)
+
+Both PNGs valid (`89504e47` magic, fresh 11:37).
+
+**Visual verdict (gemini-3.1-pro vision model via AIGW, on the fresh 11:37 PNGs):**
+- GOOD: PASS — "All UI elements, correct port (9481), health stats, and 4
+  lanes are correctly rendered."
+- DEGRADED: PASS — "Graceful failure UI verified with port 9999, calm retry
+  message, and no error spam."
+- OVERALL: PASS
+
+Red lines: 9475/9476 (常驻 nanocode pids 304108/304142) untouched throughout;
+9481/9482/8770 untouched throughout. 9479/9483 torn down after the run. No
+`/tmp` writes (used `/tmp/opencode` only for the AIGW vision payload, outside
+the repo).
+
+Push: local HEAD `0c58d31` == fork remote HEAD (0 unpushed). Linear MES-14049
+self-report already posted (18 comments incl 领单/里程碑/收工).
+
+**Task COMPLETE**: plugin implemented, tested (562/0), smoke-verified (good +
+degraded, 0 console errors, fields identical to direct curl 9481), vision-model
+verdict PASS both panels, pushed to fork, Linear MES-14049 self-reported.
