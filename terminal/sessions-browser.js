@@ -209,7 +209,12 @@ function extractClaudeUserText(message) {
 
 function claudeSlugToCwd(slug) {
   if (!slug) return ''
-  return slug.replace(/^-/, '').replace(/-/g, '/')
+  // Claude Code encodes cwd as a slug where every '/' (including the leading
+  // one of an absolute path) becomes '-': "/jfs/home/x" → "-jfs-home-x".
+  // Reversing is a single replace(/-/g,'/'). The old code stripped the leading
+  // '-' first, which dropped the root slash and yielded "jfs/home/x" — wrong
+  // cwd display + broke fork project matching (cwd never matched a project).
+  return slug.replace(/-/g, '/')
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────

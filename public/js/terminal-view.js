@@ -236,10 +236,11 @@ document.addEventListener('nanocode:fork-session', async (e) => {
 
   // Find or create the project for this session's cwd
   let projectId = currentProjectId
+  let project = null
   try {
     if (cwd) {
       const projects = await fetch('/api/projects').then(r => r.json())
-      let project = projects.find(p => p.cwd === cwd)
+      project = projects.find(p => p.cwd === cwd)
       if (!project && currentProjectId) {
         // cwd not in store but we're in a workspace — try the current project
         const cur = projects.find(p => p.id === currentProjectId)
@@ -262,17 +263,17 @@ document.addEventListener('nanocode:fork-session', async (e) => {
   }
   if (!projectId || !tabManager) return
 
-  // Navigate to the project workspace if needed
-  if (currentProjectId !== projectId) {
-    const proj = await fetch(`/api/projects/${projectId}`).then(r => r.json().catch(() => null))
-    if (proj) {
-      const host = proj.ssh_host
-        ? proj.ssh_host.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-        : 'local'
-      const base = proj.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed'
-      location.hash = `#/${host}/${base}`
-      await new Promise(resolve => setTimeout(resolve, 300))
-    }
+  // Navigate to the project workspace if needed. Reuse the `project` object
+  // resolved above (it already carries ssh_host + name) instead of re-fetching
+  // by id — there is no GET /api/projects/:id route, so that call 404'd and
+  // silently skipped navigation (MES-14031 fix).
+  if (currentProjectId !== projectId && project) {
+    const host = project.ssh_host
+      ? project.ssh_host.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+      : 'local'
+    const base = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed'
+    location.hash = `#/${host}/${base}`
+    await new Promise(resolve => setTimeout(resolve, 300))
   }
 
   // Create a new claude tab pre-loaded with this sessionId (a fork/resume)

@@ -64,4 +64,19 @@ describe('sessions-browser (MES-14031 抄 codex resume/fork)', () => {
     const p = previewSession({ source: 'unknown', id: 'x' })
     assert.ok(p.error)
   })
+
+  it('claude session cwd preserves the leading slash (MES-14031 regression)', () => {
+    // Claude Code encodes an absolute cwd "/jfs/home/x" as slug "-jfs-home-x".
+    // The cwd must round-trip back to "/jfs/home/x" (leading slash intact), not
+    // "jfs/home/x" — otherwise the Sessions list shows a wrong path and the
+    // fork flow can never match an existing project by cwd.
+    const data = listSessions({ source: 'claude', limit: 50 })
+    for (const s of data.sessions) {
+      if (!s.cwd) continue
+      assert.ok(
+        s.cwd.startsWith('/'),
+        `claude cwd must be absolute (start with '/'), got: ${JSON.stringify(s.cwd)}`,
+      )
+    }
+  })
 })
