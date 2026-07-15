@@ -2034,6 +2034,23 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .tk-pri-medium { color: var(--text-secondary); background: var(--bg-inset, var(--bg-hover)); }
 .tk-pri-low { color: var(--text-secondary); background: transparent; }
 
+/* ── historian panel ─────────────────────────────────────────────────────── */
+.hist-subtitle { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin: var(--s-2) 0 var(--s-1); text-transform: uppercase; letter-spacing: 0.04em; }
+.hist-warn { color: var(--warning, #e8a); }
+.hist-grid { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-2); }
+.hist-kv { display: flex; gap: var(--s-1); font-size: 12px; }
+.hist-key { color: var(--text-secondary); }
+.hist-val { color: var(--text-primary); font-weight: 500; }
+.hist-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: var(--radius-sm); font-weight: 500; margin: 2px; }
+.hist-flag { background: color-mix(in srgb, var(--success, #4a9) 15%, transparent); color: var(--success, #4a9); }
+.hist-failsig { background: color-mix(in srgb, var(--warning, #e84) 15%, transparent); color: var(--warning, #e84); }
+.hist-port-up { background: color-mix(in srgb, var(--success, #4a9) 15%, transparent); color: var(--success, #4a9); }
+.hist-port-down { background: color-mix(in srgb, var(--warning, #e84) 15%, transparent); color: var(--warning, #e84); }
+.hist-row { padding: var(--s-1) var(--s-2); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: var(--s-1); background: var(--bg-card, transparent); }
+.hist-row-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.hist-row-detail { font-size: 11px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: 60px; overflow: hidden; margin-top: 2px; }
+.hist-stall-row { border-color: var(--warning, #e84); background: color-mix(in srgb, var(--warning, #e84) 5%, transparent); }
+.hist-ts { font-size: 11px; color: var(--text-secondary); text-align: right; padding: var(--s-1) 0; }
 
 .rm-info {
   margin-bottom: var(--s-3);

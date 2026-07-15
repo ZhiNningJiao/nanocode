@@ -104,6 +104,11 @@ const LAZY_PLUGINS = {
     render: (m, pane) => m.renderServicesPane(pane),
     reset: (m) => m.resetServicesLoadState(),
   },
+  historian: {
+    key: 'historian-panel', imp: () => import('./historian-panel.js'),
+    render: (m, pane) => m.renderHistorianPane(pane),
+    reset: (m) => m.resetHistorianLoadState(),
+  },
   akari: {
     key: 'akari-panel', imp: () => import('./akari-panel.js'),
     render: (m, pane) => m.renderAkariPane(pane),

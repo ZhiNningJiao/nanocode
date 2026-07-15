@@ -18,6 +18,8 @@ import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete, pushNtfyMessage, is
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 import { loadPersonalConfig } from '../terminal/personal-config.js'
 import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntry } from './akari-proxy.js'
+import { collectBriefing } from './historian.js'
+import { wakerTick, getWakerStatus, getWakerConfig, setWakerConfig } from './waker.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // TTS failures (fetch timeout, connection refused, bad response, stream errors)
@@ -641,6 +643,38 @@ app.get('/api/akari/state', asyncWrap(async (_req, res) => {
   const { serverUrl } = akariUrls()
   const state = await fetchAkariState(serverUrl)
   res.json(state)
+}))
+
+// ─── historian + waker (HISTORIAN_WAKER.md v4) ────────────────────────────────
+
+app.get('/api/historian/briefing', asyncWrap(async (_req, res) => {
+  const briefing = await collectBriefing()
+  res.json(briefing)
+}))
+
+app.get('/api/waker/status', (_req, res) => {
+  res.json(getWakerStatus())
+})
+
+app.get('/api/waker/config', (_req, res) => {
+  res.json(getWakerConfig())
+})
+
+app.put('/api/waker/config', (req, res) => {
+  if (!req.body || typeof req.body !== 'object') return res.status(400).json({ error: 'expected object' })
+  setWakerConfig(req.body)
+  res.json({ ok: true, config: getWakerConfig() })
+})
+
+// POST /api/waker/tick — crontab calls this every ~4 minutes.
+// Localhost-only: external callers get 403.
+app.post('/api/waker/tick', asyncWrap(async (req, res) => {
+  const ip = req.socket?.remoteAddress || ''
+  if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+    return res.status(403).json({ error: 'forbidden: localhost only' })
+  }
+  const result = await wakerTick()
+  res.json(result)
 }))
 
 app.get('/api/agents', asyncWrap(async (_req, res) => {
