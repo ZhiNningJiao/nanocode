@@ -26,3 +26,7 @@ S2 设计要点 (防假过):
 状态: 成功 (无 FAILSIG_nano_plugins)
 
 [续验 2026-07-15 12:53] opencode 第二次独立复验 (防假过): npm test 546/0, fork HEAD==local (f9bb1ff), 9478 真跑 codex 231 + claude 1327 真实会话 + 预览 119 轮, 9475/9476 未动, 日志干净. FLAG 真实有效, 非假过. 详见 REPORT §8.
+
+[续验 2026-07-15 12:59] opencode 第三次独立复验: npm test 546/0, fork HEAD==local (3bc5af6), manifest/分发/路由/监听 grep 全命中, 9478 烟测复现, 红线未越. 详见 REPORT §9.
+
+[续验 2026-07-15 15:1x] opencode 第四次独立复验 (热更新 push 策略落地): npm test 555/0 真跑 (tee run_nano_plugins.log), rewind+sessions 子测试独立跑 9/9 + 9/9, fork HEAD==local (6860f54), 无 FAILSIG. 新增 REPORT §11 Push 历史 (fork commit 号表, 10 行里程碑), 满足热更新「REPORT 里记每次 push 的 commit 号」要求. 每个里程碑已即时 push fork (S1 2076aeb / S1 bugfix 17e9ce2 / S2 22c0db0), 不开 PR.
