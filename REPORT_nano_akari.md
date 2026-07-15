@@ -120,3 +120,48 @@ Fresh full verification (not trusting the prior FLAG):
   rendered DOM text dump captured by Playwright — it shows every field value
   that a human/Sonnet visual judge would read off the screenshot.)
 - 9475/9476 untouched; 9479/9483 torn down after the run.
+
+## 2026-07-15 17:24 — fresh re-verification against LATEST akari (worker-core, not trusting prior FLAG)
+主人原话要求「用最新的 akari」。At re-verify time akari `origin/main` had advanced 2 commits
+past the 17:11 baseline (`42ec879a6` → `44a1393ff`):
+- `bfa6c5323` fix(compaction): budget basis is the SERIALIZED message array
+- `34ed7fb69` gate(no_raw_lane_reset): allowlist post-merge lane-sync reset
+- `44a1393ff` merge: akari/lane/0 into main
+
+Diffed the 6 API-wire-format source files the plugin depends on
+(`health_handler.rs`, `small_handlers.rs`, `health.rs`, `worker_state.rs`,
+`worker_status.rs`, `lane.rs`) across `efb142f1e..origin/main` (`44a1393ff`):
+**the diff is EMPTY** — the new commits touch compaction internals + lane-merge
+reset gating, NOT the HTTP control surface. Plugin remains aligned with the
+latest akari source; no code change needed (用最新的 akari satisfied).
+
+Fresh full verification (reproducing reality, not trusting the prior FLAG):
+- `npm test` → **562 pass / 0 fail** (`run_nano_akari.log`; grep of
+  `RESULT: FAIL|Traceback|Error|FAILED|NaN|NOT FOUND` hits only subtest
+  *names* containing "Error" — all marked `ok`, `# fail 0`, no real failures)
+- live smoke 9479 → real akari 9481:
+  - `/api/akari/config` → `{serverUrl 9481, lensUrl 9482}`
+  - `/api/services` → `akari: {status: "up"}` (real /api/health probe)
+  - `/api/akari/state` → `reachable:true`, every field **IDENTICAL** to direct
+    `curl 9481` (version 0.7.0 · build efb142f1e · caps {lane_cap 4,
+    max_vision_workers 6, model litellm/SGLang-GLM-5.2} · agent_concurrency
+    {in_flight 0, permits 4} · fallback true · concurrency {running 0, peak 2,
+    open_lanes 2} · 4 lanes mix Free/InUse, head d6804691, @main ✓) — faithful
+    passthrough confirmed
+  - panel text dump (Playwright): all sections render, **0 console errors**
+- degraded 9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`:
+  - `/api/services` → `akari: {status: "down"}` (first probe cycle)
+  - `/api/akari/state` → `reachable:false`, all sections null, per-section
+    "fetch failed"; panel calm "unreachable", **0 console errors (no spam)**
+- screenshots: `codex_work/nano_akari/akari_panel_good.png` (804×1000, 224KB) +
+  `akari_panel_degraded.png` (460×1000, 158KB), real PNGs, fresh 17:24.
+- **Visual verdict (Team2 Sonnet, headless Read on the fresh PNGs)**:
+  `VERDICT: PASS` — "Both states render correctly: the healthy panel shows all
+  expected data fields populated, and the degraded panel fails gracefully with
+  per-section messages and no error noise." One minor cosmetic noted: at the
+  460px harness viewport the "@main" column header clips to "@ma" (content
+  still readable; the real nanocode app renders wider, non-blocking).
+- 9475/9476 untouched; 9479/9483 torn down after the run.
+- Push: `zhining/nano-plugin-akari` fully pushed to `fork/zhining/nano-plugin-akari`
+  (no unpushed commits); Linear MES-14049 self-report posted by prior sessions.
+
