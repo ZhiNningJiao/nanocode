@@ -306,3 +306,67 @@ Cleanup: 9479/9483 torn down; 9475/9476/9481/9482 untouched throughout.
 Push: `zhining/nano-plugin-akari` local HEAD == fork remote HEAD (0 unpushed before
 this re-verify commit); this docs commit pushed to fork after the run.
 
+## 2026-07-15 18:46 — fresh independent re-verification (opencode/GLM, not trusting prior FLAG)
+
+"用最新的 akari" live check: fetched `~/code/akari` `origin/main` afresh → STILL
+`fecc9871c` (the 18:41 baseline; no advance since). akari has NOT advanced, so the
+plugin remains aligned with the LATEST akari source; no code change needed
+(用最新的 akari satisfied). Local HEAD `2e1e587` == fork remote HEAD → push current,
+0 unpushed; working tree clean. All plugin files present (akari-panel.js,
+akari-proxy.js, akari-proxy.test.js, akari_harness.html, shot_akari_panel.mjs).
+
+Reproduced the actual user scenario end-to-end (not trusting the prior FLAG):
+
+- `npm test` → **562 pass / 0 fail** (`run_nano_akari.log`; grep of
+  `not ok|# fail|RESULT: FAIL|Traceback|NaN|NOT FOUND` hits only subtest *names*
+  containing "Error" — all marked `ok`, `# fail 0`, zero real failures).
+- Live akari 9481 confirmed real (akari-server pid 286595 on 9481, lens bun pid
+  324164 on 9482 — the常驻 server, untouched):
+  - `/api/health` → version 0.7.0, build efb142f1e, dispatch_caps {lane_cap 4,
+    max_vision_workers 6, default_worker_model litellm/SGLang-GLM-5.2},
+    agent_concurrency {in_flight 0, permits_available 4}, provider_fallback true
+  - `/api/concurrency` → {running 0, peak 2, open_lanes 0}
+  - `/api/workers` → {workers: [], agents_running 0, instance_tokens 216003/92000}
+  - `/api/lanes` → 4 Free lanes, markers wf-parallel-2w-smoke:robot:*, head d6804691
+
+Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
+- `/api/akari/config` → 200 `{serverUrl 9481, lensUrl 9482}` (config-driven defaults)
+- `/api/akari/state` → 200 `reachable:true`; every field **IDENTICAL** to direct
+  `curl 9481` side-by-side (version 0.7.0 · build efb142f1e · dispatch_caps
+  {lane_cap 4, max_vision_workers 6, model litellm/SGLang-GLM-5.2} ·
+  agent_concurrency {in_flight 0, permits_available 4} · fallback true ·
+  concurrency {running 0, peak 2, open_lanes 0} · workers {agents_running 0,
+  tok 216003/92000} · 4 Free lanes head d6804691 @main true) — faithful
+  passthrough confirmed
+- `/api/services` → `akari: {status: "up"}` (driven by real /api/health probe —
+  task contract "up/down 用 /api/health" satisfied)
+- Playwright panel dump (460×1000): all sections render (Health version 0.7.0 /
+  build efb142f1e / agent cap 4 / vision cap 6 / lane cap 4 / in-flight 0 /
+  permits 4 / fallback on / model litellm/SGLang-GLM-5.2; Concurrency running 0 /
+  peak 2 / open lanes 0; Workers (0); Lanes/Fleet (4) markers
+  wf-parallel-2w-smoke:robot:* head d6804691 @main ✓; Lens↗ button present),
+  **0 console errors**; screenshot `akari_panel_good.png` (217KB, fresh 18:46)
+
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`, setsid):
+- `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
+- `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
+  "fetch failed" (structured bundle, no thrown error)
+- `/api/services` → `akari: {status: "down"}` after probe cycle
+- Playwright panel: calm "akari server unreachable — the panel will retry quietly
+  and recover automatically" + per-section "fetch failed", **0 console errors (no
+  spam)** — graceful degradation as required
+- screenshot `akari_panel_degraded.png` (157KB, fresh 18:46)
+
+Both PNGs valid (`89504e47` magic, fresh 18:46).
+
+**Visual verdict (gemini-3.1-pro vision model via AIGW, on the fresh 18:46 PNGs):**
+- GOOD: PASS — "Panel displays the green dot, correct URL, Lens button, exact
+  health/caps/concurrency values, and 4 lanes as specified."
+- DEGRADED: PASS — "Panel shows a clean unreachable state, the exact retry
+  quietly message, and fetch failed summaries with no red error spam."
+- OVERALL: PASS
+
+Cleanup: 9479/9483 torn down; 9475/9476/9481/9482/8770 untouched throughout.
+Push: `zhining/nano-plugin-akari` local HEAD == fork remote HEAD (0 unpushed
+before this re-verify commit); this docs commit pushed to fork after the run.
+
