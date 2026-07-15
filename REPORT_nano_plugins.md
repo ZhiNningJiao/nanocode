@@ -257,3 +257,22 @@ npm test（全量 server/tests/*.test.js） → tests 546, pass 546, fail 0
 | 日志自检 | grep `FAIL/NaN/NOT FOUND/Error` 本段 | 仅命中一个**通过**的测试名（`ok 3 - output starts with Error: → true`）+ 命令回显；零真实失败 |
 
 **结论**：FLAG_nano_plugins 真实有效，非假过。原型在临时 9478 真跑、真实会话可发现可预览、546 测试全过、fork 分支已 push、Linear 已自报、红线未越。MES-14031 可关。
+
+---
+
+## 9. 续验（opencode 第三次独立复验，2026-07-15 12:59）
+
+> 再次独立复验 FLAG，逐项实测，非读 FLAG 自证。
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 产物真实 | `wc -l` sessions-panel/browser/test | 418 / 351 / 82，均在 |
+| manifest/分发/路由/监听 | `grep -c` registry/right-panel/routes/terminal-view | 1 / 2 / 6 / 2，均命中 |
+| 全量测试 | `npm test`（本会话重跑） | **tests 546 / pass 546 / fail 0** |
+| 9478 烟测 | 临时起 PORT=9478 → list/health/panel | codex+claude 真实会话发现；claude cwd 前导 `/` 保留（bug1 修复有效）；panel 200/14037B |
+| 红线 | 9475/9476 PID 跑前后 | 135217/135218 不变；9478 已释放 |
+| fork push | `git ls-remote fork` vs 本地 HEAD | `3bc5af6` == `3bc5af6`，push 真实 |
+| Linear 自报 | 查 MES-14031 评论 | 9 条自报评论在 |
+| 日志自检 | grep `FAIL/NaN/NOT FOUND/Error` | 仅命中通过测试名（"starts with Error: → true"），零真实失败 |
+
+**结论**：第三次独立复验确认 FLAG_nano_plugins 真实有效，非假过。MES-14031 可关。
