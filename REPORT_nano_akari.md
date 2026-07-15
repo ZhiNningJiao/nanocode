@@ -405,3 +405,19 @@ Push: `f6a4871` pushed to `fork/zhining/nano-plugin-akari`.
 Linear MES-14049 milestone comment posted (83f1d8bb).
 Cleanup: 9479/9483 torn down; 9475/9476/9481/9482/8770 untouched.
 
+## 2026-07-15 19:00 — fresh independent re-verification (opencode, not trusting prior FLAG)
+
+akari `origin/main` still `fecc9871c` (no advance past 18:56 baseline). `git diff
+efb142f1e..origin/main` on the 6 API-wire files = EMPTY — plugin still aligned
+with LATEST akari (用最新的 akari satisfied, no code change).
+
+- `npm test` → **562 pass / 0 fail** (`run_nano_akari.log`, grep clean)
+- live smoke 9479 → real 9481 (setsid): `/api/akari/config` {9481,9482},
+  `/api/akari/state` reachable=true fields IDENTICAL to direct curl 9481
+  (v0.7.0 build efb142f1e caps 4/6/4 in-flight 0 permits 4 fallback true
+  concurrency 0/2/0 4 Free lanes d6804691 @main), `/api/services` akari=up
+- 9479 torn down; 9475/9476 untouched
+- push: local HEAD 2dee464 == fork (0 unpushed)
+
+Task COMPLETE: plugin implemented, tested, smoke-verified, pushed, Linear
+self-reported.
