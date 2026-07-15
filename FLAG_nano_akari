@@ -1,0 +1,10 @@
+FLAG_nano_akari
+task: MES-14049 akari inspector plugin for nanocode
+branch: zhining/nano-plugin-akari
+prior-commit: c58be29 (feat: akari inspector plugin, +1029 lines, 12 files)
+this-commit: stateClass wire-format fix (PascalCase lane states + waiting worker state)
+remote: fork/zhining/nano-plugin-akari
+tests: 562 pass / 0 fail (re-run after fix, run_nano_akari.log clean)
+smoke-good (9479): panel renders real health data (v0.7.0, build efb142f1e, vision cap 6, lane cap 4) | concurrency OK | workers OK | lanes OK | /api/services akari=up | 0 console errors
+smoke-degraded (9483): panel renders calm "unreachable" state | per-section "fetch failed" | /api/services akari=down | 0 console errors (no spam)
+screenshots: codex_work/nano_akari/akari_panel_good.png + akari_panel_degraded.png
