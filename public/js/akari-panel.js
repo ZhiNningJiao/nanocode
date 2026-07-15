@@ -261,11 +261,12 @@ function renderWorkers(w) {
     tr.appendChild(td(String(wk.tool_calls ?? 0)))
     tr.appendChild(td(fmtSecs(wk.elapsed_secs)))
     tr.appendChild(td(`${fmtNum(wk.tokens_in)}/${fmtNum(wk.tokens_out)}`, 'akari-mono'))
-    tr.appendChild(td(wk.current_activity || wk.last_tool || (wk.stage ? `stage:${wk.stage}` : '–')))
+    const act = wk.current_activity || wk.last_tool || (wk.stage ? `stage:${wk.stage}` : '–')
+    tr.appendChild(td(act, 'akari-marker'))
     body.appendChild(tr)
   }
   tbl.appendChild(body)
-  wrap.appendChild(tbl)
+  wrap.appendChild(scrollWrap(tbl))
   return wrap
 }
 
@@ -292,7 +293,9 @@ function renderLanes(l) {
     const tr = document.createElement('tr')
     tr.appendChild(td(ln.id || '–', 'akari-mono'))
     tr.appendChild(tdState(ln.state))
-    tr.appendChild(td(ln.marker || '–'))
+    const mk = td(ln.marker || '–', 'akari-marker')
+    mk.title = ln.marker || ''
+    tr.appendChild(mk)
     tr.appendChild(td(ln.head_short || '–', 'akari-mono'))
     tr.appendChild(td(ln.at_main ? '✓' : ''))
     tr.appendChild(td(ln.occupant || '–'))
@@ -300,7 +303,7 @@ function renderLanes(l) {
     body.appendChild(tr)
   }
   tbl.appendChild(body)
-  wrap.appendChild(tbl)
+  wrap.appendChild(scrollWrap(tbl))
   return wrap
 }
 
@@ -330,6 +333,13 @@ function tableHead(labels) {
   }
   thead.appendChild(tr)
   return thead
+}
+
+function scrollWrap(tbl) {
+  const d = document.createElement('div')
+  d.className = 'akari-table-scroll'
+  d.appendChild(tbl)
+  return d
 }
 
 function td(text, cls) {

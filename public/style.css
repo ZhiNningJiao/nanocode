@@ -5378,6 +5378,9 @@ body.workspace-active .landing-overlay { display: none; }
 .akari-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
 .akari-table th { text-align: left; font-weight: 500; color: var(--text-tertiary); padding: 3px 6px 3px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .akari-table td { padding: 3px 6px 3px 0; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.akari-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 4px; }
+.akari-table-scroll .akari-table { margin-top: 0; }
+.akari-marker { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .akari-table tr.akari-attention td { color: var(--warning); }
 .akari-mono { font-family: var(--font-mono); }
 .akari-state { display: flex; align-items: center; gap: 4px; }
