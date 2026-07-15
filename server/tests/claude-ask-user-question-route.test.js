@@ -28,6 +28,10 @@ function emitJson(ws, payload) {
 describe('claude AskUserQuestion websocket response path', () => {
   it('resolves a pending dialog from claude-dialog-response and broadcasts the answered event', () => {
     const store = createStore(':memory:')
+    // This test exercises the block-bridge AskUserQuestion path, which only
+    // runs when renderMode='block'. The server default is now 'terminal'
+    // (upstream a416ff2), so opt into block routing explicitly here.
+    store.setSetting('renderMode', 'block')
     const project = store.createProject('Ask User Question', process.cwd())
     const tab = store.createTab(project.id, { type: 'claude', label: 'claude ask' })
     const controller = createClaudeSessionController({ store, home: process.cwd(), recentAgents: { getRecentAgentsCached: () => [] } })

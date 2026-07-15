@@ -150,6 +150,7 @@ describe('claude force interrupt unwedge (busy=true, currentProc=null)', () => {
     mkdirSync(projectCwd, { recursive: true })
 
     const store = createStore(':memory:')
+    store.setSetting('renderMode', 'block') // block-bridge path; server default is now 'terminal'
     const project = store.createProject('Unwedge Project', projectCwd)
     const tab = store.createTab(project.id, { type: 'claude', label: 'unwedge' })
     const controller = createClaudeSessionController({
@@ -211,6 +212,7 @@ describe('claude force interrupt unwedge (busy=true, currentProc=null)', () => {
     mkdirSync(projectCwd, { recursive: true })
 
     const store = createStore(':memory:')
+    store.setSetting('renderMode', 'block') // block-bridge path; server default is now 'terminal'
     const project = store.createProject('Unwedge Soft Project', projectCwd)
     const tab = store.createTab(project.id, { type: 'claude', label: 'unwedge-soft' })
     const controller = createClaudeSessionController({

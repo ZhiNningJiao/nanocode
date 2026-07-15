@@ -185,6 +185,7 @@ describe('claude "send now" WS atomic interrupt', () => {
     const projectCwd = path.join(tempRoot, 'workspace')
     const { factory, state } = makeMockStreamingQuery()
     const store = createStore(':memory:')
+    store.setSetting('renderMode', 'block') // block-bridge path; server default is now 'terminal'
     store.setSetting('auto_flush_queue_on_interrupt', '0') // forceFlush must win regardless
     const { ws } = await attachClaudeTab(store, projectCwd, 'Send Now Busy', factory)
 
@@ -233,6 +234,7 @@ describe('claude "send now" WS atomic interrupt', () => {
     const projectCwd = path.join(tempRoot, 'workspace')
     const { factory, state } = makeMockStreamingQuery()
     const store = createStore(':memory:')
+    store.setSetting('renderMode', 'block') // block-bridge path; server default is now 'terminal'
     const { ws } = await attachClaudeTab(store, projectCwd, 'Send Now Idle', factory)
 
     // Idle: _sendNow on an idle session. The WS handler must NOT interrupt —
