@@ -14,6 +14,7 @@ import { createRecentAgentsService } from './recent-agents.js'
 import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary, fetchAigwBudget } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
+import { listSessions, previewSession } from './sessions-browser.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand, mergePersonalMachines } from './remote.js'
 import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
 import { loadPersonalConfig, projectForPlugin } from './personal-config.js'
@@ -1138,6 +1139,39 @@ export function createTerminalRoutes(store, opts = {}) {
       res.json(await fileDiff(cwd, base, head, file))
     } catch (err) {
       console.error('[/api/compare/file-diff]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── MES-14031 sessions browser plugin routes (抄 codex resume/fork) ──────────
+  //
+  // GET /api/sessions/list?source=codex|claude&limit=  — newest-first session list
+  // GET /api/sessions/preview?source=&id=&file=        — last N turns excerpt
+  //
+  // Read-only discovery of past Codex (~/.codex/sessions) + Claude Code
+  // (~/.claude/projects) sessions so the user can browse, preview, and fork/
+  // resume a previous agent session into a new tab — porting `codex resume`
+  // (picker) and `codex fork` to the nanocode plugin surface.
+
+  router.get('/api/sessions/list', (req, res) => {
+    try {
+      const source = typeof req.query.source === 'string' ? req.query.source : ''
+      const limit = parseInt(req.query.limit, 10) || 50
+      res.json(listSessions({ source, limit }))
+    } catch (err) {
+      console.error('[/api/sessions/list]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/sessions/preview', (req, res) => {
+    try {
+      const source = typeof req.query.source === 'string' ? req.query.source : ''
+      const id = typeof req.query.id === 'string' ? req.query.id : ''
+      const file = typeof req.query.file === 'string' ? req.query.file : ''
+      res.json(previewSession({ source, id, file }))
+    } catch (err) {
+      console.error('[/api/sessions/preview]', err)
       res.status(500).json({ error: err.message })
     }
   })

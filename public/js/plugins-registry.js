@@ -129,6 +129,23 @@ export const BUILTIN_PLUGINS = [
     builtin: true,
   },
   {
+    // MES-14031 — Sessions: browse / preview / fork-resume past agent sessions.
+    // Ports Codex CLI's `codex resume` (picker) + `codex fork` to the nanocode
+    // plugin surface. Lists Codex (~/.codex/sessions) + Claude Code
+    // (~/.claude/projects) sessions newest-first, shows a tail excerpt, and
+    // lets the user fork a previous session into a new tab. Read-only.
+    name: 'sessions',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'work',
+    tab: { id: 'sessions', labelKey: 'plugin.sessions.label' },
+    permissions: ['fs.read'],
+    settings: { defaultLimit: 50 },
+    descriptionKey: 'plugin.sessions.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
     // 需求10 — Remote machines: address book that launches the user's *local*
     // native RustDesk client via the `rustdesk://` URI scheme. The server only
     // stores the book (core settings); it bundles no RustDesk code, so AGPL is
