@@ -5429,6 +5429,16 @@ body.workspace-active .landing-overlay { display: none; }
 .historian-flash.show { opacity: 1; }
 .historian-flash.error { color: var(--error); }
 .service-dot.degraded { background: #ffb300; }
+.historian-usage-grid { grid-template-columns: 1fr 1fr 1fr; }
+/* Mobile: stack historian grids and shrink table columns */
+@media (max-width: 500px) {
+  .historian-block .rp-stats-grid,
+  .historian-usage-grid { grid-template-columns: 1fr 1fr; }
+  .historian-line { max-width: 120px; }
+  .historian-table { font-size: 10px; }
+  .historian-table th, .historian-table td { padding: 2px 4px 2px 0; }
+  .historian-log { max-height: 150px; font-size: 9px; }
+}
 
 /* ============================================================
  * Claude Block Renderer (cbr-*)

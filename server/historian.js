@@ -100,10 +100,30 @@ export async function getWakerHealth() {
     } catch { /* no inject logs at all */ }
   }
 
-  // Read stats if available
+  // Read stats if available — parse JSON for structured display
   try {
     const statsRaw = await readFile(path.join(WAKER_STATE_DIR, 'stats'), 'utf8')
-    result.stats = statsRaw.trim()
+    try {
+      result.stats = JSON.parse(statsRaw.trim())
+    } catch {
+      result.stats = statsRaw.trim()
+    }
+  } catch { /* ok */ }
+
+  // Read coverage (list of active agent tags the waker covers)
+  try {
+    const covRaw = await readFile(path.join(WAKER_STATE_DIR, 'coverage'), 'utf8')
+    try {
+      result.coverage = JSON.parse(covRaw.trim())
+    } catch {
+      result.coverage = covRaw.trim()
+    }
+  } catch { /* ok */ }
+
+  // Read dry_count (number of dry ticks before auto-promote)
+  try {
+    const dcRaw = await readFile(path.join(WAKER_STATE_DIR, 'dry_count'), 'utf8')
+    result.dryCount = parseInt(dcRaw.trim(), 10) || 0
   } catch { /* ok */ }
 
   return result

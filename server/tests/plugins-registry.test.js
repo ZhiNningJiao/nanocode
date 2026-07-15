@@ -129,6 +129,18 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(v.ok, `services manifest invalid: ${v.errors.join('; ')}`)
   })
 
+  it('historian plugin declares monitor group + tmux.read + refreshOnActivate', () => {
+    const m = builtinPlugin('historian')
+    assert.ok(m, 'historian plugin must be registered')
+    assert.equal(m.group, 'monitor')
+    assert.equal(m.tab.id, 'historian')
+    assert.ok(m.permissions.includes('tmux.read'))
+    assert.ok(m.permissions.includes('fs.read'))
+    assert.ok(m.refreshOnActivate, 'historian should refresh on tab activate')
+    const v = validateManifest(m)
+    assert.ok(v.ok, `historian manifest invalid: ${v.errors.join('; ')}`)
+  })
+
   it('accepts a settings-only manifest with no tab (需求13)', () => {
     const v = validateManifest({
       name: 'cfg', version: '1.0.0', apiVersion: '1.0', group: 'monitor',

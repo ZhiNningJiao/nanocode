@@ -5,7 +5,8 @@
  *   - Army status table (from ~/codex_work/army_status.json, updated every tick)
  *   - Recent briefing stream (waker.log tail)
  *   - Waker self-health (tmux session alive, singleton lock, last tick age, mode)
- *   - Controls: start/stop waker, LIVE/DRY toggle
+ *   - akari status row (up/down from same poll)
+ *   - Controls: start/stop waker, LIVE/DRY toggle, day/night interval switch
  *
  * Polls /api/historian/state every 15s. Graceful degradation: when the waker
  * is not running, the panel shows a calm "stopped" state and offers a start button.
@@ -83,10 +84,13 @@ function renderState(state) {
   el.innerHTML = ''
 
   // Header with waker health dot
-  renderHeader(state.wakerHealth)
+  renderHeader(state.wakerHealth, state.akariUp)
 
   // Waker health card
-  el.appendChild(renderWakerHealth(state.wakerHealth))
+  el.appendChild(renderWakerHealth(state.wakerHealth, state.akariUp))
+
+  // Waker usage/stats row
+  el.appendChild(renderWakerUsage(state.wakerHealth))
 
   // Army status table
   el.appendChild(renderArmyStatus(state.army))
@@ -98,7 +102,7 @@ function renderState(state) {
   el.appendChild(renderControls(state.wakerHealth))
 }
 
-function renderHeader(health) {
+function renderHeader(health, akariUp) {
   const head = activePane?.querySelector('#historian-head')
   if (!head) return
   head.innerHTML = ''
@@ -131,13 +135,14 @@ function renderHeader(health) {
   const ageStr = health?.lastTickAgeSeconds != null
     ? fmtAge(health.lastTickAgeSeconds)
     : 'never'
-  meta.textContent = `mode: ${modeStr} | last tick: ${ageStr}`
+  const akariStr = akariUp ? 'up' : 'down'
+  meta.textContent = `mode: ${modeStr} | last tick: ${ageStr} | akari: ${akariStr}`
   head.appendChild(meta)
 }
 
 // ── Waker health card ────────────────────────────────────────────────────────
 
-function renderWakerHealth(h) {
+function renderWakerHealth(h, akariUp) {
   const wrap = document.createElement('div')
   wrap.className = 'rp-section historian-block'
   const title = document.createElement('div')
@@ -160,7 +165,7 @@ function renderWakerHealth(h) {
   grid.appendChild(stat('mode', h.mode || '?'))
   grid.appendChild(stat('auto-live', h.autoLive ? 'yes' : 'no'))
   grid.appendChild(stat('last tick', h.lastTickAgeSeconds != null ? fmtAge(h.lastTickAgeSeconds) : '?'))
-  if (h.stats) grid.appendChild(stat('stats', h.stats.slice(0, 40)))
+  grid.appendChild(stat('akari', akariUp ? 'up' : 'down'))
   wrap.appendChild(grid)
 
   // Timeout warning
@@ -169,6 +174,65 @@ function renderWakerHealth(h) {
     warn.className = 'historian-warn'
     warn.textContent = t('plugin.historian.staleWarn')
     wrap.appendChild(warn)
+  }
+
+  return wrap
+}
+
+// ── Waker usage / stats row ──────────────────────────────────────────────────
+
+function renderWakerUsage(h) {
+  const wrap = document.createElement('div')
+  wrap.className = 'rp-section historian-block'
+  const title = document.createElement('div')
+  title.className = 'rp-subtitle'
+  title.textContent = t('plugin.historian.usageTitle')
+  wrap.appendChild(title)
+
+  if (!h) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-hint'
+    empty.textContent = t('plugin.historian.noData')
+    wrap.appendChild(empty)
+    return wrap
+  }
+
+  const grid = document.createElement('div')
+  grid.className = 'rp-stats-grid historian-usage-grid'
+
+  // Parse structured stats (beat count, skip reasons)
+  const s = h.stats
+  if (s && typeof s === 'object') {
+    grid.appendChild(stat('beats', String(s.beat ?? '?')))
+    const skip = s.skip || {}
+    const totalSkip = Object.values(skip).reduce((a, b) => a + (Number(b) || 0), 0)
+    grid.appendChild(stat('skipped', String(totalSkip)))
+    if (skip.busy) grid.appendChild(stat('skip:busy', String(skip.busy)))
+    if (skip.hb_quiet) grid.appendChild(stat('skip:quiet', String(skip.hb_quiet)))
+    if (skip.rate) grid.appendChild(stat('skip:rate', String(skip.rate)))
+  } else if (typeof s === 'string') {
+    grid.appendChild(stat('stats', s.slice(0, 60)))
+  }
+
+  // Dry count (ticks before auto-promote)
+  if (h.dryCount != null) {
+    grid.appendChild(stat('dry ticks', String(h.dryCount)))
+  }
+
+  // Coverage (agent tags the waker monitors)
+  if (Array.isArray(h.coverage) && h.coverage.length) {
+    grid.appendChild(stat('coverage', String(h.coverage.length)))
+  }
+
+  wrap.appendChild(grid)
+
+  // Show coverage list as a compact line
+  if (Array.isArray(h.coverage) && h.coverage.length) {
+    const covLine = document.createElement('div')
+    covLine.className = 'rp-hint historian-mono'
+    covLine.textContent = h.coverage.join(', ')
+    covLine.title = 'Agents in waker coverage'
+    wrap.appendChild(covLine)
   }
 
   return wrap
@@ -334,12 +398,57 @@ function renderControls(health) {
 
   wrap.appendChild(btnRow)
 
+  // Day/Night interval row
+  const intervalRow = document.createElement('div')
+  intervalRow.className = 'historian-controls'
+  intervalRow.style.marginTop = '6px'
+
+  const dayBtn = document.createElement('button')
+  dayBtn.className = 'rp-btn'
+  dayBtn.textContent = t('plugin.historian.dayMode')
+  dayBtn.title = 'WAKE_WORK_INTERVAL=270 WAKE_OFF_INTERVAL=270'
+  dayBtn.addEventListener('click', () => setIntervalBtn(270, dayBtn, wrap))
+  intervalRow.appendChild(dayBtn)
+
+  const nightBtn = document.createElement('button')
+  nightBtn.className = 'rp-btn'
+  nightBtn.textContent = t('plugin.historian.nightMode')
+  nightBtn.title = 'WAKE_WORK_INTERVAL=1200 WAKE_OFF_INTERVAL=1200'
+  nightBtn.addEventListener('click', () => setIntervalBtn(1200, nightBtn, wrap))
+  intervalRow.appendChild(nightBtn)
+
+  const autoBtn = document.createElement('button')
+  autoBtn.className = 'rp-btn'
+  autoBtn.textContent = t('plugin.historian.autoMode')
+  autoBtn.title = 'Dynamic interval (default)'
+  autoBtn.addEventListener('click', () => setIntervalBtn(0, autoBtn, wrap))
+  intervalRow.appendChild(autoBtn)
+
+  wrap.appendChild(intervalRow)
+
   const hint = document.createElement('div')
   hint.className = 'rp-hint'
   hint.textContent = t('plugin.historian.controlsHint')
   wrap.appendChild(hint)
 
   return wrap
+}
+
+async function setIntervalBtn(seconds, btn, container) {
+  btn.disabled = true
+  try {
+    const r = await fetch('/api/historian/waker/interval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seconds }),
+    })
+    const d = await r.json()
+    flashMsg(container, d.ok ? `interval: ${d.interval}` : (d.error || 'failed'), !d.ok)
+  } catch (err) {
+    flashMsg(container, err.message, true)
+  } finally {
+    btn.disabled = false
+  }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

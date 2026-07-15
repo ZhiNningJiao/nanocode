@@ -310,6 +310,10 @@ const translations = {
     'plugin.historian.stop': 'Stop Waker',
     'plugin.historian.switchLive': 'Switch to LIVE',
     'plugin.historian.switchDry': 'Switch to DRY',
+    'plugin.historian.dayMode': 'Day (4.5m)',
+    'plugin.historian.nightMode': 'Night (20m)',
+    'plugin.historian.autoMode': 'Auto',
+    'plugin.historian.usageTitle': 'Waker Usage',
     // Memory viewer plugin (MES-13740 需求7)
     'plugin.memory.label': 'Memory',
     'plugin.memory.desc': 'Browse Claude memory (MEMORY.md + fragments) across teams × projects.',
@@ -718,6 +722,10 @@ const translations = {
     'plugin.historian.stop': '停止 Waker',
     'plugin.historian.switchLive': '切换为 LIVE',
     'plugin.historian.switchDry': '切换为 DRY',
+    'plugin.historian.dayMode': '白天 (4.5m)',
+    'plugin.historian.nightMode': '夜间 (20m)',
+    'plugin.historian.autoMode': '自动',
+    'plugin.historian.usageTitle': 'Waker 用量',
     // Memory viewer plugin (MES-13740 需求7)
     'plugin.memory.label': 'Memory',
     'plugin.memory.desc': '按 team × 项目浏览 Claude memory（MEMORY.md + 碎片 md）。',
