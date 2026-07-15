@@ -1947,6 +1947,85 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .rw-error { color: var(--warning); }
 
 
+/* -- Tasks plugin (MES-14031 S5 — agent task list / TODO panel) ------------ */
+
+.tk-head { padding: var(--s-3) var(--s-3) 0; }
+.tk-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+  min-height: 44px;
+}
+.tk-summary-text { font-size: 12px; color: var(--text-secondary); }
+.tk-source-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg-inset, var(--bg-hover));
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.tk-body { padding: var(--s-2) var(--s-3); overflow-y: auto; }
+.tk-hint { font-size: 13px; color: var(--text-secondary); padding: var(--s-2) 0; }
+.tk-list { display: flex; flex-direction: column; gap: var(--s-1); }
+.tk-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  min-height: 44px;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card, var(--bg-elevated, var(--bg-inset, transparent)));
+}
+.tk-row:hover { background: var(--bg-hover); }
+.tk-row.tk-completed { opacity: 0.6; }
+.tk-row.tk-completed .tk-text { text-decoration: line-through; }
+.tk-row.tk-in_progress {
+  border-color: var(--accent, var(--info, #4a9));
+  background: color-mix(in srgb, var(--accent, #4a9) 8%, transparent);
+}
+.tk-row.tk-blocked { border-color: var(--warning); }
+.tk-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tk-completed .tk-icon { color: var(--success, #4a9); }
+.tk-in_progress .tk-icon { color: var(--accent, var(--info, #4a9)); }
+.tk-pending .tk-icon { color: var(--text-secondary); }
+.tk-blocked .tk-icon { color: var(--warning); }
+.tk-text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.tk-priority {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.04em;
+}
+.tk-pri-high { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.tk-pri-medium { color: var(--text-secondary); background: var(--bg-inset, var(--bg-hover)); }
+.tk-pri-low { color: var(--text-secondary); background: transparent; }
+
+
 .rm-info {
   margin-bottom: var(--s-3);
   padding: var(--s-2) var(--s-3);

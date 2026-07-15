@@ -2,7 +2,7 @@
 
 > 主人原话：「抄 codex，claude code 桌面端到 nanocode 插件，也可以 glm 安排上。」
 
-分支 `zhining/nano-plugin-proto` · worktree `~/code/wt-nano-plugins` · 原型 commit `2076aeb` · bugfix commit `17e9ce2`
+分支 `zhining/nano-plugin-proto` · worktree `~/code/wt-nano-plugins` · 原型 commit `2076aeb` · bugfix commit `17e9ce2` · S2 commit `22c0db0` · S5 commit (本次)
 验证日志 `run_nano_plugins.log` · 成功旗 `FLAG_nano_plugins`
 
 ---
@@ -16,6 +16,7 @@
 5. **验证（防假过）**：临时 9478 端口真跑服务器，真实发现 **231 个 codex + 1326 个 claude 会话**，预览返回 119 轮，面板 JS 与 manifest 均正常服务；`npm test` **546 pass / 0 fail**，无回归。证据见 §5 + `run_nano_plugins.log`。
 6. **浏览器实测发现并修复两个真实 bug**（commit `17e9ce2`）：① `claudeSlugToCwd` 丢失绝对路径前导 `/`（`/jfs/home/...`→`jfs/home/...`），导致 cwd 显示错 + fork 按 cwd 永远匹配不到项目；② fork 监听调用了不存在的 `GET /api/projects/:id`（404），静默跳过导航。修复后浏览器实测 fork claude 会话成功跳转 `#/local/skelconv2` + 真造 claude tab + 加载 435 条历史。新增回归测试。详见 §5.1。
 7. **原型 S2 Rewind（本轮新增）**：把 Claude Code 桌面端标志性的 checkpoint/rewind 安全网移植成 nanocode 右栏 `work` 组 `rewind` 插件。每条用户提问 = 一个检查点；rewind 时先备份原 jsonl 再在 turn 边界原子截断（temp+rename），丢弃之后的对话——agent 跑偏时的恢复路径（区别 `/clear` 丢全部上下文）。**会话 rewind 真实可用、安全、已验证；"恢复代码"（per-turn 文件快照）为已记录的后续步骤，不假装支持。** 9 文件 / +~600 行，555 测试全过（546 S1 + 9 S2）。详见 §10。
+8. **原型 S5 Tasks（本次新增）**：把 agent 的实时 TODO 列表从终端滚屏里捞出来，做成右栏 `work` 组 `tasks` 插件。Claude 的 `TodoWrite` tool_use 和 Codex 的 `todo_list` 结构化事件原本只在终端里一闪而过——现在两个 block renderer 都在收到事件时 dispatch `nanocode:todo-update` CustomEvent，tasks 面板实时渲染完成/进行中/待执行/阻塞计数 + 每条任务的状态图标/内容/优先级。**纯客户端、零后端路由、零权限**——事件总线是已有的 `document` CustomEvent，只是多接一路。7 文件 / +~360 行，568 测试全过（555 S1+S2 + 13 S5）。详见 §12。
 
 为什么选 S1 作为本轮原型：nanocode 的产品定位就是"多项目多 agent 的终端工作区"，**会话的发现与恢复正是它的核心痛点**；而 `codex resume/fork` 是 codex CLI 的旗舰会话命令，"抄 codex"最直接、最合身；且移植边界干净（只读发现 + 复用既有 tab 创建 + 一个 CustomEvent），可在单轮内做到真·可用、真·验证。其余高价值项（Checkpoint/Rewind S2、Diff 审阅 S3）列为后续优先级。
 
@@ -387,5 +388,87 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 9 | `11983da` | 15:07:36 | S2 文档 | docs: update FLAG with S2 rewind delivery |
 | 10 | (本次) | 15:1x | S2 文档 | docs: §11 push 历史 + 第 4 次独立复验（555/0 真跑） |
 | 11 | (本会话) | 15:5x | 续验 | docs: 第 7 次独立复验（GLM 接手从零复现）—— npm test 555/0 + 9478 烟测真发现 codex/claude 会话 + fork sync f893f9b |
+| 12 | (本次) | 17:0x | **S5 原型** | feat(tasks): S5 agent TODO list panel — port TodoWrite/todo_list to right-panel tab（7 文件 / +~360 行，§12） |
 
-**里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
+**里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 (本次)。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
+
+---
+
+## 12. S5 Tasks 插件（agent 实时 TODO 列表面板）
+
+### 12.1 动机
+
+Claude Code 和 Codex 在 agent turn 中都会维护一个结构化 TODO 列表（Claude 的 `TodoWrite` tool_use、Codex 的 `todo_list` 结构化事件）。但在 nanocode 里，这些列表只是终端滚屏里的一行文本——agent 更新一次就滚走了，用户想看"agent 现在在干什么"只能往上翻。这个面板把 TODO 列表提到右栏，实时更新，一目了然。
+
+### 12.2 数据流（纯客户端，零后端路由）
+
+```
+claude-block-renderer._renderToolUsePart()
+  → part.name === 'TodoWrite' && part.input.todos
+  → document.dispatchEvent('nanocode:todo-update', { source:'claude', tabId, todos })
+
+codex-block-renderer._handleCodexEvent()
+  → _maybeDispatchTodoUpdate(event, tabId)
+    → event.type === 'todo_list' && event.todos  ──┐
+    → event.item?.type === 'todo_list'             ├──→ dispatch
+                                                    │
+tasks-panel._wireListener()                        │
+  → document.addEventListener('nanocode:todo-update')
+  → normalizeTodos(detail.todos) → currentTodos
+  → renderList() (summary counts + status rows)
+```
+
+关键：**不需要后端路由**。事件总线是已有的 `document` CustomEvent（`nanocode:terminal-output`、`nanocode:turn-complete` 等同模式），block renderer 是每 pane 一个实例，dispatch 的是全局 `document` 事件——tasks 面板在右栏挂一个 listener 就能收到所有 pane 的更新。由于同一时间只有一个 pane 在前台活动，"最新收到的 todos = 活动 agent 的 todos"，无需显式 tab 路由。
+
+### 12.3 改动清单（7 文件 / +~360 行）
+
+| 文件 | 改动 |
+|---|---|
+| `public/js/tasks-panel.js` | **新建**（180 行）：render core + `normalizeTodos` / `summarizeTodos` 纯函数 + `nanocode:todo-update` listener + 状态图标渲染 |
+| `public/js/plugins-registry.js` | +18 行：`tasks` manifest（`work` 组，`tab.id='tasks'`，`permissions:[]`）|
+| `public/js/right-panel.js` | +5 行：`tasks` 入 `LAZY_PLUGINS`（`key:'tasks-panel'`，`render: renderTasksPane`，`reset: resetTasksLoadState`）|
+| `public/js/claude-block-renderer.js` | +8 行：`_renderToolUsePart` 在 `!isLoading && part.name==='TodoWrite'` 时 dispatch `nanocode:todo-update` |
+| `public/js/codex-block-renderer.js` | +22 行：`_maybeDispatchTodoUpdate` 模块级函数（处理 `todo_list` / `item.{}.type==='todo_list'` 两种 shape）+ `_handleCodexEvent` 调用它 |
+| `public/js/i18n.js` | +20 行：`tasks.*` 键 10 个 ×2（en/zh）：heading / intro / empty / done / inProgress / pending / blocked / untitled + plugin label/desc |
+| `public/style.css` | +50 行：`.tk-*` 类（head/summary/body/list/row/icon/text/priority + completed/in_progress/blocked/pending 状态样式）|
+| `server/tests/tasks-panel.test.js` | **新建**（95 行）：`normalizeTodos` 12 case（Claude shape / Codex shape / status 变体映射 / 默认值 / null 过滤 / 类型强转）+ `summarizeTodos` 2 case |
+| `server/tests/plugins-registry.test.js` | +13 行：`tasks` manifest 验证（group/tab/permissions/validate）|
+
+### 12.4 归一化设计（`normalizeTodos`）
+
+Claude 和 Codex 的 todo 字段名不同。`normalizeTodos` 纯函数把两源映射到统一形状 `{ content, status, priority }`：
+
+- **content**：`item.content || item.title || item.subject || item.text || item.task || ''`
+- **status**：通过 `STATUS_MAP` 映射变体（`done`/`finished`/`finish` → `completed`；`in-progress` → `in_progress`；`blocked` → `blocked`；未知 → `pending`）
+- **priority**：原样保留（空字符串默认）
+
+函数已 export，单元测试 12 case 覆盖：Claude shape / Codex shape / status 变体 / 未知默认 / 缺失默认 / priority 缺失 / null 过滤 / 类型强转 / task fallback。
+
+### 12.5 验证（防假过，证据见 `run_nano_plugins.log`）
+
+**9478 烟测**（`setsid PORT=9478 node server/index.js`）：
+```
+GET / → HTTP 200 (35473 bytes HTML)
+GET /js/plugins-registry.js | grep -c "name: 'tasks'"  → 1 (manifest 入清单)
+GET /js/tasks-panel.js                                → HTTP 200 (文件正常服务)
+GET /js/right-panel.js | grep "tasks-panel"           → 1 (懒加载分发已接)
+GET /js/i18n.js | grep -c "tasks\."                    → 20 (10 en + 10 zh)
+GET /style.css | grep -c "\.tk-"                      → 23 (CSS 类已入)
+GET /js/codex-block-renderer.js | grep -c "_maybeDispatchTodoUpdate" → 2 (定义+调用)
+GET /js/claude-block-renderer.js | grep -c "nanocode:todo-update"   → 2 (注释+dispatch)
+启动日志 grep error → 0 命中
+```
+
+**单元 + 全量**：
+```
+node --test server/tests/tasks-panel.test.js  → tests 12, pass 12, fail 0
+npm test（全量）                               → tests 568, pass 568, fail 0  (555 S1+S2 + 13 S5)
+```
+
+**红线**：9475/9476 未动（PID 86443/85994 跑前后不变）；9478 烟测后已释放（`kill $(lsof -ti :9478)`，curl 确认 connection refused）。
+
+### 12.6 后续步骤（不假装，明示）
+
+- **Codex `todo_list` 实测**：当前 `_maybeDispatchTodoUpdate` 处理两种理论 shape（standalone `todo_list` event / `item.{}.type==='todo_list'`），但本机 Codex SDK 版本是否真的发出 `todo_list` 事件未在真跑中验证（需要 Codex agent 真跑一轮带 TodoWrite 的任务才能触发）。即使当前 SDK 版本不发，函数已就位——SDK 升级后自动生效，无需改前端。
+- **多 pane 路由**：当前"最新收到的 = 活动的"在单 pane 场景下正确。多 pane 同时跑 agent 时，可加 `nanocode:tab-active` → `currentTodos` 按 tabId 分桶，面板只显示活动 tab 的 todos。
+- **持久化**：当前 todos 是易失的——刷新页面后丢失。可在 `nanocode:turn-complete` 时存入 `localStorage`，面板激活时恢复。本轮不实现。
