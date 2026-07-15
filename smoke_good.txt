@@ -1,0 +1,53 @@
+[good] akari pane text:
+akari
+Lens ↗
+↻
+http://10.18.8.55:9481 · 09:11
+Health
+version
+0.7.0
+build
+efb142f1e
+agent cap
+4
+vision cap
+6
+lane cap
+4
+in-flight
+0
+permits
+4
+fallback
+on
+tok in
+0
+tok out
+0
+model: litellm/SGLang-GLM-5.2
+Concurrency
+running
+0
+peak
+2
+open lanes
+4
+Workers (0)
+no active workers
+Lanes / Fleet (4)
+id	state	marker	head	@main	occupant	reserved
+0	
+InUse
+wf-parallel-2w-smoke:robot:cc5_hd_neutral_base	d6804691	✓	wf-parallel-2w-smoke:robot:cc5_hd_neutral_base	
+1	
+InUse
+wf-parallel-2w-smoke:robot:blender_rigify_basic_human	d6804691	✓	wf-parallel-2w-smoke:robot:blender_rigify_basic_human	
+2	
+InUse
+wf-parallel-2w-smoke:robot:cc5_hd_neutral_base	d6804691	✓	wf-parallel-2w-smoke:robot:cc5_hd_neutral_base	
+3	
+InUse
+wf-parallel-2w-smoke:robot:blender_rigify_basic_human	d6804691	✓	wf-parallel-2w-smoke:robot:blender_rigify_basic_human	
+
+[good] #akari-pane children: 3670 chars
+[good] console errors: (none)
