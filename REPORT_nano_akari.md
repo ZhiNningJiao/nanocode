@@ -421,3 +421,78 @@ with LATEST akari (用最新的 akari satisfied, no code change).
 
 Task COMPLETE: plugin implemented, tested, smoke-verified, pushed, Linear
 self-reported.
+
+## 2026-07-15 19:08 — fresh independent re-verification (opencode/GLM, not trusting prior FLAG)
+
+"用最新的 akari" live check: fetched `~/code/akari` `origin/main` afresh → STILL
+`fecc9871c` (no advance past the 19:00 baseline). Plugin still aligned with the
+LATEST akari source (用最新的 akari satisfied, no code change). Local HEAD
+`b3d37a1` == fork remote HEAD `b3d37a1` (0 unpushed, working tree clean). All
+plugin files present (akari-panel.js, akari-proxy.js, akari-proxy.test.js,
+akari_harness.html, shot_akari_panel.mjs).
+
+Reproduced the actual user scenario end-to-end (not trusting the prior FLAG):
+
+- `npm test` → **562 pass / 0 fail** (`run_nano_akari.log`; grep of
+  `RESULT: FAIL|Traceback|[^a-z]Error[^a-z]|FAILED|NaN|NOT FOUND|not ok` hits
+  only subtest *names* containing "Error" — all marked `ok`, `# fail 0`, zero
+  real failures). 26 akari-proxy tests pass (getAkariUrls/fetchJson/
+  fetchAkariState/checkAkariReachable/getAkariServiceEntry + personal-config
+  akari URLs).
+- Live akari 9481 confirmed real (akari-server pid 286595 on 9481, lens bun
+  pid 324164 on 9482 — the常驻 server, untouched):
+  - `/api/health` → version 0.7.0, build efb142f1e, dispatch_caps {lane_cap 4,
+    max_vision_workers 6, default_worker_model litellm/SGLang-GLM-5.2},
+    agent_concurrency {in_flight 0, permits_available 4}, provider_fallback true
+  - `/api/concurrency` → {running 0, peak 2, open_lanes 0}
+  - `/api/lanes` → 4 Free lanes, markers wf-parallel-2w-smoke:robot:*, head d6804691
+
+Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
+- `/api/akari/config` → 200 `{serverUrl 9481, lensUrl 9482}` (config-driven defaults)
+- `/api/services` → `akari: {status: "up"}` (driven by real /api/health probe —
+  task contract "up/down 用 /api/health" satisfied)
+- `/api/akari/state` → 200 `reachable:true`; every field **IDENTICAL** to direct
+  `curl 9481` side-by-side (version 0.7.0 · build efb142f1e · dispatch_caps
+  {lane_cap 4, max_vision_workers 6, model litellm/SGLang-GLM-5.2} ·
+  agent_concurrency {in_flight 0, permits_available 4} · fallback true ·
+  tok 0/0 · concurrency {running 0, peak 2, open_lanes 0} · workers
+  {agents_running 0, count 0} · 4 Free lanes markers
+  wf-parallel-2w-smoke:robot:* head d6804691 @main true) — faithful
+  passthrough confirmed
+- Playwright good smoke (460px harness viewport): all sections render
+  (Health version 0.7.0 / build efb142f1e / agent cap 4 / vision cap 6 / lane
+  cap 4 / in-flight 0 / permits 4 / fallback on / model litellm/SGLang-GLM-5.2;
+  Concurrency running 0 / peak 2 / open lanes 0; Workers (0); Lanes/Fleet (4)
+  markers wf-parallel-2w-smoke:robot:* head d6804691 @main ✓; Lens↗ button
+  present), **0 console errors**; screenshot
+  `codex_work/nano_akari/akari_panel_good.png` (208KB, fresh 19:06)
+
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`, setsid):
+- `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
+- `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
+  "fetch failed" (structured bundle, no thrown error)
+- `/api/services` → `akari: {status: "down"}` after probe cycle
+- Playwright panel: calm "akari server unreachable — the panel will retry
+  quietly and recover automatically" + per-section "fetch failed",
+  **0 console errors (no spam)** — graceful degradation as required
+- screenshot `codex_work/nano_akari/akari_panel_degraded.png` (158KB, fresh 19:07)
+
+Both PNGs valid (`89504e47` magic, fresh 19:06-07).
+
+**Visual verdict (Team2 Sonnet, headless Read on the fresh PNGs):**
+- GOOD `akari_panel_good.png` → **VERDICT: PASS** — all 7 criteria confirmed
+  (green dot + "akari" title + URL 9481; Lens↗ button; Health version 0.7.0 +
+  build efb142f1e; caps agent cap 4 / vision cap 6 / lane cap 4; Concurrency
+  running 0/peak 2/open lanes 0; Workers section; Lanes/Fleet lists 4 lanes 0–3).
+- DEGRADED `akari_panel_degraded.png` → **VERDICT: PASS** — all 4 criteria
+  confirmed (header 9999 + unreachable; calm "retry quietly and recover
+  automatically"; all 4 sections "fetch failed"; NO red banners/stack traces/
+  error spam).
+
+Cleanup: 9479/9483 torn down; 9475/9476/9481/9482/8770 untouched throughout.
+Push: local HEAD `b3d37a1` == fork remote HEAD (0 unpushed before this re-verify
+commit); this docs commit pushed to fork after the run.
+
+**Task COMPLETE**: plugin implemented, tested (562/0), smoke-verified (good +
+degraded, 0 console errors, fields identical to direct curl 9481), Team2 Sonnet
+visual verdict PASS both panels, pushed to fork, Linear MES-14049 self-reported.
