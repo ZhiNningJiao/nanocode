@@ -11,7 +11,15 @@ import {
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 
-const OUTPUT_FLUSH_MS = 12
+// 12 ms was tight enough that on a busy host the worker's event loop
+// spent most of its budget on flush ticks (one JSON.stringify +
+// ws.send() per active client per 12 ms = ~83 Hz). A noisy agent (e.g.
+// codex's TUI redraws) compounded this to where new connections
+// couldn't be accept()ed. 50 ms is still well under perception
+// threshold (~20 Hz visual updates) and gives back ~75% of the
+// per-flush CPU budget. PTY scrollback continues to be batched at
+// SCROLLBACK_FLUSH_MS for disk persistence.
+const OUTPUT_FLUSH_MS = 50
 const SCROLLBACK_SIZE = 100 * 1024 // 100KB
 const SCROLLBACK_FLUSH_MS = 5000
 
