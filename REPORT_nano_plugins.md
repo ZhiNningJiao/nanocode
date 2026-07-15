@@ -390,6 +390,7 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 11 | (本会话) | 15:5x | 续验 | docs: 第 7 次独立复验（GLM 接手从零复现）—— npm test 555/0 + 9478 烟测真发现 codex/claude 会话 + fork sync f893f9b |
 | 12 | (本次) | 17:0x | **S5 原型** | feat(tasks): S5 agent TODO list panel — port TodoWrite/todo_list to right-panel tab（7 文件 / +~360 行，§12） |
 | 13 | (本次) | 16:3x | 续验 | docs: 第 9 次独立复验——568/0 真跑 + 三原型运行时真跑复现 + 修复 9478 残留卫生偏差（§13） |
+| 14 | `cb954cb` | 16:5x | 续验 | docs: 第 10 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现 + fork sync cb954cb + 红线未越（精确 PID kill，无 pkill）（§14） |
 
 **里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 (本次)。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
 
