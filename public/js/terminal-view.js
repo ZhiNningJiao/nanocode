@@ -1679,8 +1679,12 @@ function setupChatInput() {
         // Priority 5: clear input
         chatInput.value = ''
         autoResize()
-      } else if (!isClaudeTab && activePane) {
-        // Bash/codex tab: send raw Escape to PTY
+      } else if (activePane) {
+        // Fall-through: send raw ESC to the PTY (claude/codex/bash all
+        // benefit — claude's /login prompt cancels on ESC, codex menus
+        // close, vim leaves insert mode). Previously gated by
+        // `!isClaudeTab`, which left Esc dead on an idle terminal-mode
+        // claude tab. (upstream 59a7eb2 改造)
         activePane.sendRaw('\x1b')
       }
       e.preventDefault()
