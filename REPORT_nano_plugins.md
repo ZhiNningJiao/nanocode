@@ -401,6 +401,7 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 22 | `3041bc9` | 18:03 | 续验 | docs: 第 19 次独立复验（opencode 全新 session 从零复现）——568→581/0 真跑（并发 agent 改 S5）+ 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 24a0ca8 + 红线未越（精确 PID kill 272532，无 pkill）+ 并发源码改动遗留未提交（§22） |
 | 23 | `bf04af2` | (本会话) | **S5 codex 修复** | fix(tasks): S5 codex todo_list — read real SDK `items` field + completed→status map（4 文件 / +142 行，§23）。前序并发 agent 对 S5 的真实 bug 修复（Codex SDK ThreadItem 实发 `items` 而非 `todos`，旧代码读 `.todos` 永不命中 → codex tasks 面板从不亮）；文件 mtime 稳定、并发进程均在其他 worktree，按「热更新: 有进度就推 fork」commit+push。npm test 581/0 + 9478 烟测 extractCodexTodos export 真服务 |
 | 24 | (本会话) | 18:1x | 续验 | docs: 第 21 次独立复验（opencode 全新 session 从零复现，不信前序 FLAG）——npm test 581/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/claude 真会话 f260a08e/rewind 诚实降级/tasks panel 200 + extractCodexTodos=3 真生效）+ fork sync ad2f37a + 红线未越（精确 PID kill 316734，无 pkill；9475/9476 系监督重启非本会话，如实记录）（§24） |
+| 25 | `3a18109` | (本会话) | 续验 | docs: 第 22 次独立复验（opencode 全新 session 从零复现，不信前序 FLAG）——npm test 581/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/claude 真会话 f260a08e/rewind 诚实降级/tasks panel 200 + extractCodexTodos=3 真生效）+ fork sync 0e7d1b1→3a18109 + 红线未越（精确 PID kill 321740，无 pkill；9475/9476 PID 304108/304142 跑前后不变）（§25） |
 
 **里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 `2aa5754`（→ codex 修复 `bf04af2`，使 codex 面板真生效）。每个原型/修复一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
 
