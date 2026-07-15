@@ -71,6 +71,11 @@ const LAZY_PLUGINS = {
     render: (m, pane, plugin) => m.renderComparePane(pane, plugin),
     reset: (m) => m.resetCompareLoadState(),
   },
+  sessions: {
+    key: 'sessions-panel', imp: () => import('./sessions-panel.js'),
+    render: (m, pane, plugin) => m.renderSessionsPane(pane, plugin),
+    reset: (m) => m.resetSessionsLoadState(),
+  },
   remote: {
     key: 'remote-panel', imp: () => import('./remote-panel.js'),
     render: (m, pane) => m.renderRemotePane(pane),
