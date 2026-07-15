@@ -188,6 +188,26 @@ export const BUILTIN_PLUGINS = [
     descriptionKey: 'plugin.services.desc',
     builtin: true,
   },
+  {
+    // MES-14049 — akari 检察: a dedicated monitor tab for the self-hosted akari
+    // dispatch server. Polls the nanocode same-origin proxy (/api/akari/state)
+    // every ≥10s and renders health summary (version/build/dispatch_caps),
+    // concurrency (in-flight/permits), the live workers table, and the lane
+    // fleet status. A one-click button jumps to the akari lens dashboard. The
+    // akari server URL is personal-config driven (personal.akari.*); when akari
+    // is down the panel degrades to a calm "unreachable" state — no error spam.
+    // The Port Health grid also shows a managed `akari` row (up/down via
+    // /api/health) — see services-panel.js + runServiceChecks.
+    name: 'akari',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'akari', labelKey: 'plugin.akari.label' },
+    permissions: ['network', 'personal.akari'],
+    descriptionKey: 'plugin.akari.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
 ]
 
 export function builtinPlugin(name) {

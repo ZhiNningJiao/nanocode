@@ -302,8 +302,56 @@ describe('personal-config: example linear plugin end-to-end (MES-13824 验收)',
 })
 
 describe('personal-config: PERSONAL_CONFIG_PERMISSIONS mapping', () => {
-  it('declares the five personal.* permission tokens', () => {
+  it('declares the six personal.* permission tokens', () => {
     const keys = Object.keys(PERSONAL_CONFIG_PERMISSIONS).sort()
-    assert.deepEqual(keys, ['personal.aigw', 'personal.claude', 'personal.linear', 'personal.ntfy', 'personal.remote'])
+    assert.deepEqual(keys, ['personal.aigw', 'personal.akari', 'personal.claude', 'personal.linear', 'personal.ntfy', 'personal.remote'])
+  })
+})
+
+describe('personal-config: akari server/lens URLs (MES-14049)', () => {
+  let tmp
+  beforeEach(() => { tmp = fakeHome(); resetPersonalConfigCache() })
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); resetPersonalConfigCache() })
+
+  it('defaults to the documented internal akari server + lens URLs when not declared', () => {
+    const cfg = loadPersonalConfig({ home: tmp })
+    assert.equal(cfg.akari.serverUrl, 'http://10.18.8.55:9481')
+    assert.equal(cfg.akari.lensUrl, 'http://10.18.8.55:9482')
+  })
+
+  it('loads akari.serverUrl + akari.lensUrl from the personal file', () => {
+    writePersonal(tmp, { akari: { serverUrl: 'http://1.2.3.4:9999/', lensUrl: 'http://1.2.3.4:8080' } })
+    const cfg = loadPersonalConfig({ home: tmp })
+    assert.equal(cfg.akari.serverUrl, 'http://1.2.3.4:9999/')
+    assert.equal(cfg.akari.lensUrl, 'http://1.2.3.4:8080')
+  })
+
+  it('ignores non-string / empty akari fields and falls back to the default', () => {
+    writePersonal(tmp, { akari: { serverUrl: '', lensUrl: 123 } })
+    const cfg = loadPersonalConfig({ home: tmp })
+    assert.equal(cfg.akari.serverUrl, 'http://10.18.8.55:9481')
+    assert.equal(cfg.akari.lensUrl, 'http://10.18.8.55:9482')
+  })
+
+  it('projects akari serverUrl + lensUrl IN FULL for personal.akari (not secrets)', () => {
+    writePersonal(tmp, { akari: { serverUrl: 'http://akari.test:9481', lensUrl: 'http://akari.test:9482' } })
+    const cfg = loadPersonalConfig({ home: tmp })
+    const proj = projectForPlugin(cfg, { name: 'akari', permissions: ['network', 'personal.akari'] })
+    assert.equal(proj.akari.serverUrl, 'http://akari.test:9481')
+    assert.equal(proj.akari.lensUrl, 'http://akari.test:9482')
+  })
+
+  it('returns {} (no akari) for a plugin without personal.akari', () => {
+    writePersonal(tmp, { akari: { serverUrl: 'http://akari.test:9481', lensUrl: 'http://akari.test:9482' } })
+    const cfg = loadPersonalConfig({ home: tmp })
+    const proj = projectForPlugin(cfg, { name: 'other', permissions: ['network'] })
+    assert.deepEqual(proj, {})
+  })
+
+  it('resolvePluginSecrets has no akari secrets (URLs are not secrets)', () => {
+    writePersonal(tmp, { akari: { serverUrl: 'http://akari.test:9481', lensUrl: 'http://akari.test:9482' } })
+    const cfg = loadPersonalConfig({ home: tmp })
+    const secrets = resolvePluginSecrets(cfg, { name: 'akari', permissions: ['personal.akari'] })
+    assert.deepEqual(secrets, {})
   })
 })
