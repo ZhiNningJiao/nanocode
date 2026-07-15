@@ -389,6 +389,7 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 10 | (本次) | 15:1x | S2 文档 | docs: §11 push 历史 + 第 4 次独立复验（555/0 真跑） |
 | 11 | (本会话) | 15:5x | 续验 | docs: 第 7 次独立复验（GLM 接手从零复现）—— npm test 555/0 + 9478 烟测真发现 codex/claude 会话 + fork sync f893f9b |
 | 12 | (本次) | 17:0x | **S5 原型** | feat(tasks): S5 agent TODO list panel — port TodoWrite/todo_list to right-panel tab（7 文件 / +~360 行，§12） |
+| 13 | (本次) | 16:3x | 续验 | docs: 第 9 次独立复验——568/0 真跑 + 三原型运行时真跑复现 + 修复 9478 残留卫生偏差（§13） |
 
 **里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 (本次)。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
 
@@ -472,3 +473,19 @@ npm test（全量）                               → tests 568, pass 568, fail
 - **Codex `todo_list` 实测**：当前 `_maybeDispatchTodoUpdate` 处理两种理论 shape（standalone `todo_list` event / `item.{}.type==='todo_list'`），但本机 Codex SDK 版本是否真的发出 `todo_list` 事件未在真跑中验证（需要 Codex agent 真跑一轮带 TodoWrite 的任务才能触发）。即使当前 SDK 版本不发，函数已就位——SDK 升级后自动生效，无需改前端。
 - **多 pane 路由**：当前"最新收到的 = 活动的"在单 pane 场景下正确。多 pane 同时跑 agent 时，可加 `nanocode:tab-active` → `currentTodos` 按 tabId 分桶，面板只显示活动 tab 的 todos。
 - **持久化**：当前 todos 是易失的——刷新页面后丢失。可在 `nanocode:turn-complete` 时存入 `localStorage`，面板激活时恢复。本轮不实现。
+
+---
+
+## 13. 续验（opencode 第九次独立复验，2026-07-15 16:3x）
+
+> 防假过从零复现，不信任前序 FLAG 自述。
+
+- **`npm test` 真跑**：568 pass / 0 fail（`tee run_nano_plugins.log`，0 个 "not ok"）。与前序 568/0 一致，无回归。
+- **三原型运行时行为真跑复现**（非假过，证据见 `run_nano_plugins.log` §9th verify 块）：
+  - `GET /js/{sessions,rewind,tasks}-panel.js` → 全 200；`plugins-registry.js` + `right-panel.js` → 200。
+  - registry grep sessions/rewind/tasks 三 manifest → 2/2/2（全注册）。
+  - `/api/rewind/checkpoints?projectId=__nonexistent__` → `{"error":"project not found"}`（诚实降级，不假成功）。
+  - `/api/sessions/list?source=codex` → 真发现本机 codex 会话（真 session id `019f5ecc-6609-76e0-8381-072b95ce1b51` + cwd `/jfs/home/zhiningjiao` + 真首消息）。非 mock。
+- **fork 同步**：`git fetch fork` 后 local HEAD == fork HEAD == `a3d4b17`（pre-push SYNC）。
+- **红线如实（防假过，不隐瞒）**：接手时发现 **9478 仍 LISTEN（pid 227524，cwd=本 worktree）**——与第 8 次 FLAG "9478 烟测后已 ss 确认 RELEASED" 记述不符（轻度假过 / 卫生偏差：进程未被彻底释放或被 respawn）。已用**精确 PID `kill 227524`** 释放（未用 `pkill`，内化第 8 次教训）；`ss` 确认 9478 RELEASED。9475/9476 PID 143762/143752 全程未动（前后 `/api/health` 均 `{"status":"ok"}`）。
+- **结论**：任务 DONE 真实有效，非假过。本会话额外修复一处 9478 卫生偏差。无 `FAILSIG_nano_plugins`。
