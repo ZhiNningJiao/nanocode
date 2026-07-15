@@ -1128,3 +1128,40 @@ FLAG_nano_plugins 真实有效，非假过。任务 **DONE**——3 原型（S1 
 FLAG_nano_plugins 真实有效，非假过。任务 **DONE**——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，S5 codex 路径已真生效（`extractCodexTodos`=3）；npm test 581/0；三原型运行时行为在 9478 真跑复现（codex 真实会话发现 + claude 真实会话发现 + rewind 诚实降级 + tasks panel 200）；fork 已 push 且与本地一致（`99dfc5c`）；红线 9475/9476 未越（精确 PID kill 197608，无 pkill）；无 FAILSIG。MES-14031 可关。
 
 > 本会话职责：独立从零复验确认非假过（防假过），未新增代码/原型，不制造冗余 scope。不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
+
+---
+
+## 35. 第三十二次独立复验（opencode 全新 session，防假过从零复现，不信前序 FLAG）
+
+> 防假过从零复现，不信任前序 FLAG 自述。本会话为全新 opencode session 独立接手，不读 FLAG 自证、逐项实测。
+
+### 35.1 验证（防假过，证据见 `run_nano_plugins.log` §32nd verify 块）
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 工作树/分支 | `git status` + `git rev-parse HEAD` | `zhining/nano-plugin-proto`，clean |
+| fork 同步 | `git fetch fork` + `ls-remote` + left-right | local == fork == `d1a2977`，`0	0`，接手即同步（无落后） |
+| 产物真实（provenance） | `ls -l` 三原型源 + 模块 | sessions-panel.js 14037B / rewind-panel.js 9312B / tasks-panel.js 7405B；terminal/rewind.js 9766B + terminal/sessions-browser.js 12503B；3 测试文件 7692/3346/5597B，均在 |
+| 全量测试 | `npm test`（本会话重跑，`tee -a run_nano_plugins.log`） | **tests 581 / pass 581 / fail 0 / cancelled 0 / exit 0**，0 个 "not ok"，`# fail 0` |
+| 自检 grep | `tail -200 \| grep -c "^not ok"` + `# fail` | `^not ok` = **0**；`# fail 0`；line 13284 = 一条前序 grep 配置错误回显（`grep config error: unknown encoding`），非测试失败 |
+| 9478 运行时 | `setsid bash -c 'PORT=9478 exec node server/index.js'` boot（PID **236957**）→ `/api/health` | `{"status":"ok"}`；启动日志 0 error |
+| S1 sessions codex 真跑 | `/api/sessions/list?source=codex&limit=1` | 真发现 codex 会话（真 id `019f6501-2882-7161-a2b5-e498a532a6a` + cwd `/jfs/home/zhiningjiao/codex_work/eng1049` + 真首消息 eng1049 spatialhash + 真 jsonl 路径 + cli 0.144.3，total 232），非 mock |
+| S1 sessions claude 真跑 | `/api/sessions/list?source=claude&limit=1` | 真发现 claude 会话（真 id `f260a08e-ed44-446e-a550-245939c58bdb` + cwd `/jfs/home/zhiningjiao`，前导 `/` 保留 = bug1 修复有效，total 1327），非 mock |
+| S2 rewind 真跑 | `/api/rewind/checkpoints?projectId=__nonexistent__&tabId=zzz` | `{"error":"project not found"}` 诚实降级（不假成功） |
+| S5 tasks 真跑 | `/js/tasks-panel.js` + `/js/codex-block-renderer.js \| grep -c extractCodexTodos` | HTTP 200 / 7405B；`extractCodexTodos` = **3**（export 真服务，codex 面板可接收 todo_list 事件） |
+| 三 panel 服务 | `/js/{sessions,rewind,tasks}-panel.js` | 200 / 14037B · 200 / 9312B · 200 / 7405B（byte 数与前序一致，证从本 worktree 真服务） |
+| registry 服务 | `/js/plugins-registry.js \| grep -nE "name: '(sessions\|rewind\|tasks)'"` | 3 manifest 全注册（sessions 行137 / rewind 行158 / tasks 行179） |
+| right-panel 分发 | `grep -nE` right-panel.js `key: '...-panel'` | 3 分发（sessions-panel 行75 / rewind-panel 行80 / tasks-panel 行85）——见 §35.2 |
+| 9478 释放 | 精确 `kill 236957` + `lsof` | 9478 RELEASED（**未用 pkill**，已内化第 8 次教训——只杀 9478 监听进程，绝不碰 9475/9476） |
+| 红线 9475/9476 | PID 跑前后对比 + `/api/health` | 跑前 304142/304108 → 跑后 304142/304108 **不变**（前后均 `{"status":"ok"}`，本会话仅 boot+kill 9478 PID 236957，从未向 9475/9476 发信号） |
+| FAILSIG | `ls FAILSIG_nano_plugins` | 不存在（good） |
+
+### 35.2 right-panel 分发核实（防假过——不信任单一 grep）
+
+初次烟测用 `grep -cE "'sessions'|'rewind'|'tasks'"` 对 `/js/right-panel.js` 返回 **0**，与各前序记的 "三分发=3" 不符。未直接采信前序结论，改为读源文件核实：`LAZY_PLUGINS` 的三个条目用的是**裸标识符键**（`sessions: {` / `rewind: {` / `tasks: {`），键本身无引号，故带引号的 pattern 命中 0 是 pattern 错误而非代码缺陷。改用正确 pattern `grep -nE "key: '(sessions|rewind|tasks)-panel'"` 确认 **3 分发**（sessions-panel 行75 / rewind-panel 行80 / tasks-panel 行85），与各前序一致。此为"防假过不信任单一 grep、读源确认"的一次实操：right-panel 分发真实有效，非回归。
+
+### 35.3 结论
+
+FLAG_nano_plugins 真实有效，非假过。任务 **DONE**——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，S5 codex 路径已真生效（`extractCodexTodos`=3）；npm test 581/0（exit 0）；三原型运行时行为在 9478 真跑复现（codex 真实会话发现 total 232 + claude 真实会话发现 total 1327 + rewind 诚实降级 + tasks panel 200 + right-panel 三分发源码核实）；fork 接手即同步（`d1a2977`，`0	0`）；红线 9475/9476 未越（精确 PID kill 236957，无 pkill，PID 304142/304108 跑前后不变）；无 FAILSIG。MES-14031 可关。
+
+> 本会话职责：独立从零复验确认非假过（防假过），未新增代码/原型，不制造冗余 scope。不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
