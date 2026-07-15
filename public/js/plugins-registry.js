@@ -246,6 +246,21 @@ export const BUILTIN_PLUGINS = [
     builtin: true,
   },
   {
+    // Historian — full-sweep task monitor + waker status panel.
+    // Polls /api/historian/briefing for running tasks, stalled alerts, signal
+    // flags, tmux sessions, and port health. Companion to the native waker
+    // (POST /api/waker/tick). Per HISTORIAN_WAKER.md v4.
+    name: 'historian',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'historian', labelKey: 'plugin.historian.label' },
+    permissions: ['fs.read', 'tmux.read'],
+    descriptionKey: 'plugin.historian.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
     // MES-14049 — akari 检察: a dedicated monitor tab for the self-hosted akari
     // dispatch server. Polls the nanocode same-origin proxy (/api/akari/state)
     // every ≥10s and renders health summary (version/build/dispatch_caps),
