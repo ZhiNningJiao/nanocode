@@ -33,6 +33,11 @@ function setGlobalMuted(v) {
   _globalMuted = v
   try { localStorage.setItem(MUTED_KEY, String(v)) } catch {}
   _updateMuteBtn()
+  // tts.js polls localStorage but cannot observe same-tab writes, so dispatch
+  // an event it listens for: on mute it stops the audio playing *now* + clears
+  // the queue, so the speaker switch actually silences in-progress TTS rather
+  // than only blocking future playback. (MES-14030 mute-fix)
+  document.dispatchEvent(new CustomEvent('nanocode:mute-changed', { detail: { muted: v } }))
 }
 
 function isGlobalMuted() {
