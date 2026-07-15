@@ -165,3 +165,59 @@ Fresh full verification (reproducing reality, not trusting the prior FLAG):
 - Push: `zhining/nano-plugin-akari` fully pushed to `fork/zhining/nano-plugin-akari`
   (no unpushed commits); Linear MES-14049 self-report posted by prior sessions.
 
+## 2026-07-15 17:36 — fresh re-verification (worker-core, not trusting prior FLAG)
+
+"用最新的 akari" live check: `~/code/akari` `origin/main` == `44a1393ff` (the 17:24
+baseline) — akari has NOT advanced, so the plugin is still aligned with the latest
+akari source; no code change needed. Local HEAD `276234c` == fork remote HEAD → push
+current, 0 unpushed; working tree clean.
+
+Reproduced the actual user scenario end-to-end (not trusting the prior FLAG):
+
+- `npm test` → **562 pass / 0 fail** (`run_nano_akari.log`; grep of
+  `RESULT: FAIL|Traceback|Error|FAILED|NaN|NOT FOUND|not ok` hits only subtest
+  *names* containing "Error" — all marked `ok`, `# fail 0`, zero real failures).
+- Live akari 9481 confirmed real + fields match the proxy's documented wire format:
+  - `/api/health` → version 0.7.0, build efb142f1e, dispatch_caps {lane_cap 4,
+    max_vision_workers 6, default_worker_model litellm/SGLang-GLM-5.2},
+    agent_concurrency {in_flight 0, permits_available 4}, provider_fallback true
+  - `/api/lanes` → 200, real lane data `{id,state,is_special,marker,head_short,
+    at_main,occupant,reserved}` — matches akari-proxy.js:25-27 exactly.
+    `/api/fleets` → 404 (nonexistent), so the plugin correctly uses the real
+    equivalent `/api/lanes` endpoint (task allows "或等价端点，以最新 akari 实际 API 为准").
+
+Good smoke (9479 → real akari 9481, started via `PORT=9479 setsid node server/index.js`):
+- `/api/akari/config` → 200 `{serverUrl 9481, lensUrl 9482}` (config-driven defaults)
+- `/api/akari/state` → 200 `reachable:true`; every field **IDENTICAL** to direct
+  `curl 9481` (concurrency `{running 0, peak 2, open_lanes 0}` matches byte-for-byte;
+  4 Free lanes, head d6804691, @main true) — faithful passthrough confirmed
+- `/api/services` → `akari: {status: "up", checkedAt: ...}` (driven by real
+  /api/health probe — task contract "up/down 用 /api/health" satisfied)
+- `/api/services-config` → managed `akari` row `{host 10.18.8.55, port 9481,
+  managed: true, kind: http}` (read-only, derived from live URL)
+- `akari-panel.js` + `akari_harness.html` → HTTP 200 (served)
+- Playwright panel dump: all sections render (Health/Concurrency/Workers/Lanes),
+  **0 console errors**; screenshot `codex_work/nano_akari/akari_panel_good.png`
+  (566×1000, 217KB, fresh 17:34)
+
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`):
+- `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
+- `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
+  "fetch failed" (structured bundle, no thrown error)
+- `/api/services` → `akari: {status: "down"}` after probe cycle
+- Playwright panel: calm "akari server unreachable — the panel will retry quietly
+  and recover automatically" + per-section "fetch failed", **0 console errors (no
+  spam)** — graceful degradation as required
+- screenshot `codex_work/nano_akari/akari_panel_degraded.png` (460×1000, 157KB, fresh 17:36)
+
+**Visual verdict (Team2 Sonnet, headless Read on the fresh PNGs):**
+- good `akari_panel_good.png` → `VERDICT: PASS` — "all six criteria confirmed:
+  Health shows version 0.7.0 and build efb142f1e, caps show agent cap 4 / vision
+  cap 6 / lane cap 4, Concurrency shows running/peak/open lanes, Workers section
+  present, Lanes/Fleet lists 4 lanes, and Lens ↗ jump link is visible."
+- degraded `akari_panel_degraded.png` → `VERDICT: PASS` — "clean 'unreachable'
+  state with 'the panel will retry quietly and recover automatically' and all four
+  sections report 'fetch failed' with no red error spam or stack traces."
+
+Cleanup: 9479/9483 torn down; 9475/9476/9481/9482 untouched throughout.
+
