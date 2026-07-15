@@ -234,3 +234,26 @@ npm test（全量 server/tests/*.test.js） → tests 546, pass 546, fail 0
 - [x] push fork 分支 `zhining/nano-plugin-proto`（不开 PR）
 - [x] 续验（opencode 延续会话独立复验：545/0 fail、9478 真实会话复现、分支已 push、日志干净）— 详见 `run_nano_plugins.log` 末尾 "CONTINUATION VERIFICATION" 段
 - [x] self compact（本会话末尾）
+
+---
+
+## 8. 续验（opencode 第二次独立复验，2026-07-15 12:53）
+
+> 本会话再次独立复验前序 FLAG 是否"假过"。逐项实测，非读 FLAG 自证。
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 产物真实存在 | `ls` + `wc -l` sessions-panel.js/sessions-browser.js/test | 418 / 351 / 82 行，均在 |
+| manifest/分发/路由 | `grep -c` registry/right-panel/routes | 1 / 2 / 6，均命中 |
+| commit 真实 | `git log` 查 2076aeb + 17e9ce2 | 两条均在，工作树 clean |
+| 全量测试 | `npm test`（本会话重跑） | **tests 546 / pass 546 / fail 0 / EXIT=0**（§7 旧记 "545" 系笔误，实测 546 = 545 基线 + 1 回归测试） |
+| fork push | `git ls-remote fork zhining/nano-plugin-proto` vs 本地 HEAD | `f9bb1ff` == `f9bb1ff`，**push 真实** |
+| 9478 运行时 | 临时起 PORT=9478（未动 9475/9476）→ `/api/health` OK | codex total **231**、claude total **1327**（较上轮 1326 +1，系本机新造 claude 会话，非假数据） |
+| 预览真实 | `/api/sessions/preview?source=codex&id=…` | totalTurns **119**，返回真实 assistant 文本（SSH deploy 内容），与 §5 一致 |
+| 面板/清单服务 | `curl /js/sessions-panel.js` + registry | HTTP 200 / 14037 bytes；manifest 1 项 |
+| 路由服务 | `/api/sessions/list` + `/preview` | HTTP 200 / 200 |
+| Linear 自报 | `linear_comment.sh` 查 MES-14031 评论 | 已有 2 条实质自报 + 1 READ |
+| 红线 | 9475/9476 PID 跑前后对比 | 135217 / 135218 不变（未重启）；9478 已停并确认释放 |
+| 日志自检 | grep `FAIL/NaN/NOT FOUND/Error` 本段 | 仅命中一个**通过**的测试名（`ok 3 - output starts with Error: → true`）+ 命令回显；零真实失败 |
+
+**结论**：FLAG_nano_plugins 真实有效，非假过。原型在临时 9478 真跑、真实会话可发现可预览、546 测试全过、fork 分支已 push、Linear 已自报、红线未越。MES-14031 可关。
