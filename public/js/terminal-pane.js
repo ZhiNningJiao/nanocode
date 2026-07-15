@@ -317,49 +317,42 @@ export class TerminalPane {
     let touchActive = false
     let accumDy = 0
 
-    container.addEventListener(
-      'touchstart',
-      (e) => {
-        if (e.touches.length !== 1) return
-        touchStartY = e.touches[0].clientY
-        touchActive = true
-        accumDy = 0
-      },
-      { passive: true }
-    )
+    this._touchStartHandler = (e) => {
+      if (e.touches.length !== 1) return
+      touchStartY = e.touches[0].clientY
+      touchActive = true
+      accumDy = 0
+    }
 
     // MUST be non-passive so we can preventDefault and stop page scroll
-    container.addEventListener(
-      'touchmove',
-      (e) => {
-        if (!touchActive || e.touches.length !== 1) return
+    this._touchMoveHandler = (e) => {
+      if (!touchActive || e.touches.length !== 1) return
 
-        // Always prevent default to stop iOS page scroll
-        e.preventDefault()
+      // Always prevent default to stop iOS page scroll
+      e.preventDefault()
 
-        const dy = touchStartY - e.touches[0].clientY
-        touchStartY = e.touches[0].clientY
+      const dy = touchStartY - e.touches[0].clientY
+      touchStartY = e.touches[0].clientY
 
-        // Accumulate sub-line pixel deltas for smooth scrolling
-        accumDy += dy
-        const cellHeight = container.clientHeight / (this.term.rows || 24) || 17
-        const lines = Math.trunc(accumDy / cellHeight)
-        if (lines !== 0) {
-          this.term.scrollLines(lines)
-          accumDy -= lines * cellHeight
-        }
-      },
-      { passive: false }
-    )
+      // Accumulate sub-line pixel deltas for smooth scrolling
+      accumDy += dy
+      const cellHeight = container.clientHeight / (this.term.rows || 24) || 17
+      const lines = Math.trunc(accumDy / cellHeight)
+      if (lines !== 0) {
+        this.term.scrollLines(lines)
+        accumDy -= lines * cellHeight
+      }
+    }
 
-    container.addEventListener(
-      'touchend',
-      () => {
-        touchActive = false
-        accumDy = 0
-      },
-      { passive: true }
-    )
+    this._touchEndHandler = () => {
+      touchActive = false
+      accumDy = 0
+    }
+
+    this._touchContainer = container
+    container.addEventListener('touchstart', this._touchStartHandler, { passive: true })
+    container.addEventListener('touchmove', this._touchMoveHandler, { passive: false })
+    container.addEventListener('touchend', this._touchEndHandler, { passive: true })
   }
 
   _connect() {
@@ -569,6 +562,14 @@ export class TerminalPane {
     if (this._ws) {
       this._ws.onclose = null
       this._ws.close()
+    }
+    // Clean up touch scroll handlers so they don't leak onto the container
+    // when a block renderer replaces this pane (prevents blocking native scroll)
+    if (this._touchContainer) {
+      this._touchContainer.removeEventListener('touchstart', this._touchStartHandler)
+      this._touchContainer.removeEventListener('touchmove', this._touchMoveHandler)
+      this._touchContainer.removeEventListener('touchend', this._touchEndHandler)
+      this._touchContainer = null
     }
     PANES.delete(this)
     this.term.dispose()
