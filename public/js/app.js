@@ -182,6 +182,13 @@ function showNotifyToast(msg, duration = 6000) {
   el._timer = setTimeout(() => { el.style.opacity = '0' }, duration)
 }
 
+// Reconnect backoff for /ws/notify. A missing/old worker handler makes the
+// proxy return 502 every connect; a fixed 5s retry hammers the (overloaded)
+// worker forever, stealing accept-queue slots from /ws/terminal and /api/*
+// that actually need to work. Exponential backoff up to 5min — when the
+// endpoint comes back online (worker restart picks up extras.js) the next
+// scheduled attempt finds it. (upstream ae19703 改造)
+let _notifyAttempts = 0
 function initNotifyWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const ws = new WebSocket(`${proto}//${location.host}/ws/notify`)
@@ -220,7 +227,13 @@ function initNotifyWs() {
       }
     } catch {}
   }
-  ws.onclose = () => setTimeout(initNotifyWs, 5000)
+  ws.onopen = () => { _notifyAttempts = 0 }
+  ws.onclose = () => {
+    _notifyAttempts++
+    // 5s, 10s, 20s, 40s, 80s, capped at 5min. After ~7 attempts it stays at 5min.
+    const delay = Math.min(5 * 60_000, 5000 * Math.pow(2, Math.min(_notifyAttempts - 1, 6)))
+    setTimeout(initNotifyWs, delay)
+  }
   ws.onerror = () => {}
 }
 
