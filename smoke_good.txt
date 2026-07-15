@@ -2,7 +2,7 @@
 akari
 Lens ↗
 ↻
-http://10.18.8.55:9481 · 10:46
+http://10.18.8.55:9481 · 11:50
 Health
 version
 0.7.0
@@ -29,7 +29,7 @@ Concurrency
 running
 0
 peak
-2
+0
 open lanes
 0
 Workers (0)
@@ -38,16 +38,16 @@ Lanes / Fleet (4)
 id	state	marker	head	@main	occupant	reserved
 0	
 Free
-wf-parallel-2w-smoke:robot:cc5_hd_neutral_base	d6804691	✓	–	
+reconciled	d6804691	✓	–	
 1	
 Free
-wf-parallel-2w-smoke:robot:blender_rigify_basic_human	d6804691	✓	–	
+reconciled	d6804691	✓	–	
 2	
 Free
-wf-parallel-2w-smoke:robot:cc5_hd_neutral_base	d6804691	✓	–	
+reconciled	d6804691	✓	–	
 3	
 Free
-wf-parallel-2w-smoke:robot:blender_rigify_basic_human	d6804691	✓	–	
+reconciled	d6804691	✓	–	
 
-[good] #akari-pane children: 3472 chars
+[good] #akari-pane children: 3512 chars
 [good] console errors: (none)
