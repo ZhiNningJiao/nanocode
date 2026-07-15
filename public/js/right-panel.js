@@ -104,6 +104,11 @@ const LAZY_PLUGINS = {
     render: (m, pane) => m.renderServicesPane(pane),
     reset: (m) => m.resetServicesLoadState(),
   },
+  akari: {
+    key: 'akari-panel', imp: () => import('./akari-panel.js'),
+    render: (m, pane) => m.renderAkariPane(pane),
+    reset: (m) => m.resetAkariLoadState(),
+  },
 }
 
 const DOMAIN_KEY = 'rightPanel:domain'
