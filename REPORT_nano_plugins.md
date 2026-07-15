@@ -2,7 +2,7 @@
 
 > 主人原话：「抄 codex，claude code 桌面端到 nanocode 插件，也可以 glm 安排上。」
 
-分支 `zhining/nano-plugin-proto` · worktree `~/code/wt-nano-plugins` · 原型 commit `2076aeb`
+分支 `zhining/nano-plugin-proto` · worktree `~/code/wt-nano-plugins` · 原型 commit `2076aeb` · bugfix commit `17e9ce2`
 验证日志 `run_nano_plugins.log` · 成功旗 `FLAG_nano_plugins`
 
 ---
@@ -13,7 +13,8 @@
 2. **"值得抄"清单**：12 项，每项含 *特性说明 / nanocode 现状差距 / 用户价值 / 移植难度*。表见 §2。
 3. **移植设计**：按 nanocode 插件形态（`nano-personal-config` 注入模式 + `plugins-registry` 清单 + `right-panel` 懒加载分发 + `routes.js` 数据源 + document CustomEvent 事件总线）给出插件边界 / 事件挂点 / UI 面。见 §3。
 4. **原型（本轮最高价值项 = S1 会话浏览器）**：把 `codex resume`（picker）+ `codex fork` + `claude --resume --fork-session` 移植成 nanocode 右栏 `work` 组 `sessions` 插件。跨源发现本机所有 Codex + Claude Code 历史会话 → 预览末尾几轮 → 一键 fork 进新 tab。10 文件 / 1219 行。
-5. **验证（防假过）**：临时 9478 端口真跑服务器，真实发现 **231 个 codex + 1326 个 claude 会话**，预览返回 119 轮，面板 JS 与 manifest 均正常服务；`npm test` **545 pass / 0 fail**，无回归。证据见 §5 + `run_nano_plugins.log`。
+5. **验证（防假过）**：临时 9478 端口真跑服务器，真实发现 **231 个 codex + 1326 个 claude 会话**，预览返回 119 轮，面板 JS 与 manifest 均正常服务；`npm test` **546 pass / 0 fail**，无回归。证据见 §5 + `run_nano_plugins.log`。
+6. **浏览器实测发现并修复两个真实 bug**（commit `17e9ce2`）：① `claudeSlugToCwd` 丢失绝对路径前导 `/`（`/jfs/home/...`→`jfs/home/...`），导致 cwd 显示错 + fork 按 cwd 永远匹配不到项目；② fork 监听调用了不存在的 `GET /api/projects/:id`（404），静默跳过导航。修复后浏览器实测 fork claude 会话成功跳转 `#/local/skelconv2` + 真造 claude tab + 加载 435 条历史。新增回归测试。详见 §5.1。
 
 为什么选 S1 作为本轮原型：nanocode 的产品定位就是"多项目多 agent 的终端工作区"，**会话的发现与恢复正是它的核心痛点**；而 `codex resume/fork` 是 codex CLI 的旗舰会话命令，"抄 codex"最直接、最合身；且移植边界干净（只读发现 + 复用既有 tab 创建 + 一个 CustomEvent），可在单轮内做到真·可用、真·验证。其余高价值项（Checkpoint/Rewind S2、Diff 审阅 S3）列为后续优先级。
 
@@ -188,8 +189,22 @@ GET /js/plugins-registry.js | rg -c "name: 'sessions'" → 1（manifest 已入�
 **单元 + 全量**：
 ```
 node --test server/tests/sessions-browser.test.js server/tests/plugins-registry.test.js → 31 pass
-npm test（全量 server/tests/*.test.js） → tests 545, pass 545, fail 0
+npm test（全量 server/tests/*.test.js） → tests 546, pass 546, fail 0
 ```
+
+### 5.1 浏览器实测发现并修复的两个 bug（commit `17e9ce2`）
+
+原型代码写完后用 gstack browse 在 9478 真实点击 Sessions 面板做端到端验证，发现两个真实 bug：
+
+1. **`claudeSlugToCwd` 丢失前导 `/`**（`terminal/sessions-browser.js`）：Claude Code 把绝对路径 `/jfs/home/x` 编码为 slug `-jfs-home-x`，每个 `/`（含根 `/`）→`-`。还原应是单次 `replace(/-/g,'/')`；旧代码先 `replace(/^-/,'')` 再替换，丢掉根斜杠 → `jfs/home/x`。后果有二：① Sessions 列表 cwd 显示成错路径；② fork 按 cwd 匹配项目时永远 miss（项目 cwd 是 `/jfs/...`，会话 cwd 变成 `jfs/...`）。
+   - **修复**：单次 `slug.replace(/-/g,'/')`，保留根斜杠。
+   - **回归测试**：`claude session cwd preserves the leading slash (MES-14031 regression)`——遍历真实 claude 会话断言每个 cwd `startsWith('/')`。
+
+2. **fork 监听调用不存在的 `GET /api/projects/:id`（404）**（`public/js/terminal-view.js:~262`）：fork 流程已从 `GET /api/projects` 列表 resolve 出 `project` 对象，但导航时又去 `fetch('/api/projects/'+projectId)`——nanocode 无此路由，404，`.catch(()=>null)` 静默吞掉，**导航被跳过**（fork 的 claude tab 造在不正确的项目下）。
+   - **修复**：删除多余 re-fetch，复用已 resolve 的 `project` 对象（本就带 `ssh_host`+`name`）做导航。
+   - **验证**：浏览器实测点 Fork 一个 claude 会话 → 成功跳转 `http://localhost:9478/#/local/skelconv2` → 真造 claude tab → 服务器日志 `[ws:attach] tabType=claude sessionId=88e4d7c5` + `[history] events=435 hasMore=false`（435 条历史真实加载）。无命令回退降级。
+
+修复后重跑 `npm test` → **546 pass / 0 fail**（原 545 + 1 新回归测试）。
 
 **run_nano_plugins.log 自检**：`rg "fail|not found"` 仅命中 commit subject 中的 "failover" 与 `# fail 0`；无真实失败/NaN/NOT FOUND。
 
@@ -212,7 +227,8 @@ npm test（全量 server/tests/*.test.js） → tests 545, pass 545, fail 0
 - [x] "值得抄"清单 12 项（§2）
 - [x] 移植设计：插件边界 / 事件挂点 / UI 面（§3）
 - [x] 原型 S1 会话浏览器（§4，commit `2076aeb`）
-- [x] 验证：9478 真跑 + 545 测试 pass（§5，`run_nano_plugins.log`）
+- [x] 浏览器实测发现并修复 2 个真实 bug + 回归测试（§5.1，commit `17e9ce2`）
+- [x] 验证：9478 真跑 + 浏览器端到端 + 546 测试 pass（§5 + §5.1，`run_nano_plugins.log`）
 - [x] `FLAG_nano_plugins`（成功旗）
 - [x] Linear MES-14031 自报
 - [x] push fork 分支 `zhining/nano-plugin-proto`（不开 PR）
