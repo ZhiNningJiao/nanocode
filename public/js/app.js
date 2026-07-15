@@ -17,7 +17,7 @@ import {
   getToolFoldLevel, setToolFoldLevel,
   getSubagentPromptVisible, setSubagentPromptVisible,
   getSubagentActivityVisible, setSubagentActivityVisible,
-} from './claude-block-renderer.js'
+} from './claude-block-settings.js'
 import { initI18n, setLang, t } from './i18n.js'
 
 let workspaceReady = false
