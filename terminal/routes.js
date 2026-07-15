@@ -8,12 +8,14 @@ import path, { resolve, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { currentPlatform, listDirectory, listDrives } from './fsbrowse.js'
 import * as sessions from './sessions.js'
-import { createClaudeHistoryService } from './claude-history.js'
+import { createClaudeHistoryService, resolveSessionJsonl } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
 import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary, fetchAigwBudget } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
+import { listSessions, previewSession } from './sessions-browser.js'
+import { buildCheckpoints, rewindConversation } from './rewind.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand, mergePersonalMachines } from './remote.js'
 import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
 import { loadPersonalConfig, projectForPlugin } from './personal-config.js'
@@ -1234,8 +1236,85 @@ export function createTerminalRoutes(store, opts = {}) {
     }
   })
 
-  // ── 需求10 remote machines plugin routes (address book + URI scheme) ───────
+  // ── MES-14031 sessions browser plugin routes (抄 codex resume/fork) ──────────
   //
+  // GET /api/sessions/list?source=codex|claude&limit=  — newest-first session list
+  // GET /api/sessions/preview?source=&id=&file=        — last N turns excerpt
+  //
+  // Read-only discovery of past Codex (~/.codex/sessions) + Claude Code
+  // (~/.claude/projects) sessions so the user can browse, preview, and fork/
+  // resume a previous agent session into a new tab — porting `codex resume`
+  // (picker) and `codex fork` to the nanocode plugin surface.
+
+  router.get('/api/sessions/list', (req, res) => {
+    try {
+      const source = typeof req.query.source === 'string' ? req.query.source : ''
+      const limit = parseInt(req.query.limit, 10) || 50
+      res.json(listSessions({ source, limit }))
+    } catch (err) {
+      console.error('[/api/sessions/list]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/sessions/preview', (req, res) => {
+    try {
+      const source = typeof req.query.source === 'string' ? req.query.source : ''
+      const id = typeof req.query.id === 'string' ? req.query.id : ''
+      const file = typeof req.query.file === 'string' ? req.query.file : ''
+      res.json(previewSession({ source, id, file }))
+    } catch (err) {
+      console.error('[/api/sessions/preview]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── MES-14031 S2 rewind plugin routes (抄 Claude Code checkpointing/rewind) ─
+  //
+  // GET  /api/rewind/checkpoints?projectId=&tabId=  — list user-turn checkpoints
+  // POST /api/rewind/apply   body: { projectId, tabId, toIndex, dryRun? }
+  //   — rewind the conversation jsonl to keep turns 0..toIndex (backup first).
+  //   dryRun=true returns the plan without writing (safe smoke-test path).
+  //
+  // Resolves the tab's jsonl via the same resolveSessionJsonl the history replay
+  // uses, so cross-team / cross-cwd tabs locate the right transcript. Read-only
+  // listing never mutates; apply backs up before truncating + writes atomically.
+  // "Restore code" (file-snapshot rewind) is intentionally NOT faked — see REPORT.
+  router.get('/api/rewind/checkpoints', (req, res) => {
+    try {
+      const project = store.getProject(String(req.query.projectId || ''))
+      if (!project) return res.status(404).json({ error: 'project not found' })
+      const tab = store.getTab ? store.getTab(project.id, String(req.query.tabId || '')) : null
+      if (!tab) return res.status(404).json({ error: 'tab not found' })
+      const { resolvedPath } = resolveSessionJsonl({ store, home, project, tab })
+      if (!resolvedPath) return res.json({ checkpoints: [], totalLines: 0, totalTurns: 0, sessionId: tab.claudeSessionId || '', error: 'no session file for this tab' })
+      res.json(buildCheckpoints(resolvedPath))
+    } catch (err) {
+      console.error('[/api/rewind/checkpoints]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.post('/api/rewind/apply', (req, res) => {
+    try {
+      const projectId = String(req.body?.projectId || '')
+      const tabId = String(req.body?.tabId || '')
+      const toIndex = Number(req.body?.toIndex)
+      const dryRun = !!req.body?.dryRun
+      const project = store.getProject(projectId)
+      if (!project) return res.status(404).json({ error: 'project not found' })
+      const tab = store.getTab ? store.getTab(projectId, tabId) : null
+      if (!tab) return res.status(404).json({ error: 'tab not found' })
+      const { resolvedPath } = resolveSessionJsonl({ store, home, project, tab })
+      if (!resolvedPath) return res.status(404).json({ error: 'no session file for this tab' })
+      res.json(rewindConversation({ jsonlPath: resolvedPath, toIndex, dryRun }))
+    } catch (err) {
+      console.error('[/api/rewind/apply]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+
   // GET    /api/remote/machines          — list address book (+ personal dev machines)
   // POST   /api/remote/machines          — add a machine { alias, peerId, password?, relay?, note? }
   // POST   /api/remote/machines/:id      — update a machine (same body)
