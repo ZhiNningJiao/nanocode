@@ -220,6 +220,84 @@ document.addEventListener('nanocode:resume-session', async (e) => {
   }
 })
 
+// ── Fork session from sessions plugin (MES-14031) ────────────────────────────
+//
+// The sessions-panel dispatches 'nanocode:fork-session' with
+// { source, id, cwd, cmd }. For Claude sessions we create a new claude tab
+// that resumes the same conversation (a "fork" — the original tab keeps its
+// own session; both share the append-only jsonl). For Codex sessions we do
+// NOT call preventDefault — the panel falls back to showing `codex resume <id>`
+// because the codex SDK driver has no tab-creation path to pre-set a thread id.
+
+document.addEventListener('nanocode:fork-session', async (e) => {
+  const { source, id, cwd } = e.detail || {}
+  if (!id || source !== 'claude') return // only Claude is wired for in-tab fork
+  e.preventDefault() // signal handled → panel skips the command fallback
+
+  // Find or create the project for this session's cwd
+  let projectId = currentProjectId
+  let project = null
+  try {
+    if (cwd) {
+      const projects = await fetch('/api/projects').then(r => r.json())
+      project = projects.find(p => p.cwd === cwd)
+      if (!project && currentProjectId) {
+        // cwd not in store but we're in a workspace — try the current project
+        const cur = projects.find(p => p.id === currentProjectId)
+        if (cur && cur.cwd === cwd) project = cur
+      }
+      if (project) {
+        projectId = project.id
+      } else {
+        const name = cwd.split('/').filter(Boolean).pop() || 'fork'
+        project = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, cwd }),
+        }).then(r => r.json())
+        projectId = project?.id || currentProjectId
+      }
+    }
+  } catch (err) {
+    console.warn('[fork-session] project lookup failed', err)
+  }
+  if (!projectId || !tabManager) return
+
+  // Navigate to the project workspace if needed. Reuse the `project` object
+  // resolved above (it already carries ssh_host + name) instead of re-fetching
+  // by id — there is no GET /api/projects/:id route, so that call 404'd and
+  // silently skipped navigation (MES-14031 fix).
+  if (currentProjectId !== projectId && project) {
+    const host = project.ssh_host
+      ? project.ssh_host.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+      : 'local'
+    const base = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed'
+    location.hash = `#/${host}/${base}`
+    await new Promise(resolve => setTimeout(resolve, 300))
+  }
+
+  // Create a new claude tab pre-loaded with this sessionId (a fork/resume)
+  try {
+    const body = { type: 'claude', label: 'fork', claudeSessionId: id }
+    if (cwd) body.claudeSessionCwd = cwd
+    const newTab = await fetch(`/api/projects/${projectId}/tabs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json())
+
+    if (newTab?.id) {
+      tabManager._pendingActiveId = newTab.id
+      if (tabManager.projectId === projectId && tabManager.tabs.some(t => t.id === newTab.id)) {
+        tabManager._pendingActiveId = null
+        tabManager.setActive(newTab.id)
+      }
+    }
+  } catch (err) {
+    console.warn('[fork-session] tab creation failed', err)
+  }
+})
+
 // ── Connect to a tmux session ──────────────────────────────────────────────
 // Dispatched by the agent drawer's tmux browser. Creates a new 'tmux' tab
 // that attaches to the named tmux session via `tmux attach-session`.

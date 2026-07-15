@@ -2049,6 +2049,17 @@ export class ClaudeBlockRenderer {
     // Root D: partial/loading state — input may be partial JSON or null
     const isLoading = opts.loading === true
 
+    // S5 (MES-14031): forward TodoWrite todos to the tasks panel. Dispatch
+    // only when the input is complete (not in loading/partial state) and has
+    // a todos array. The tasks panel listens for nanocode:todo-update and
+    // re-renders. Receiving the same todos twice (partial then final) is
+    // harmless — the panel just replaces with the latest.
+    if (!isLoading && part.name === 'TodoWrite' && part.input && Array.isArray(part.input.todos)) {
+      document.dispatchEvent(new CustomEvent('nanocode:todo-update', {
+        detail: { source: 'claude', tabId: this.tabId, todos: part.input.todos },
+      }))
+    }
+
     // Root F: subagentActivity flag means this tool block belongs to subagent internals
     // (not the prompt sent TO the subagent, but the subagent's own tool calls)
     const isSubagentActivity = opts.subagentActivity === true
