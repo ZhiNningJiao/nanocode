@@ -355,12 +355,20 @@ function tdState(state, attention) {
   return c
 }
 
+// State values aligned to the akari-server serde wire format (NOT guessed):
+//   WorkerState  — #[serde(rename_all = "snake_case")] → running/done/failed/
+//                  cancelled/queued/waiting (worker_status.rs::WorkerState)
+//   LaneState    — #[serde(rename_all = "PascalCase")] → Free/InUse/Finishing/
+//                  Error, with legacy deserialization aliases Idle/Busy/
+//                  AwaitingMerge/Quarantined (lane.rs::LaneState). Both the
+//                  current PascalCase names and the legacy aliases are mapped so
+//                  the colored dot lights up whichever build is deployed.
 function stateClass(s) {
   switch (s) {
-    case 'running': case 'Busy': return 'busy'
-    case 'done': case 'Idle': return 'idle'
-    case 'failed': case 'timed_out': case 'cancelled': case 'Quarantined': return 'bad'
-    case 'queued': case 'AwaitingMerge': return 'wait'
+    case 'running': case 'Busy': case 'InUse': return 'busy'
+    case 'done': case 'Idle': case 'Free': return 'idle'
+    case 'failed': case 'timed_out': case 'cancelled': case 'Quarantined': case 'Error': return 'bad'
+    case 'queued': case 'waiting': case 'AwaitingMerge': case 'Finishing': return 'wait'
     default: return ''
   }
 }
