@@ -1765,6 +1765,79 @@ function setupChatInput() {
     }, 150)
   })
 
+  // ── URL utilities for the toolbar Open URL / Copy URL buttons ──
+  // We can't rely on xterm's WebLinksAddon click (touch hit-area is
+  // unreliable on mobile) or on claude's OSC 52 (clipboard API may be
+  // gated by user-gesture timing across the WS roundtrip). Instead we
+  // scrape the active terminal's buffer for a URL synchronously inside
+  // the user's click event, and act on it from inside that same gesture.
+  const URL_RE = /\bhttps?:\/\/[^\s"'<>(){}|\\^`]+[^\s"'<>(){}|\\^`,.;!?]/g
+
+  function findUrlInTerminal(pane) {
+    // 1. xterm terminal: walk the buffer (visible + scrollback) backwards
+    //    so the URL the user just saw is preferred over older ones.
+    try {
+      const term = pane?.term
+      const buf = term?.buffer?.active
+      if (buf && typeof buf.getLine === 'function') {
+        const lines = []
+        const end = buf.length
+        const start = Math.max(0, end - 200)   // last 200 lines is plenty
+        for (let y = start; y < end; y++) {
+          const line = buf.getLine(y)
+          if (!line) continue
+          lines.push(line.translateToString(true))
+        }
+        // Concatenate AFTER stripping per-line wrap so a URL spanning
+        // multiple visual lines matches as one string.
+        const joined = lines.join('')
+        const matches = joined.match(URL_RE)
+        if (matches && matches.length) return matches[matches.length - 1]
+      }
+    } catch {}
+    // 2. Block-renderer pane: look inside the scroll container's text.
+    try {
+      const scroll = pane?._scroll || pane?.container?.querySelector?.('.cbr-scroll')
+      if (scroll) {
+        const text = scroll.innerText || scroll.textContent || ''
+        const matches = text.match(URL_RE)
+        if (matches && matches.length) return matches[matches.length - 1]
+      }
+    } catch {}
+    return null
+  }
+
+  function flashToolbarBtn(btn, label) {
+    const original = btn.textContent
+    btn.textContent = label
+    btn.disabled = true
+    setTimeout(() => {
+      btn.textContent = original
+      btn.disabled = false
+    }, 900)
+  }
+
+  function copyViaTextarea(text, onSuccess) {
+    // Fallback for browsers that block navigator.clipboard.writeText off
+    // a user gesture, or when run over plain HTTP (clipboard API requires
+    // secure context). Synchronous execCommand still works in most
+    // browsers and runs inside our click handler.
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.setAttribute('readonly', '')
+      ta.style.position = 'fixed'
+      ta.style.top = '-9999px'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      ta.setSelectionRange(0, text.length)
+      const ok = document.execCommand && document.execCommand('copy')
+      document.body.removeChild(ta)
+      if (ok && onSuccess) onSuccess()
+    } catch {}
+  }
+
   // Touch toolbar
   const touchToolbar = document.getElementById('touch-toolbar')
   if (touchToolbar) {
@@ -1833,6 +1906,34 @@ function setupChatInput() {
             activePane.sendRaw('\x1b')
           }
           break
+        case 'open-url':
+        case 'copy-url': {
+          // Bypass everything async / xterm / OSC-related: scrape the
+          // visible screen + scrollback for a URL and act on it now,
+          // inside this synchronous click handler. That keeps us inside
+          // the user-gesture stack so navigator.clipboard.writeText and
+          // window.open are both allowed (Safari and Chrome are strict
+          // about both off-gesture).
+          const url = findUrlInTerminal(activePane)
+          if (!url) {
+            flashToolbarBtn(btn, 'No URL')
+            break
+          }
+          if (action === 'open-url') {
+            try { window.open(url, '_blank', 'noopener,noreferrer') } catch {}
+            flashToolbarBtn(btn, 'Opened')
+          } else {
+            try {
+              navigator.clipboard.writeText(url).then(
+                () => flashToolbarBtn(btn, 'Copied'),
+                () => copyViaTextarea(url, () => flashToolbarBtn(btn, 'Copied')),
+              )
+            } catch {
+              copyViaTextarea(url, () => flashToolbarBtn(btn, 'Copied'))
+            }
+          }
+          break
+        }
       }
       if (document.activeElement === chatInput) chatInput.focus()
     })
