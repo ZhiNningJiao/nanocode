@@ -125,3 +125,35 @@ Fresh independent verification of the entire integration, not trusting prior FLA
 - All three GLM lines are **real work, not fake passes**. The akari proxy faithfully relays live data from 9481; sessions browser discovers real 1559 codex+claude sessions; upstream ports are real cherry-picks from origin.
 - The GLM agents were extremely repetitive — akari had ~20 docs-only re-verification commits, plugins had **46** re-verification iterations. The actual code was correct from early on.
 - No code changes needed in this verification pass — the integration was already complete and functional.
+
+---
+
+## 2026-07-15 21:15 UTC — Input seat bug fix + 9476 redeploy (Team2 Opus, fresh session)
+
+### Input seat bug investigation
+
+**Root cause found**: In `terminal/sessions.js`, `Session.attach()` unconditionally resizes the PTY to the new client's `cols`/`rows` on every attach. When `wake-secretary.py` connects with hardcoded `{cols: 80, rows: 24}`, it shrinks the PTY that the browser was using (e.g. 200x50). The browser's xterm.js still renders at the old size, causing display corruption and making input appear broken.
+
+**Fix (commit `2b3c4f7`)**:
+- Track the first-attached client as `_primaryClient`
+- On attach: only resize the PTY if no other clients are already connected
+- On `resize` messages: only honour from the `_primaryClient` (browser), ignore from short-lived injectors (wake-secretary)
+- On primary client disconnect: promote the next remaining client
+- All clients can still send input (no input lock — the bug was resize-only)
+
+**Tests**: 614/0 pass (no regressions)
+
+### 9476 redeploy
+
+- Old 9476 process (PID 255683) killed
+- New 9476 started from `wt-nano-integration` (commit `2b3c4f7`) with `PORT=9476`
+- **Log moved from `/tmp/nano-9476-integration.log` to `~/code/nano9476.log`** (as requested)
+- Health: `{"status":"ok"}`, akari reachable=true version=0.7.0, services akari=up
+- Sessions: 1559 total discovered
+- All panel JS (akari/sessions/rewind/tasks/tts): 200
+- 9475 (PID 304142) confirmed alive and untouched
+
+### Note for user
+- **If you have an old 9476 browser tab open, refresh it** — the WebSocket connection was broken by the redeploy
+- The input seat fix is only on 9476 (integration build). 9475 still has the old code without the fix
+- To promote to 9475 later, follow the upgrade guide above
