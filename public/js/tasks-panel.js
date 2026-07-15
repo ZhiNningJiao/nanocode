@@ -82,7 +82,12 @@ export function normalizeTodos(rawTodos) {
     if (item == null) return null
     const content =
       item.content || item.title || item.subject || item.text || item.task || ''
-    const rawStatus = item.status || item.state || ''
+    let rawStatus = item.status || item.state || ''
+    // Codex SDK TodoItem is { text, completed: boolean } with no status field —
+    // map the boolean so completed items render as completed (not pending).
+    if (rawStatus === '' && typeof item.completed === 'boolean') {
+      rawStatus = item.completed ? 'completed' : 'pending'
+    }
     const status = STATUS_MAP[String(rawStatus).toLowerCase()] || 'pending'
     const priority = item.priority || ''
     return { content: String(content), status, priority: String(priority) }

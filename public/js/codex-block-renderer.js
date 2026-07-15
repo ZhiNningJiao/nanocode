@@ -359,22 +359,33 @@ const SESSION_INFO_RE = /^[│]\s+(model|directory|permissions):\s+(.*?)\s*[│]
 
 // ── S5: todo_list event → nanocode:todo-update dispatch ───────────────────────
 // The Codex SDK emits structured events for todo list updates. The driver
-// forwards all raw events to the frontend via codex-event. This helper
-// extracts todos from the recognized event shapes and dispatches a
-// CustomEvent for the tasks panel. Shapes handled:
-//   1. { type: 'todo_list', todos: [...] }           — standalone event
-//   2. { type: 'item.started'|'item.completed'|'item.updated', item: { type: 'todo_list', todos: [...] } }
-function _maybeDispatchTodoUpdate(event, tabId) {
-  if (!event) return
-  let todos = null
-  if (event.type === 'todo_list' && Array.isArray(event.todos)) {
-    todos = event.todos
-  } else if (
-    (event.type === 'item.started' || event.type === 'item.completed' || event.type === 'item.updated') &&
-    event.item && event.item.type === 'todo_list' && Array.isArray(event.item.todos)
-  ) {
-    todos = event.item.todos
+// forwards all raw events to the frontend via codex-event (codex-sdk-driver.js).
+// extractCodexTodos pulls the todo array from the recognized event shapes
+// (pure — no DOM — exported for unit testing); _maybeDispatchTodoUpdate wraps
+// it in the nanocode:todo-update CustomEvent for the tasks panel.
+//
+// SDK ThreadItem shape (per @openai/codex-sdk index.d.ts:90-102): a todo_list
+// item arrives inside item.started/updated/completed events as
+//   { type: 'item.started', item: { type: 'todo_list', items: [{ text, completed }] } }
+// The field is `items` (NOT `todos`). Both names are accepted for robustness.
+export function extractCodexTodos(event) {
+  if (!event) return null
+  if (event.type === 'todo_list') {
+    return Array.isArray(event.items) ? event.items
+      : Array.isArray(event.todos) ? event.todos : null
   }
+  if (event.type === 'item.started' || event.type === 'item.completed' || event.type === 'item.updated') {
+    const item = event.item
+    if (item && item.type === 'todo_list') {
+      return Array.isArray(item.items) ? item.items
+        : Array.isArray(item.todos) ? item.todos : null
+    }
+  }
+  return null
+}
+
+function _maybeDispatchTodoUpdate(event, tabId) {
+  const todos = extractCodexTodos(event)
   if (todos) {
     document.dispatchEvent(new CustomEvent('nanocode:todo-update', {
       detail: { source: 'codex', tabId, todos },

@@ -87,6 +87,29 @@ describe('tasks-panel (MES-14031 S5 agent task list / TODO panel)', () => {
       const out = normalizeTodos([{ task: 'from task field', status: 'pending' }])
       assert.equal(out[0].content, 'from task field')
     })
+
+    it('maps Codex SDK TodoItem shape { text, completed: boolean } (MES-14031 S5 codex fix)', () => {
+      // Real @openai/codex-sdk shape per index.d.ts:90-102: TodoItem has no
+      // `status` field, only a `completed` boolean. Must map to completed/pending.
+      const raw = [
+        { text: 'Plan the work', completed: true },
+        { text: 'Write the code', completed: false },
+        { text: 'Run the tests', completed: true },
+      ]
+      const out = normalizeTodos(raw)
+      assert.equal(out.length, 3)
+      assert.equal(out[0].content, 'Plan the work')
+      assert.equal(out[0].status, 'completed')
+      assert.equal(out[1].content, 'Write the code')
+      assert.equal(out[1].status, 'pending')
+      assert.equal(out[2].content, 'Run the tests')
+      assert.equal(out[2].status, 'completed')
+    })
+
+    it('prefers explicit status over Codex completed boolean when both present', () => {
+      const out = normalizeTodos([{ text: 'X', status: 'in_progress', completed: true }])
+      assert.equal(out[0].status, 'in_progress')
+    })
   })
 
   describe('summarizeTodos', () => {
