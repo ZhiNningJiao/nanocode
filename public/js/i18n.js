@@ -290,6 +290,10 @@ const translations = {
     'plugin.tts.desc': 'GPT-SoVITS voice settings: enable, streaming, reference voice.',
     'plugin.services.label': 'Port Health',
     'plugin.services.desc': 'Monitor service port health; add/edit the watched service list.',
+    // akari dispatch inspector (MES-14049)
+    'plugin.akari.label': 'akari',
+    'plugin.akari.desc': 'Inspect the self-hosted akari dispatch server: health, concurrency, workers, fleet lanes.',
+    'plugin.akari.unreachable': 'akari server unreachable — the panel will retry quietly and recover automatically.',
     // Memory viewer plugin (MES-13740 需求7)
     'plugin.memory.label': 'Memory',
     'plugin.memory.desc': 'Browse Claude memory (MEMORY.md + fragments) across teams × projects.',
@@ -739,6 +743,10 @@ const translations = {
     'plugin.tts.desc': 'GPT-SoVITS 语音设置：启用、流式、参考音色。',
     'plugin.services.label': '端口健康',
     'plugin.services.desc': '监控服务端口健康；增删改被监控的服务列表。',
+    // akari 调度检察 (MES-14049)
+    'plugin.akari.label': 'akari',
+    'plugin.akari.desc': '检察自建 akari 调度服务：健康、并发、workers、fleet 车道。',
+    'plugin.akari.unreachable': 'akari 服务不可达——面板将安静重试并自动恢复。',
     // Memory viewer plugin (MES-13740 需求7)
     'plugin.memory.label': 'Memory',
     'plugin.memory.desc': '按 team × 项目浏览 Claude memory（MEMORY.md + 碎片 md）。',
