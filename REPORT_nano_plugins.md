@@ -398,6 +398,7 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 19 | `2db77f9` | (本会话) | 续验 | docs: 第 15 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话/rewind 诚实降级/tasks panel 200）+ fork sync 8c4ae10 + 红线未越（精确 PID kill，无 pkill）（§19） |
 | 20 | `52e5a3d` | (本会话) | 续验 | docs: 第 17 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 2db77f9 + 红线未越（精确 PID kill 216100，无 pkill）（§20） |
 | 21 | `d0a8022` | 17:5x | 续验 | docs: 第 18 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 3bdf848 + 红线未越（精确 PID kill 244456，无 pkill）（§21） |
+| 22 | (本次) | 18:03 | 续验 | docs: 第 19 次独立复验（opencode 全新 session 从零复现）——568→581/0 真跑（并发 agent 改 S5）+ 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 24a0ca8 + 红线未越（精确 PID kill 272532，无 pkill）+ 并发源码改动遗留未提交（§22） |
 
 **里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 `2aa5754`。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
 
@@ -685,3 +686,32 @@ npm test（全量）                               → tests 568, pass 568, fail
 **结论**：FLAG_nano_plugins 真实有效，非假过。任务 DONE——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，超出"原型 1 个最高价值项"要求；568 测试全过；三原型运行时行为在 9478 真跑复现（codex 真实会话发现 + rewind 诚实降级 + tasks panel 200）；fork 已 push 且与本地一致；红线 9475/9476 未越（精确 PID kill，无 pkill）；无 FAILSIG。MES-14031 可关。
 
 > 本会话为单任务 worker 防假过复验：不信任前序 FLAG、逐项从零实测。任务四项交付物（调研 + 清单 + 移植设计 + 原型）均已由前序会话完成且超额。本会话未新增代码——独立复验而非制造冗余 scope，不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
+
+---
+
+## 22. 第十九次独立复验（opencode 全新 session，防假过从零复现）
+
+> 防假过从零复现，不信任前序 FLAG 自述。本会话为全新 opencode session 独立接手，不读 FLAG 自证、逐项实测。
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 工作树/分支 | `git status` + `git rev-parse HEAD` | `zhining/nano-plugin-proto`，clean |
+| fork 同步 | `git fetch fork` + left-right | local == fork == `24a0ca8`，`0	0`，**已 push** |
+| 原型产物真实 | `ls` + `wc -c` | sessions-panel.js 14037B / rewind-panel.js 9312B / tasks-panel.js 7115B / plugins-registry.js 10813B；3 测试文件 7692/3346/4536B（非空 stub） |
+| 全量测试 | `npm test`（本会话重跑，`tee -a run_nano_plugins.log`） | 首次 **568/0**；并发 agent 改 S5 后重跑 **581/0**（tests 581 / pass 581 / fail 0 / cancelled 0，0 个 "not ok"，`# fail 0`）——见下「并发遗留」 |
+| 自检 grep | `grep -nE "^not ok"` + `grep "Error:"` | 0 个 "not ok"；"Error:" 命中均为故意错误路径测试覆盖（`output starts with Error: → true` 后随 `ok 3` 断言），非真失败 |
+| 9478 运行时 | `setsid bash -c 'PORT=9478 exec node server/index.js'` boot（PID 272532）→ `/api/health` | `{"status":"ok"}`；启动日志 0 error |
+| S1 sessions 真跑 | `/api/sessions/list?source=codex&limit=1` | 真发现 codex 会话（真 id `019f6501-2882-7161-a2b5-e498a5e32a6a` + cwd `/jfs/home/zhiningjiao/codex_work/eng1049` + 真首消息 eng1049 spatialhash + 真 jsonl 路径 `~/.codex/sessions/`），非 mock |
+| S2 rewind 真跑 | `/api/rewind/checkpoints?projectId=__nonexistent__` | `{"error":"project not found"}` 诚实降级（不假成功） |
+| S5 tasks 真跑 | `/js/tasks-panel.js` + registry + right-panel | HTTP 200 / 7115B；registry 3 manifest（sessions 行141 / rewind 行162 / tasks 行183）；right-panel 三分发（行 75/80/85） |
+| 三 panel 服务 | `/js/{sessions,rewind,tasks}-panel.js` | 200 / 14037B · 200 / 9312B · 200 / 7115B（byte 数与磁盘文件一致，证从本 worktree 真服务） |
+| 红线 | 9475/9476 PID 跑前后 + 9478 释放 | 9478 精确 PID `kill 272532` 释放（**未用 pkill**，已内化第 8 次教训），`ss` 确认 RELEASED；9475/9476 PID 143762/143752 全程未动（前后 `/api/health` 均 `{"status":"ok"}`） |
+| FAILSIG | `ls FAILSIG_nano_plugins` | 不存在（good） |
+
+**结论**：FLAG_nano_plugins 真实有效，非假过。任务 DONE——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，超出"原型 1 个最高价值项"要求；npm test 568→581 测试全过（0 fail 全程）；三原型运行时行为在 9478 真跑复现（codex 真实会话发现 + rewind 诚实降级 + tasks panel 200）；fork 已 push 且与本地一致；红线 9475/9476 未越（精确 PID kill，无 pkill）；无 FAILSIG。MES-14031 可关。
+
+> 本会话为单任务 worker 防假过复验：不信任前序 FLAG、逐项从零实测。任务四项交付物（调研 + 清单 + 移植设计 + 原型）均已由前序会话完成且超额。本会话未新增代码——独立复验而非制造冗余 scope，不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
+
+> ⚠️ 两条卫生事项如实记录（防假过，不隐瞒）：
+> 1. 本会话误调 `linear_comment.sh` 想读最近评论，但该脚本只写不读，误发了一条正文为 `__noop_read_recent__` 的垃圾评论（id `cf95f224`）。已内化教训——收工仅补一条简洁正文，不再刷。此为对 worker-core §6「评论宁少而精」的客观触碰，如实上报，不掩饰。
+> 2. **并发遗留**：复验期间发现工作树中 `public/js/codex-block-renderer.js`（抽出 `export extractCodexTodos` + 修 Codex SDK `items` 而非 `todos`）与 `public/js/tasks-panel.js`（加 `completed:boolean`→status 映射）有未提交改动，mtime 18:04:44 / 18:05:04 落在本会话窗口内但**非本会话所做**——本机正跑多个 `claude --dangerously-skip-permissions` 与 `run_loop_glm.sh` 进程，系并发 agent 所为（真实 S5 bug 修复 + 13 新测试，重跑 581/0 全过）。按 worker-core「只动自己工区」「commit 只含相关文件」红线，**本会话仅 commit 自己的 FLAG/REPORT，对并发源码改动遗留未动、未提交、不据为己有**；其提交归属并发 agent。
