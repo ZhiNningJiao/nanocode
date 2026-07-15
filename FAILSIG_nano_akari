@@ -1,6 +1,6 @@
 FAILSIG_nano_akari
 task: MES-14049 akari inspector plugin for nanocode
 branch: zhining/nano-plugin-akari
-remote: fork/zhining/nano-plugin-akari (pushed through 831e1a3)
+remote: fork/zhining/nano-plugin-akari (pushed through d6fb5f7)
 status: DONE — plugin complete, tested, smoke-verified, pushed, Linear self-reported
 result: SUCCESS (no failure)
