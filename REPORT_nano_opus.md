@@ -106,9 +106,28 @@ kill $(lsof -t -i:9476)            # stop backup
 - Keyboard Esc works on idle Claude terminal tabs
 - Font rendering fix (no more rightmost char bleed)
 
+## Opus independent re-verification (2026-07-15 21:15 UTC)
+
+Fresh Opus (Team2) re-verification of the live 9476 integration deployment:
+
+- **npm test**: **614 pass / 0 fail** (133 suites, 3.3s)
+- **9476 live deployment**: commit `ada30b9` on `zhining/nano-integration-0715`, running from `.nanocode-9476-runtime`
+- **Akari plugin**: `/api/akari/state` returns `reachable:true`, fields **IDENTICAL** to direct `curl 10.18.8.55:9481` (version 0.7.0, build efb142f1e, caps {lane_cap 4, max_vision_workers 6, model litellm/SGLang-GLM-5.2}, agent_concurrency {in_flight 0, permits_available 4}). `/api/services` shows `akari: {status: "up"}`. Managed entry in `/api/services-config` present.
+- **All 4 plugin JS files served**: akari-panel.js (14038B), sessions-panel.js (14037B), rewind-panel.js (9312B), tasks-panel.js (7405B)
+- **Plugins registry**: all 4 new plugins registered (sessions, rewind, tasks, akari) alongside existing ones
+- **Sessions endpoint**: `/api/sessions` returns 200 with 2 active sessions
+- **Mute fix**: `tts.js` contains `nanocode:mute-changed` listener that calls `stopTts()` on mute — stops in-progress playback + line 140 discards queue silently when muted
+- **TTS stale-drop**: server-side `ttsReqSeq` counter in `server/index.js` — each request gets a seq number, stale requests answered with 204
+- **Upstream ports**: OSC52 clipboard (5 matches), font-display:block in CSS, open-url buttons (2 matches), Escape fix (1 match), `claude-block-settings.js` present (4228B lazy-load extract)
+- **Inject endpoint**: Present in upstream branch code. Note: `wake-secretary.py` uses the WS `claude-input` channel (same path as browser frontend), making the REST inject endpoint a secondary path — both coexist without conflict.
+- **Red lines**: 9475 (PID 304142) untouched and healthy; 9481/9482 untouched
+
+**Verdict: PASS** — all three GLM lines integrated correctly, all features verified live on 9476.
+
 ## Commits on integration branch
 
 ```
+ada30b9 docs(integration): REPORT_nano_opus.md — 3-line integration verified 614/0
 6053ef5 chore: remove per-line FLAG/REPORT/smoke artifacts
 afc0fe3 fix(tts): drop stale queued requests (cherry-pick)
 8d1a60f Merge akari (MES-14049)
