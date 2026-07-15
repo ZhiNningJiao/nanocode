@@ -80,3 +80,50 @@ Replaces external waker.sh + wake-secretary.py. Nanocode owns injection logic; c
 
 ## Commit
 - `94d89ff` — `feat(historian+waker): historian plugin + native waker via tmux`
+
+---
+
+## Independent re-verification — 2026-07-15 22:35 UTC (Opus 4.6, fresh session)
+
+New Opus session independently re-verified the entire integration from scratch.
+
+### Tests
+- `npm test` on `zhining/nano-integration-0715-v2` @ `eda6ce9`: **618 pass / 0 fail**
+- `grep -iE "not ok|# fail [1-9]|MISMATCH|NaN|AssertionError"` clean (only subtest *names* hit)
+
+### Live 9476 smoke (pid 96128 @ `94d89ff`, all functional code present)
+| Endpoint | Result |
+|----------|--------|
+| `/api/health` | 200 `{"status":"ok"}` |
+| `/api/akari/config` | 200 `{serverUrl:9481, lensUrl:9482}` |
+| `/api/akari/state` | 200 `reachable:true` — fields **IDENTICAL** to direct curl 9481 (v0.7.0, build efb142f1e, caps 4/6/4, in_flight 0, permits 4, concurrency 0/2/0) |
+| `/api/historian/briefing` | 200 — 341 loops, 336 stalled, 378 flags, 6 tmux, ports {9475:up 9476:up 9481:up} |
+| `/api/waker/status` | 200 — disabled by default, 0 injections |
+| `/api/waker/config` | 200 — ports [9475,9476,9477,9481] |
+| `/api/services` | akari:up, nanocode:up |
+| `/js/akari-panel.js` | 200 |
+| `/js/historian-panel.js` | 200 |
+| `/js/right-panel.js` | 200 |
+| `/style.css` | 200 |
+| `/` (index) | 200 |
+
+### Akari proxy faithfulness (direct vs proxy, byte-for-byte match)
+- Direct `curl 10.18.8.55:9481/api/health` → v=0.7.0 build=efb142f1e caps={lane_cap:4, max_vision_workers:6, model:litellm/SGLang-GLM-5.2} ac={in_flight:0, permits:4}
+- Proxy `curl 127.0.0.1:9476/api/akari/state` health → **IDENTICAL**
+- Direct concurrency → {running:0, peak:2, open_lanes:0}
+- Proxy concurrency → **IDENTICAL**
+
+### Code review
+- `server/historian.js` (177 lines): clean read-only sweep, proper async, no side effects
+- `server/waker.js` (198 lines): proper gate controls (MIN_GAP, HOURLY_CAP, busy, single-instance lock), tmux + HTTP fallback, disabled by default
+- `public/js/historian-panel.js` (253 lines): structured DOM rendering, 30s poll, proper cleanup
+- Input seat fix (`2b3c4f7`): tracks primary client, only primary can resize PTY
+- Mobile scroll fix (`8ba610c`): properly disposes touch handlers when TerminalPane is replaced
+
+### Push state
+- `zhining/nano-integration-0715-v2` @ `eda6ce9` == fork remote HEAD (0 unpushed)
+- 9476 runtime @ `94d89ff` (2 docs-only commits behind HEAD, all code present)
+- 9475 untouched (pid 304142)
+
+### Verdict
+**PASS** — integration is genuine, complete, tested (618/0), live on 9476, and pushed to fork.
