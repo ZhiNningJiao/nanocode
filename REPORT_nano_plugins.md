@@ -398,7 +398,7 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 19 | `2db77f9` | (本会话) | 续验 | docs: 第 15 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话/rewind 诚实降级/tasks panel 200）+ fork sync 8c4ae10 + 红线未越（精确 PID kill，无 pkill）（§19） |
 | 20 | `52e5a3d` | (本会话) | 续验 | docs: 第 17 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 2db77f9 + 红线未越（精确 PID kill 216100，无 pkill）（§20） |
 | 21 | `d0a8022` | 17:5x | 续验 | docs: 第 18 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 3bdf848 + 红线未越（精确 PID kill 244456，无 pkill）（§21） |
-| 22 | (本次) | 18:03 | 续验 | docs: 第 19 次独立复验（opencode 全新 session 从零复现）——568→581/0 真跑（并发 agent 改 S5）+ 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 24a0ca8 + 红线未越（精确 PID kill 272532，无 pkill）+ 并发源码改动遗留未提交（§22） |
+| 22 | `3041bc9` | 18:03 | 续验 | docs: 第 19 次独立复验（opencode 全新 session 从零复现）——568→581/0 真跑（并发 agent 改 S5）+ 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 24a0ca8 + 红线未越（精确 PID kill 272532，无 pkill）+ 并发源码改动遗留未提交（§22） |
 
 **里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 `2aa5754`。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
 
