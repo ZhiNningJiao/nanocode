@@ -202,6 +202,7 @@ npm test（全量 server/tests/*.test.js） → tests 545, pass 545, fail 0
 3. **S1 改进——codex 真分支 fork**：`codex-sdk-driver.js` 已支持 `client.resumeThread(threadId)`（`:119`）。给 codex tab 创建路径加 `codexThreadId` 预置（仿 claude `claudeSessionId`），让 codex fork 也 `preventDefault` 真造 tab，取代命令回退。
 4. **S7 会话 recap / S8 PR 状态**：低难度，建在 `turn-complete` + jsonl / `gh` 之上，可快速跟进。
 5. **GLM 安排上**：主人提到"也可以 glm 安排上"。S1 已与 AIGW 自建 Kimi 网关解耦——插件本身不依赖模型；后续 S6 `/btw`、S7 recap 这类需要"小模型总结"的插件，可经 `personal.aigw` 权限门 + `resolvePluginSecrets` 调 `litellm/SGLang-Kimi-K2.7-Code` 实现（设计已为其留好接口，见 §3.1）。
+6. **S5 任务清单的具体事件挂点（续验新发现）**：`@openai/codex-sdk` 的 `ThreadItem` 联合已含 `TodoListItem`（`{id, type:"todo_list", items:[{text, completed}]}`，`index.d.ts:90-102`）——codex agent 在发计划/推进时**本就吐结构化 todo 事件**。但 `terminal/codex-sdk-driver.js` 的 `formatCodexEventAsOutput` 只处理 `agent_message`/`command_execution`/`file_change`，**对 `todo_list` 直接丢弃**（无 case）。这是 S5（会话内 checklist 面板）最干净的事件源：在 driver 加一个 `todo_list` 分支 → `codexBroadcastEvent` 透传 → 面板订阅渲染即可，零新数据源、零侵入核心。Claude 侧 `TodoWrite`/`TodoRead` 已在 `claude-block-renderer.js:187-189` 渲染为 tool block，可同口径接一个 `nanocode:todo` CustomEvent。S5 因而有现成双源挂点，建议列为下一轮原型（难度从 M 降为 L）。
 
 ---
 
@@ -215,4 +216,5 @@ npm test（全量 server/tests/*.test.js） → tests 545, pass 545, fail 0
 - [x] `FLAG_nano_plugins`（成功旗）
 - [x] Linear MES-14031 自报
 - [x] push fork 分支 `zhining/nano-plugin-proto`（不开 PR）
-- [ ] self compact（本会话末尾）
+- [x] 续验（opencode 延续会话独立复验：545/0 fail、9478 真实会话复现、分支已 push、日志干净）— 详见 `run_nano_plugins.log` 末尾 "CONTINUATION VERIFICATION" 段
+- [x] self compact（本会话末尾）
