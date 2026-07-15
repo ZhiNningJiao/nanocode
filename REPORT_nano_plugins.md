@@ -1364,3 +1364,34 @@ FLAG_nano_plugins 真实有效，非假过。任务 **DONE**——3 原型（S1 
 
 > 本会话职责：独立从零复验确认非假过（防假过），未新增代码/原型，不制造冗余 scope。不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
 
+---
+
+## 42. 续验（opencode 第四十二次独立复验，2026-07-15）
+
+> opencode 全新 session 独立接手，不信前序 FLAG，逐项从零实测（防假过）。
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 工作树 + 同步 | `git status` + `git fetch fork` + `rev-list --left-right --count` | clean；local HEAD==fork HEAD==`045aebc`；left-right `0	0` SYNC，接手即同步 |
+| 全量测试 | `npm test`（本会话重跑，tee -a run_nano_plugins.log） | **tests 581 / pass 581 / fail 0 / cancelled 0，exit 0** |
+| 日志自检 | `^not ok` / `# fail` / Traceback·MISMATCH·RESULT:FAIL | `^not ok`=0；`# fail 0`；Traceback/MISMATCH/RESULT:FAIL = 0 真实命中 |
+| FAILSIG | `ls FAILSIG_nano_plugins` | 不存在（good） |
+| provenance 源模块 | `wc -l`/`wc -c` | rewind.js 237 行 / sessions-browser.js 351 行 / tasks-panel.js 214 行 / sessions-panel 418 行 / rewind-panel 275 行；byte sessions-panel 14037B / rewind-panel 9312B / tasks-panel 7405B / registry 10813B（与前序逐字节一致） |
+| registry 3 manifest | `grep -cE "name: '(sessions\|rewind\|tasks)'"` plugins-registry.js | **3** |
+| right-panel 三分发 | `grep -cE "(sessions\|rewind\|tasks)-panel"` right-panel.js | **3** |
+| codex todo export | `grep -c extractCodexTodos` codex-block-renderer.js | **3**（S5 codex 修复真生效） |
+| S1 codex 真发现 | 9478 `GET /api/sessions/list?source=codex&limit=1` | total **232**，真 id `019f6501-2882-7161-a2b5-e498a5e32a6a`，cwd `/jfs/home/zhiningjiao/codex_work/eng1049`，真首消息「请读 /jfs/...」，cli `0.144.3`（非 mock） |
+| S1 claude 真发现 | 9478 `GET /api/sessions/list?source=claude&limit=1` | total **1327**，真 id `f260a08e-ed44-446e-a550-245939c58bdb`，cwd `/jfs/home/zhiningjiao`，leadingSlash=**True**（bug1 修复有效，非 mock） |
+| S2 rewind 诚实降级 | 9478 `GET /api/rewind/checkpoints?projectId=__nonexistent__&tabId=zzz` | `{"error":"project not found"}`（不假成功） |
+| S5 tasks panel | 9478 `GET /js/tasks-panel.js` | HTTP 200 / 7405B |
+| 三 panel byte | 9478 `GET /js/{sessions,rewind,tasks}-panel.js` | sessions 14037B / rewind 9312B / tasks 7405B 全 200（与前序一致，证从本 worktree 真服务） |
+| 9478 启动日志 | `grep -i error` boot log | 0 error |
+| 9478 释放 | 精确 `kill 158951` + ss + curl | 9478 RELEASED（**未用 pkill**，已内化第 8 次教训——只杀 9478 监听进程，绝不碰 9475/9476）；curl 9478 → 000 refused |
+| 红线 9475/9476 | PID 跑前后对比 + `/api/health` | 跑前 304142/304108 → 跑后 304142/304108 **不变**（前后均 `{"status":"ok"}`，本会话仅 boot+kill 9478 PID 158951，从未向 9475/9476 发信号） |
+
+### 42.1 结论
+
+FLAG_nano_plugins 真实有效，非假过。任务 **DONE**——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，S5 codex 路径已真生效（`extractCodexTodos`=3）；npm test 581/0（exit 0）；三原型运行时行为在 9478 真跑复现（codex 真会话 019f6501 total 232 + claude 真会话 f260a08e total 1327 前导 `/` 保留 + rewind 诚实降级 + tasks panel 200）；fork 接手即同步（`045aebc`，`0	0`）；红线 9475/9476 未越（精确 PID kill 158951，无 pkill，PID 304142/304108 跑前后不变）；无 FAILSIG。MES-14031 可关。
+
+> 本会话职责：独立从零复验确认非假过（防假过），未新增代码/原型，不制造冗余 scope。不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
+
