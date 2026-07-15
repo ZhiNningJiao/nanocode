@@ -1,12 +1,31 @@
-nano_plugins DONE (MES-14031) — S1 + S2
+nano_plugins DONE (MES-14031) — S1 + S2 + S5
 ============================================
 原型1 (S1): sessions 浏览器插件 (抄 codex resume/fork + claude --resume --fork-session)
 原型2 (S2): rewind 插件 (抄 Claude Code checkpointing/rewind)
+原型3 (S5): tasks 插件 (agent 实时 TODO 列表面板)
 分支: zhining/nano-plugin-proto
   S1 commits: 2076aeb (原型) + 17e9ce2 (bugfix)
   S2 commit:  22c0db0 (rewind 后端+前端+测试+报告)
+  S5 commit:  (本次, tasks 前端+测试+报告)
 worktree: ~/code/wt-nano-plugins
 fork 分支已 push (fork/zhining/nano-plugin-proto, 不开 PR)
+
+S5 验证结果 (run_nano_plugins.log):
+- 9478 烟测: GET / 200 (35473 bytes), plugins-registry.js|grep tasks=1, tasks-panel.js 200,
+  right-panel.js|grep tasks-panel=1, i18n.js|grep tasks.=20, style.css|grep .tk-=23,
+  codex-block-renderer.js|grep _maybeDispatchTodoUpdate=2, claude-block-renderer.js|grep todo-update=2
+- 启动日志无 error
+- npm test: 568 pass / 0 fail (555 S1+S2 + 13 S5, 无回归)
+- tasks-panel.test.js 12 cases: normalizeTodos 10 (Claude/Codex shape, status 映射, 默认值, null 过滤, 类型强转)
+  + summarizeTodos 2 (计数正确 + 空数组)
+- 红线: 9475/9476 PID 86443/85994 未动; 9478 烟测后已释放
+
+S5 设计要点 (防假过):
+- 纯客户端, 零后端路由, 零权限 — 事件总线是已有的 document CustomEvent
+- normalizeTodos 纯函数归一化 Claude/Codex 两源字段差异, export 供单元测试
+- _maybeDispatchTodoUpdate 处理两种理论 shape (standalone todo_list / item.{}.type=todo_list)
+  — SDK 升级后自动生效, 无需改前端
+- "多 pane 路由" + "持久化" 为已记录后续步骤, 不假装支持
 
 S2 验证结果 (run_nano_plugins.log):
 - 9478 烟测: GET /api/rewind/checkpoints + POST /api/rewind/apply 全降级正确

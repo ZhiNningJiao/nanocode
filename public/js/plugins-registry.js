@@ -166,6 +166,26 @@ export const BUILTIN_PLUGINS = [
     builtin: true,
   },
   {
+    // MES-14031 S5 — Tasks: live agent TODO list. Both Claude Code (TodoWrite
+    // tool) and Codex (todo_list structured events) emit task lists during
+    // agent turns. This panel surfaces them as a dedicated right-side tab so
+    // the user can see what the agent is working on at a glance — instead of
+    // scrolling through terminal output to find the latest todo list.
+    // Purely client-side: the block renderers dispatch nanocode:todo-update
+    // CustomEvents; this panel listens and re-renders. No backend route.
+    // Placed in `work` (operates the current agent's task state) alongside
+    // sessions/rewind. No permissions needed — reads only from in-process
+    // events, no fs or network access.
+    name: 'tasks',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'work',
+    tab: { id: 'tasks', labelKey: 'plugin.tasks.label' },
+    permissions: [],
+    descriptionKey: 'plugin.tasks.desc',
+    builtin: true,
+  },
+  {
     // 需求10 — Remote machines: address book that launches the user's *local*
     // native RustDesk client via the `rustdesk://` URI scheme. The server only
     // stores the book (core settings); it bundles no RustDesk code, so AGPL is

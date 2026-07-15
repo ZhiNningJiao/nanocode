@@ -88,6 +88,18 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(v.ok, `sessions manifest invalid: ${v.errors.join('; ')}`)
   })
 
+  it('tasks plugin (MES-14031 S5) declares work group + no permissions', () => {
+    const m = builtinPlugin('tasks')
+    assert.ok(m, 'tasks plugin must be registered')
+    assert.equal(m.group, 'work')
+    assert.equal(m.tab.id, 'tasks')
+    assert.equal(m.apiVersion, PLUGIN_API_VERSION)
+    assert.ok(Array.isArray(m.permissions))
+    assert.equal(m.permissions.length, 0, 'tasks needs no permissions — purely client-side events')
+    const v = validateManifest(m)
+    assert.ok(v.ok, `tasks manifest invalid: ${v.errors.join('; ')}`)
+  })
+
   it('remote plugin (需求10) declares monitor group + network permission', () => {
     const m = builtinPlugin('remote')
     assert.ok(m, 'remote plugin must be registered')
