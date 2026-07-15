@@ -334,10 +334,24 @@ function ttsSerialize(fn) {
 }
 
 // Non-streaming TTS — POST /tts, returns full audio (with retry)
+// Stale-drop: only the NEWEST pending request is synthesized. When requests
+// queue up behind slow inference (or a backlog accumulated while GPT-SoVITS
+// was down), speaking them all in sequence turns the speaker into a log
+// reader. Each request takes a sequence number; by the time its turn in the
+// serial queue arrives, if a newer request has been enqueued it answers 204
+// and is never synthesized.
+let ttsReqSeq = 0
 app.post('/api/tts', (req, res) => {
   const { text } = req.body || {}
   if (!text) return res.status(400).json({ error: 'text required' })
-  ttsSerialize(() => handleTts(req, res))
+  const seq = ++ttsReqSeq
+  ttsSerialize(() => {
+    if (seq !== ttsReqSeq) {
+      if (!res.headersSent) res.status(204).end()
+      return
+    }
+    return handleTts(req, res)
+  })
 })
 
 async function handleTts(req, res) {
