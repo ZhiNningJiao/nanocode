@@ -489,3 +489,26 @@ npm test（全量）                               → tests 568, pass 568, fail
 - **fork 同步**：`git fetch fork` 后 local HEAD == fork HEAD == `a3d4b17`（pre-push SYNC）。
 - **红线如实（防假过，不隐瞒）**：接手时发现 **9478 仍 LISTEN（pid 227524，cwd=本 worktree）**——与第 8 次 FLAG "9478 烟测后已 ss 确认 RELEASED" 记述不符（轻度假过 / 卫生偏差：进程未被彻底释放或被 respawn）。已用**精确 PID `kill 227524`** 释放（未用 `pkill`，内化第 8 次教训）；`ss` 确认 9478 RELEASED。9475/9476 PID 143762/143752 全程未动（前后 `/api/health` 均 `{"status":"ok"}`）。
 - **结论**：任务 DONE 真实有效，非假过。本会话额外修复一处 9478 卫生偏差。无 `FAILSIG_nano_plugins`。
+
+---
+
+## 14. 续验（opencode 第十次独立复验，2026-07-15 16:5x）
+
+> 防假过从零复现，不信任前序 FLAG 自述。本会话为全新 opencode session 独立接手。
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 工作树/分支 | `git status` + `git rev-parse HEAD` | `zhining/nano-plugin-proto`，clean |
+| fork 同步 | `git fetch fork` + `ls-remote` + left-right | local == fork == `4050676`，`0 0`，**已 push** |
+| 产物真实 | `wc -l` 三原型文件 | S1 sessions-panel 418/browser 351/test 82；S2 rewind 237/panel 275/test 184；S5 tasks-panel 209/test 115，均在 |
+| manifest/分发 | `rg -c` registry + right-panel | sessions/rewind/tasks = 1/2/1 注册；sessions/tasks 分发 = 1/1，全命中 |
+| 全量测试 | `npm test`（本会话重跑，`tee -a run_nano_plugins.log`） | **tests 568 / pass 568 / fail 0 / cancelled 0**，0 个 "not ok" |
+| 日志自检 | grep `FAIL/MISMATCH/NaN/NOT FOUND` | 仅命中故意错误路径测试覆盖（ntfy ECONNREFUSED / sanitize fail / AIGW HTTP fail / key 403），各后随 `ok` 断言；零真实失败 |
+| 9478 运行时 | `setsid PORT=9478`（PID 281627）→ `/api/health` OK | 启动日志 0 error |
+| S1 sessions 真跑 | `/api/sessions/list?source=codex&limit=2` + `?source=claude` | codex 真 id `019f5ecc-6609-76e0-8381-072b95ce1b51` + cwd `/jfs/home/zhiningjiao` + 真首消息 + 真 jsonl 路径；claude cwd 前导 `/` 保留（bug1 修复有效）；panel 200/14037B |
+| S2 rewind 真跑 | `/api/rewind/checkpoints?projectId=__nonexistent__` | `{"error":"project not found"}` 诚实降级（不假成功）；panel 200/9312B |
+| S5 tasks 真跑 | `/js/tasks-panel.js` + registry + right-panel | 200/7115B；manifest 1；分发 1 |
+| 红线 | 9475/9476 PID 跑前后对比 + 9478 释放 | 9478 精确 PID `kill 281627` 释放（**未用 pkill**，已内化第 8 次教训），`ss` 确认 RELEASED；9475/9476 PID 143762/143752 全程未动（前后 `/api/health` 均 `{"status":"ok"}`） |
+| Linear 自报 | 查 MES-14031 评论 + 本会话发一条 | 状态 Triage；最新 08:48 第 9 次自报在位；本会话补一条第 10 次独立确认 |
+
+**结论**：FLAG_nano_plugins 真实有效，非假过。任务 DONE——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，超出"原型 1 个最高价值项"要求；568 测试全过；三原型运行时行为在 9478 真跑复现；fork 分支已 push 且与本地一致；红线 9475/9476 未越（精确 PID kill，无 pkill）；Linear 已自报。MES-14031 可关。无 `FAILSIG_nano_plugins`。
