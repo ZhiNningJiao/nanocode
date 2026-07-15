@@ -9,6 +9,7 @@ in a dedicated Monitor tab with gentle 10s polling and graceful degradation.
 - `c58be29` — `feat(akari): add akari inspector plugin for nanocode (MES-14049)` (+1029 lines, 12 files)
 - `eeaedd3` — `fix(akari): stateClass maps PascalCase lane states + waiting worker state` (+58 lines, 3 files)
 - `af77009` — `fix(akari): replace non-existent max_concurrent_workers with agent_concurrency-derived agent cap (MES-14049)` (+33 lines, 4 files)
+- `f6a4871` — `fix(akari): wrap tables in overflow-scroll + truncate marker to fit narrow panel widths (MES-14049)` (+17 lines, 2 files)
 
 **Remote:** `fork/zhining/nano-plugin-akari` → https://github.com/ZhiNningJiao/nanocode.git
 
@@ -369,4 +370,38 @@ Both PNGs valid (`89504e47` magic, fresh 18:46).
 Cleanup: 9479/9483 torn down; 9475/9476/9481/9482/8770 untouched throughout.
 Push: `zhining/nano-plugin-akari` local HEAD == fork remote HEAD (0 unpushed
 before this re-verify commit); this docs commit pushed to fork after the run.
+
+## Re-verify + overflow fix (2026-07-15 18:56)
+
+Fresh independent re-verify (opencode/GLM, not trusting prior FLAG). akari
+origin/main still `fecc9871c` — git diff `efb142f1e..origin/main` on the 6
+API-wire files = EMPTY (plugin aligned with latest akari, no code change).
+
+**Found and fixed a real visual bug:** gemini-3.1-pro visual verdict on the
+fresh 18:53 GOOD-panel PNG flagged **FAIL** — the Lanes/Fleet table (7 nowrap
+columns) overflowed the panel at 460px width, clipping the `@main` column
+header to `@mai`.
+
+**Fix (commit `f6a4871`):**
+- CSS: added `.akari-table-scroll { overflow-x: auto }` wrapper + `.akari-marker
+  { max-width: 130px; text-overflow: ellipsis }` truncation class.
+- JS (`akari-panel.js`): wrapped both the Lanes and Workers tables in the
+  scroll container; applied the marker class to the lane marker cell (with a
+  `title` tooltip preserving the full marker text).
+
+**Post-fix verification:**
+- npm test 562 pass / 0 fail (run_nano_akari.log clean)
+- live smoke 9479→real 9481: `/api/akari/state` reachable=true, fields
+  identical to direct curl 9481 (v0.7.0 build efb142f1e, caps 4/6/4,
+  in-flight 0, permits 4, fallback on, concurrency 0/2/0, 4 Free lanes
+  d6804691 @main); `/api/services` akari=up; 0 console errors
+- degraded 9483→fake 9999: reachable=false, per-section "fetch failed",
+  `/api/services` akari=down, calm unreachable panel, 0 console errors (no spam)
+- gemini-3.1-pro visual verdict on fresh post-fix PNGs: **OVERALL: PASS**
+  (GOOD: PASS — table now fits, `@main` column header fully visible;
+  DEGRADED: PASS)
+
+Push: `f6a4871` pushed to `fork/zhining/nano-plugin-akari`.
+Linear MES-14049 milestone comment posted (83f1d8bb).
+Cleanup: 9479/9483 torn down; 9475/9476/9481/9482/8770 untouched.
 
