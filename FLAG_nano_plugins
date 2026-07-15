@@ -1,20 +1,28 @@
-nano_plugins DONE (MES-14031)
-============================
-原型: sessions 浏览器插件 (抄 codex resume/fork + claude --resume --fork-session)
-分支: zhining/nano-plugin-proto  commits: 2076aeb (原型) + 17e9ce2 (bugfix)
+nano_plugins DONE (MES-14031) — S1 + S2
+============================================
+原型1 (S1): sessions 浏览器插件 (抄 codex resume/fork + claude --resume --fork-session)
+原型2 (S2): rewind 插件 (抄 Claude Code checkpointing/rewind)
+分支: zhining/nano-plugin-proto
+  S1 commits: 2076aeb (原型) + 17e9ce2 (bugfix)
+  S2 commit:  22c0db0 (rewind 后端+前端+测试+报告)
 worktree: ~/code/wt-nano-plugins
 fork 分支已 push (fork/zhining/nano-plugin-proto, 不开 PR)
 
-验证结果 (run_nano_plugins.log):
-- 9478 烟测: 231 codex + 1326 claude 真实会话发现, 预览 119 轮, 面板+manifest 正常服务
-- 浏览器端到端实测: Sessions 列表/预览/Fork 三流均验, 发现并修复 2 个真实 bug
-  bug1: claudeSlugToCwd 丢前导 / (cwd 显示错 + fork 匹配不到项目) → 修复 + 回归测试
-  bug2: fork 调用不存在的 GET /api/projects/:id (404 静默跳过导航) → 复用已 resolve 的 project 对象
-  修复后实测: Fork claude 会话 → 跳转 #/local/skelconv2 + 真造 claude tab + 加载 435 条历史
-- npm test: 546 pass / 0 fail (原 545 + 1 新回归测试, 无回归)
-- 自检 grep: 无 FAIL/MISMATCH/NaN/NOT FOUND
+S2 验证结果 (run_nano_plugins.log):
+- 9478 烟测: GET /api/rewind/checkpoints + POST /api/rewind/apply 全降级正确
+  (bash tab → "no session file" / 不存在 tab → "tab not found" / 不存在 project → "project not found")
+- 启动日志无 error; rewind-panel.js HTTP 200; manifest 入 registry (grep -c 2)
+- npm test: 555 pass / 0 fail (546 S1 + 9 S2, 无回归)
+- rewind.test.js 9 cases: dryRun不写 / 真截断丢尾 / 备份原文件 / 拒绝no-op / 拒绝越界 / 字节保真
+- 红线: 9475/9476 PID 27356/27357 跑前后不变; 9478 已释放
+- 自检 grep: 无 FAIL/NaN/NOT FOUND (仅命中通过测试名)
 
-交付: REPORT_nano_plugins.md (调研12项 + 移植设计 + 原型 + 验证 + bugfix + 后续)
+S2 设计要点 (防假过):
+- 只读列表从不写; apply 先备份 (.rewind-bak.<ts>) 再原子截断 (temp+rename); 永不毁数据
+- 保留原始字节 (不 re-serialize, 测试专验); tool_result user 行不创建假 turn 边界
+- "恢复代码" (per-turn 文件快照) 为已记录后续步骤, 面板明示不假装支持
+
+交付: REPORT_nano_plugins.md §10 (S2 数据流 + 改动清单 + 设计要点 + 验证 + 后续)
 状态: 成功 (无 FAILSIG_nano_plugins)
 
 [续验 2026-07-15 12:53] opencode 第二次独立复验 (防假过): npm test 546/0, fork HEAD==local (f9bb1ff), 9478 真跑 codex 231 + claude 1327 真实会话 + 预览 119 轮, 9475/9476 未动, 日志干净. FLAG 真实有效, 非假过. 详见 REPORT §8.
