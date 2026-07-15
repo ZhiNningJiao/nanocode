@@ -1540,7 +1540,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       console.log(`[ws:attach] projectId=${projectId} tabId=${tabId} tabType=${tabType}`)
 
       if (tabType === 'claude') {
-        const renderMode = store.getSetting('renderMode') || 'block'
+        // Server default MUST match the client default (state.js: 'terminal').
+        // If they diverge, the browser opens a TerminalPane (PTY-protocol JSON
+        // frames) but the server routes the WS to attachClaudeSession (stream-json
+        // events) — protocol mismatch → tab looks "stuck" with both ends alive.
+        const renderMode = store.getSetting('renderMode') || 'terminal'
         if (renderMode === 'terminal') {
           console.log(`[ws:attach] routing claude to PTY raw (renderMode=terminal)`)
         } else {
