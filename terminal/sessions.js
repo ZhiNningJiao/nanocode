@@ -260,8 +260,15 @@ class Session {
     if (history) {
       ws.send(JSON.stringify({ type: 'history', data: history }))
     }
+    const hadClients = this._clients.size > 0
     this._clients.add(ws)
-    if (this._proc && !this._exited) {
+    // Track the primary (first-attached) client. Only the primary may
+    // resize the PTY. A second client (e.g. wake-secretary 80x24) must
+    // NOT shrink the terminal the browser is already using.
+    if (!this._primaryClient || !this._clients.has(this._primaryClient)) {
+      this._primaryClient = ws
+    }
+    if (!hadClients && this._proc && !this._exited) {
       try {
         this._proc.resize(Math.max(1, cols), Math.max(1, rows))
       } catch {
@@ -281,7 +288,10 @@ class Session {
           if (this._proc) this._proc.write(msg.data)
           break
         case 'resize':
-          if (this._proc && !this._exited) {
+          // Only honour resize from the primary client to prevent a
+          // short-lived injector (wake-secretary) from clobbering the
+          // browser's terminal dimensions.
+          if (ws === this._primaryClient && this._proc && !this._exited) {
             const c = Math.max(1, msg.cols || 80)
             const r = Math.max(1, msg.rows || 24)
             try {
@@ -323,6 +333,11 @@ class Session {
    */
   detach(ws) {
     this._clients.delete(ws)
+    if (this._primaryClient === ws) {
+      this._primaryClient = this._clients.size > 0
+        ? this._clients.values().next().value
+        : null
+    }
   }
 
   /**
