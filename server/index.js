@@ -16,6 +16,8 @@ import { createFileRoutes } from '../terminal/files.js'
 import { seedRemoteDefaults } from '../terminal/remote.js'
 import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete, pushNtfyMessage, isNtfyConfigured } from './qa-watcher.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
+import { loadPersonalConfig } from '../terminal/personal-config.js'
+import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntry } from './akari-proxy.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // TTS failures (fetch timeout, connection refused, bad response, stream errors)
@@ -525,6 +527,16 @@ const SERVICE_CHECK_MS = 30_000
 const serviceStatus = {}
 for (const s of watchedServices) serviceStatus[s.name] = { status: 'unknown', checkedAt: null }
 
+// ─── akari dispatch server (MES-14049) ───────────────────────────────────────
+// The akari server URL is personal-config driven (personal.akari.serverUrl /
+// AKARI_SERVER_URL, default http://10.18.8.55:9481). Re-read on each call so an
+// operator URL change propagates without a server restart. The akari row in the
+// Port Health grid is a MANAGED entry (up/down via the real /api/health HTTP
+// probe, not a bare TCP connect) — injected into /api/services-config fresh on
+// every read and never persisted to services-config.json.
+function akariUrls() { return getAkariUrls(loadPersonalConfig()) }
+serviceStatus['akari'] = { status: 'unknown', checkedAt: null }
+
 // ─── Agent manager ───────────────────────────────────────────────────────────
 
 const AGENTS_CONFIG_PATH = path.join(__dirname, 'agents-config.json')
@@ -570,6 +582,17 @@ async function runServiceChecks(broadcast) {
       broadcast({ type: 'service_status', name: svc.name, status, checkedAt })
     }
   }
+  // akari managed entry: up/down via the real /api/health HTTP probe (MES-14049).
+  const { serverUrl } = akariUrls()
+  const prevAk = serviceStatus['akari']?.status
+  const akUp = await checkAkariReachable(serverUrl).catch(() => false)
+  const akStatus = akUp ? 'up' : 'down'
+  const akAt = new Date().toISOString()
+  serviceStatus['akari'] = { status: akStatus, checkedAt: akAt }
+  if (prevAk !== 'unknown' && prevAk !== akStatus) {
+    console.warn(`[health] akari ${prevAk} → ${akStatus}`)
+    broadcast({ type: 'service_status', name: 'akari', status: akStatus, checkedAt: akAt })
+  }
 }
 
 app.get('/api/services', (_req, res) => {
@@ -577,8 +600,34 @@ app.get('/api/services', (_req, res) => {
 })
 
 app.get('/api/services-config', (_req, res) => {
-  res.json({ services: watchedServices, localIPs: getLocalIPs() })
+  // MES-14049: inject the managed akari entry (read-only) derived from the live
+  // akari server URL, so the Port Health grid shows an `akari` row without the
+  // user having to add it and without ever persisting a stale entry.
+  const { serverUrl } = akariUrls()
+  res.json({
+    services: watchedServices,
+    managed: [getAkariServiceEntry(serverUrl)],
+    localIPs: getLocalIPs(),
+  })
 })
+
+// ─── akari dispatch-server proxy (MES-14049) ─────────────────────────────────
+// Same-origin proxy: the browser cannot reach akari directly (no CORS), so the
+// nanocode server proxies the four read-only observability endpoints. The
+// server URL is personal-config driven; /api/akari/config returns it (plus the
+// lens URL for the one-click jump button) and /api/akari/state bundles health +
+// concurrency + workers + lanes for a single gentle poll (≥10s in the panel).
+
+app.get('/api/akari/config', (_req, res) => {
+  const { serverUrl, lensUrl } = akariUrls()
+  res.json({ serverUrl, lensUrl })
+})
+
+app.get('/api/akari/state', asyncWrap(async (_req, res) => {
+  const { serverUrl } = akariUrls()
+  const state = await fetchAkariState(serverUrl)
+  res.json(state)
+}))
 
 app.get('/api/agents', asyncWrap(async (_req, res) => {
   // P1: async handler wrapped with asyncWrap — an unhandled rejection from
