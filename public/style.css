@@ -1904,7 +1904,48 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   border-radius: var(--radius-sm);
 }
 
-/* -- Remote machines plugin (MES-13740 需求10) ------------------- */
+/* -- Rewind plugin (MES-14031 S2 抄 Claude Code checkpointing/rewind) -------- */
+
+.rw-head { padding: var(--s-3) var(--s-3) 0; }
+.rw-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+}
+.rw-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.rw-count { font-size: 12px; color: var(--text-secondary); }
+.rw-body { padding: var(--s-2) var(--s-3); overflow-y: auto; }
+.rw-hint { font-size: 13px; color: var(--text-secondary); padding: var(--s-2) 0; }
+.rw-error { color: var(--warning); }
+.rw-list { display: flex; flex-direction: column; gap: var(--s-2); }
+.rw-row-item {
+  min-height: 44px;                 /* mobile-readable touch target */
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card, var(--bg-elevated, var(--bg-inset, transparent)));
+  cursor: default;
+}
+.rw-row-item:hover { background: var(--bg-hover); }
+.rw-meta { display: flex; align-items: baseline; gap: var(--s-2); margin-bottom: 4px; }
+.rw-turn-label { font-size: 13px; font-weight: 600; }
+.rw-time { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
+.rw-preview {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 4px 0;
+}
+.rw-actions { display: flex; gap: var(--s-2); margin-top: 4px; }
+.rw-code-note { font-size: 11px; color: var(--text-secondary); margin-top: var(--s-3); }
+.rw-error { color: var(--warning); }
+
 
 .rm-info {
   margin-bottom: var(--s-3);

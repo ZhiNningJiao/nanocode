@@ -146,6 +146,26 @@ export const BUILTIN_PLUGINS = [
     builtin: true,
   },
   {
+    // MES-14031 S2 — Rewind: Claude Code desktop's checkpointing/rewind, ported
+    // to nanocode. Every user prompt is a checkpoint; the user can rewind the
+    // conversation to a prior turn, discarding the tail — the recovery path when
+    // an agent goes off track (vs /clear which loses all context). This prototype
+    // delivers CONVERSATION rewind (backup + truncate the jsonl at a turn
+    // boundary); "restore code" (per-turn file snapshots) is the documented next
+    // step, not faked here. Placed in `work` (operates the current agent's
+    // transcript) alongside sessions/compare. fs.write because apply mutates the
+    // jsonl (after a backup); no personal.* secrets needed.
+    name: 'rewind',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'work',
+    tab: { id: 'rewind', labelKey: 'plugin.rewind.label' },
+    permissions: ['fs.read', 'fs.write'],
+    descriptionKey: 'plugin.rewind.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
     // 需求10 — Remote machines: address book that launches the user's *local*
     // native RustDesk client via the `rustdesk://` URI scheme. The server only
     // stores the book (core settings); it bundles no RustDesk code, so AGPL is
