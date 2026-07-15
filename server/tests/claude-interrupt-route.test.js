@@ -142,6 +142,7 @@ done
       { HOME: homeDir, PATH: `${binDir}:${process.env.PATH || ''}` },
       async () => {
         const store = createStore(':memory:')
+        store.setSetting('renderMode', 'block') // block-bridge path; server default is now 'terminal'
         const project = store.createProject('Interrupt Project', projectCwd)
         const tab = store.createTab(project.id, { type: 'claude', label: 'claude interrupt' })
         const { router, handleTerminalWs } = createTerminalRoutes(store)

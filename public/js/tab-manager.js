@@ -10,9 +10,27 @@
  */
 
 import { TerminalPane } from './terminal-pane.js'
-import { ClaudeBlockRenderer } from './claude-block-renderer.js'
-import { CodexBlockRenderer } from './codex-block-renderer.js'
 import { fetchTabs, createTab, deleteTab, patchTab } from './api.js'
+
+// Block renderers (claude-block-renderer.js ~100 KB, codex-block-renderer.js
+// ~59 KB raw — ~41 KB gz combined) are loaded LAZILY. Claude/codex tabs default
+// to the terminal renderer so we don't ship these on cold start; fable5/opencode
+// tabs default to block and lazy-load on first open. Cached once per module
+// after first load. (port of upstream d952583, adapted for fable5/opencode)
+let _claudeBlockPromise = null
+let _codexBlockPromise = null
+function loadClaudeBlock() {
+  if (!_claudeBlockPromise) {
+    _claudeBlockPromise = import('./claude-block-renderer.js').then((m) => m.ClaudeBlockRenderer)
+  }
+  return _claudeBlockPromise
+}
+function loadCodexBlock() {
+  if (!_codexBlockPromise) {
+    _codexBlockPromise = import('./codex-block-renderer.js').then((m) => m.CodexBlockRenderer)
+  }
+  return _codexBlockPromise
+}
 
 const ACTIVE_KEY_PREFIX = 'activeTab:'
 
@@ -385,14 +403,21 @@ export class TabManager {
       },
     }
 
-    // Claude tabs use a DOM block renderer by default (rich text, mobile-friendly).
-    // If the global renderMode setting is 'terminal', use raw PTY instead.
+    // Claude tabs default to the raw PTY (xterm) renderer: the block
+    // renderer requires endpoints (/api/projects/:id/tabs/:tabId/history,
+    // .../queue) that aren't always reachable — e.g. on a worker that
+    // predates the v1.3.0 endpoint surface, or during a hot-deploy where
+    // the running worker hasn't been restarted yet, the block renderer
+    // can't load existing tab state and the user sees a blank pane
+    // (symptom: "existing terminals not loading"); on 9475/9476 dual
+    // active this matters. Opt in via Settings → renderMode = 'block'.
+    // (port of upstream 14f9d03 + e57a1d5 state.js)
     // Codex tabs: separate codexRenderMode setting, defaults to 'terminal' (xterm raw).
     // Set codexRenderMode to 'block' in Settings to opt into CodexBlockRenderer (experimental).
     // 需求11-C: Fable5/opencode tabs use ClaudeBlockRenderer (Block mode, default)
     // via the opencode block driver. fable5RenderMode/opencodeRenderMode='terminal'
     // falls back to raw opencode TUI (PTY/xterm).
-    const renderMode = (() => { try { return window.__nanocodeState?.renderMode || 'block' } catch { return 'block' } })()
+    const renderMode = (() => { try { return window.__nanocodeState?.renderMode || 'terminal' } catch { return 'terminal' } })()
     const codexRenderMode = (() => { try { return window.__nanocodeState?.codexRenderMode || 'terminal' } catch { return 'terminal' } })()
     const fable5RenderMode = (() => { try { return window.__nanocodeState?.fable5RenderMode || 'block' } catch { return 'block' } })()
     const opencodeRenderMode = (() => { try { return window.__nanocodeState?.opencodeRenderMode || 'block' } catch { return 'block' } })()
@@ -401,16 +426,29 @@ export class TabManager {
       (type === 'fable5' && fable5RenderMode !== 'terminal') ||
       (type === 'opencode' && opencodeRenderMode !== 'terminal')
     const useCodexRenderer = type === 'codex' && codexRenderMode === 'block'
-    let pane
-    if (useClaudeRenderer) {
-      pane = new ClaudeBlockRenderer(paneEl, { ...paneOpts, tabType: type })
-    } else if (useCodexRenderer) {
-      pane = new CodexBlockRenderer(paneEl, paneOpts)
-    } else {
-      pane = new TerminalPane(paneEl, paneOpts)
-    }
-
+    // Synchronous default: PTY renderer. Block renderers (~100 KB + ~59 KB
+    // raw, ~41 KB gz combined) load lazily via dynamic import() and swap in
+    // once the module arrives. While the JS streams in, the placeholder
+    // TerminalPane keeps the WS attached so no terminal state is lost; it is
+    // dispose()'d cleanly before the block renderer installs on the same
+    // element. Cold-load delta on the default terminal-mode path: ~41 KB gz
+    // not shipped. (port of upstream d952583)
+    let pane = new TerminalPane(paneEl, paneOpts)
     this.tabs.push({ id, label, type, pane, paneEl, persona: opts.persona || '' })
+
+    if (useClaudeRenderer || useCodexRenderer) {
+      const loader = useClaudeRenderer ? loadClaudeBlock() : loadCodexBlock()
+      loader.then((Cls) => {
+        const tab = this.tabs.find((t) => t.id === id)
+        if (!tab) return
+        try { tab.pane.dispose() } catch {}
+        paneEl.innerHTML = ''
+        const blockOpts = useClaudeRenderer ? { ...paneOpts, tabType: type } : paneOpts
+        tab.pane = new Cls(paneEl, blockOpts)
+      }).catch((err) => {
+        console.error('[tab-manager] failed to load block renderer:', err)
+      })
+    }
     // Track grew; keep the visible position pinned to the active tab.
     this._syncTrackPosition({ noAnim: true })
   }

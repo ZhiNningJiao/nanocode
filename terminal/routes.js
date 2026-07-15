@@ -8,12 +8,14 @@ import path, { resolve, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { currentPlatform, listDirectory, listDrives } from './fsbrowse.js'
 import * as sessions from './sessions.js'
-import { createClaudeHistoryService } from './claude-history.js'
+import { createClaudeHistoryService, resolveSessionJsonl } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
 import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary, fetchAigwBudget } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
+import { listSessions, previewSession } from './sessions-browser.js'
+import { buildCheckpoints, rewindConversation } from './rewind.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand, mergePersonalMachines } from './remote.js'
 import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
 import { loadPersonalConfig, projectForPlugin } from './personal-config.js'
@@ -148,6 +150,98 @@ export function createTerminalRoutes(store, opts = {}) {
     }
     sessions.destroySession(`${req.params.id}:bash:${req.params.tabId}`)
     res.status(204).send()
+  })
+
+  // ── Session inject (localhost-only) ───────────────────────────────────────
+  // POST /api/sessions/:id/inject — inject a user message into an ACTIVE
+  // session's input channel, the server-side equivalent of the WS
+  // 'claude-input' (claude tabs) / 'input' (bash tabs) message. Lets an
+  // external crontab watchdog wake a stuck/idle secretary session: nanocode
+  // --watch restarts kill every internal listener, so an HTTP inject is the
+  // only reliable external wake path.
+  //
+  // SECURITY: localhost only — rejects any non-127.0.0.1 caller with 403,
+  // regardless of token. The route still sits under the global /api token
+  // check, so when auth is enabled the caller must ALSO supply the token.
+  //
+  // :id  — the URL-encoded sessionKey returned by GET /api/sessions
+  //        (shaped `${projectId}:claude:${tabId}` / `...:bash:${tabId}` / ...).
+  // body — { text: string, sendNow?: boolean }
+  //        sendNow=true forces an atomic interrupt+flush if the session is
+  //        mid-turn (mirrors the "立刻发送" button; never kills the process or
+  //        sub-agents). Default false queues behind a running turn.
+  function isLocalhostReq(req) {
+    const ip = req.socket?.remoteAddress || ''
+    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
+  }
+
+  // GET /api/sessions — list active (live-attached) sessions for the inject
+  // workflow. localhost-only so the session registry isn't exposed remotely.
+  router.get('/api/sessions', (req, res) => {
+    if (!isLocalhostReq(req)) {
+      return res.status(403).json({ error: 'forbidden: localhost only' })
+    }
+    const out = []
+    for (const [key, cs] of sessionController.claudeSessions) {
+      const parts = key.split(':')
+      out.push({
+        sessionKey: key,
+        type: 'claude',
+        projectId: parts[0] || null,
+        tabId: parts[2] || null,
+        claudeSessionId: cs.claudeSessionId || null,
+        busy: !!cs.busy,
+        cwd: cs.cwd || null,
+        tabLabel: cs.tabLabel || '',
+      })
+    }
+    for (const [key, cs] of sessionController.codexSessions) {
+      const parts = key.split(':')
+      out.push({
+        sessionKey: key,
+        type: 'codex',
+        projectId: parts[0] || null,
+        tabId: parts[2] || null,
+        busy: !!cs.busy,
+        cwd: cs.cwd || null,
+        tabLabel: cs.tabLabel || '',
+      })
+    }
+    for (const key of sessions.listAllSessionKeys()) {
+      const parts = key.split(':')
+      out.push({ sessionKey: key, type: 'bash', projectId: parts[0] || null, tabId: parts[2] || null })
+    }
+    res.json({ sessions: out })
+  })
+
+  // POST /api/sessions/:id/inject
+  router.post('/api/sessions/:id/inject', (req, res) => {
+    if (!isLocalhostReq(req)) {
+      return res.status(403).json({ error: 'forbidden: localhost only' })
+    }
+    // Express already URL-decodes path params once, so this works whether the
+    // caller sends raw colons (uuid:claude:uuid) or percent-encoded (%3A).
+    const sessionKey = req.params.id
+    const { text, sendNow } = req.body || {}
+    // Claude session (primary use case: secretary wake). Reuses the exact
+    // WS 'claude-input' dispatch path via injectClaudeMessage.
+    const result = sessionController.injectClaudeMessage(sessionKey, text, {
+      sendNow: sendNow === true,
+    })
+    if (result.ok) return res.json(result)
+    // Fall through to bash PTY session: write raw bytes (equivalent to WS
+    // 'input') if such a session exists.
+    if (result.error === 'session not found') {
+      const sess = sessions.get(sessionKey)
+      if (sess && typeof sess.write === 'function') {
+        sess.write(typeof text === 'string' ? text : '')
+        return res.json({ ok: true, sessionKey, type: 'bash', dispatched: true })
+      }
+    }
+    if (result.error === 'empty text') {
+      return res.status(400).json({ ok: false, error: 'empty text' })
+    }
+    res.status(404).json({ ok: false, error: result.error || 'session not found' })
   })
 
   // --- Tab registry (per-project, persisted in store) ---
@@ -1142,8 +1236,85 @@ export function createTerminalRoutes(store, opts = {}) {
     }
   })
 
-  // ── 需求10 remote machines plugin routes (address book + URI scheme) ───────
+  // ── MES-14031 sessions browser plugin routes (抄 codex resume/fork) ──────────
   //
+  // GET /api/sessions/list?source=codex|claude&limit=  — newest-first session list
+  // GET /api/sessions/preview?source=&id=&file=        — last N turns excerpt
+  //
+  // Read-only discovery of past Codex (~/.codex/sessions) + Claude Code
+  // (~/.claude/projects) sessions so the user can browse, preview, and fork/
+  // resume a previous agent session into a new tab — porting `codex resume`
+  // (picker) and `codex fork` to the nanocode plugin surface.
+
+  router.get('/api/sessions/list', (req, res) => {
+    try {
+      const source = typeof req.query.source === 'string' ? req.query.source : ''
+      const limit = parseInt(req.query.limit, 10) || 50
+      res.json(listSessions({ source, limit }))
+    } catch (err) {
+      console.error('[/api/sessions/list]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.get('/api/sessions/preview', (req, res) => {
+    try {
+      const source = typeof req.query.source === 'string' ? req.query.source : ''
+      const id = typeof req.query.id === 'string' ? req.query.id : ''
+      const file = typeof req.query.file === 'string' ? req.query.file : ''
+      res.json(previewSession({ source, id, file }))
+    } catch (err) {
+      console.error('[/api/sessions/preview]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  // ── MES-14031 S2 rewind plugin routes (抄 Claude Code checkpointing/rewind) ─
+  //
+  // GET  /api/rewind/checkpoints?projectId=&tabId=  — list user-turn checkpoints
+  // POST /api/rewind/apply   body: { projectId, tabId, toIndex, dryRun? }
+  //   — rewind the conversation jsonl to keep turns 0..toIndex (backup first).
+  //   dryRun=true returns the plan without writing (safe smoke-test path).
+  //
+  // Resolves the tab's jsonl via the same resolveSessionJsonl the history replay
+  // uses, so cross-team / cross-cwd tabs locate the right transcript. Read-only
+  // listing never mutates; apply backs up before truncating + writes atomically.
+  // "Restore code" (file-snapshot rewind) is intentionally NOT faked — see REPORT.
+  router.get('/api/rewind/checkpoints', (req, res) => {
+    try {
+      const project = store.getProject(String(req.query.projectId || ''))
+      if (!project) return res.status(404).json({ error: 'project not found' })
+      const tab = store.getTab ? store.getTab(project.id, String(req.query.tabId || '')) : null
+      if (!tab) return res.status(404).json({ error: 'tab not found' })
+      const { resolvedPath } = resolveSessionJsonl({ store, home, project, tab })
+      if (!resolvedPath) return res.json({ checkpoints: [], totalLines: 0, totalTurns: 0, sessionId: tab.claudeSessionId || '', error: 'no session file for this tab' })
+      res.json(buildCheckpoints(resolvedPath))
+    } catch (err) {
+      console.error('[/api/rewind/checkpoints]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+  router.post('/api/rewind/apply', (req, res) => {
+    try {
+      const projectId = String(req.body?.projectId || '')
+      const tabId = String(req.body?.tabId || '')
+      const toIndex = Number(req.body?.toIndex)
+      const dryRun = !!req.body?.dryRun
+      const project = store.getProject(projectId)
+      if (!project) return res.status(404).json({ error: 'project not found' })
+      const tab = store.getTab ? store.getTab(projectId, tabId) : null
+      if (!tab) return res.status(404).json({ error: 'tab not found' })
+      const { resolvedPath } = resolveSessionJsonl({ store, home, project, tab })
+      if (!resolvedPath) return res.status(404).json({ error: 'no session file for this tab' })
+      res.json(rewindConversation({ jsonlPath: resolvedPath, toIndex, dryRun }))
+    } catch (err) {
+      console.error('[/api/rewind/apply]', err)
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+
   // GET    /api/remote/machines          — list address book (+ personal dev machines)
   // POST   /api/remote/machines          — add a machine { alias, peerId, password?, relay?, note? }
   // POST   /api/remote/machines/:id      — update a machine (same body)

@@ -858,6 +858,54 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     codexSdkDriver.runCodexTurn(cs, userText, sessionKey, cwd)
   )
 
+  // External inject: write a user message into an ACTIVE claude session's input
+  // channel — the server-side equivalent of the WS 'claude-input' message. Used
+  // by POST /api/sessions/:id/inject (localhost-only) so an external crontab
+  // watchdog can wake a stuck/idle secretary session (nanocode --watch restarts
+  // kill all internal listeners, so an HTTP inject is the only reliable external
+  // wake path). Reuses the EXACT same dispatch path as a real user message —
+  // broadcast the user-echo event, then dispatchClaudeTurn — so there is no
+  // separate code path and no task special-case (red line).
+  //
+  // sendNow mirrors the "立刻发送" WS path: when true AND the session is mid-turn,
+  // atomically interrupt+flush so the injected message lands immediately (force,
+  // but the SDK remaps force to q.interrupt() — never kills the process or
+  // sub-agents, red line). When false (default), a busy session queues the
+  // message behind the running turn like a normal typed message. A watchdog
+  // firing on a stuck secretary should pass sendNow=true.
+  function injectClaudeMessage(sessionKey, text, { sendNow = false } = {}) {
+    const cs = claudeSessions.get(sessionKey)
+    if (!cs) return { ok: false, error: 'session not found' }
+    if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'empty text' }
+    const userEvent = {
+      type: 'user',
+      uuid: randomUUID(),
+      replay_id: buildUserReplayId(text, cs._replayUserTextCounts),
+      message: { role: 'user', content: [{ type: 'text', text }] },
+      _nonce: null,
+    }
+    claudeBroadcast(cs, userEvent)
+    const wasBusy = sendNow === true && cs.busy && !!cs.currentProc
+    dispatchClaudeTurn(cs, text, sessionKey, cs.cwd)
+    if (wasBusy) {
+      try {
+        Promise.resolve(_interruptRunningClaudeTurn(cs, { force: true, andFlush: true })).catch((err) => {
+          console.error(`[claude:inject] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+        })
+      } catch (err) {
+        console.error(`[claude:inject] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+      }
+    }
+    return {
+      ok: true,
+      sessionKey,
+      type: 'claude',
+      claudeSessionId: cs.claudeSessionId || null,
+      busy: !!cs.busy,
+      dispatched: true,
+    }
+  }
+
   function attachClaudeSession(ws, { projectId, tabId, project }) {
     const sessionKey = sessionKeyFor(projectId, tabId)
     let cs = claudeSessions.get(sessionKey)
@@ -1018,6 +1066,15 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       if (ws.readyState === 1) {
         try { ws.send(JSON.stringify({ type: 'claude-event', event })) } catch {}
       }
+    }
+
+    // Send the authoritative busy state so newly-attached (or re-attached) clients
+    // can correct their local thinking-state flag. Without this, a client that
+    // reconnects after a turn completed while it was offline has no way to learn
+    // that the session is idle — its isClaudeThinking stays stuck at true and the
+    // input box is permanently locked (the "desktop can't send" bug).
+    if (ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'busy-state', busy: !!cs.busy })) } catch {}
     }
 
     cs.clients.add(ws)
@@ -1286,6 +1343,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
     }
 
+    // Busy-state sync (same fix as claude sessions — prevents stuck input on reconnect)
+    if (ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'busy-state', busy: !!cs.busy })) } catch {}
+    }
+
     cs.clients.add(ws)
 
     const onMsg = (raw) => {
@@ -1540,7 +1602,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       console.log(`[ws:attach] projectId=${projectId} tabId=${tabId} tabType=${tabType}`)
 
       if (tabType === 'claude') {
-        const renderMode = store.getSetting('renderMode') || 'block'
+        // Server default MUST match the client default (state.js: 'terminal').
+        // If they diverge, the browser opens a TerminalPane (PTY-protocol JSON
+        // frames) but the server routes the WS to attachClaudeSession (stream-json
+        // events) — protocol mismatch → tab looks "stuck" with both ends alive.
+        const renderMode = store.getSetting('renderMode') || 'terminal'
         if (renderMode === 'terminal') {
           console.log(`[ws:attach] routing claude to PTY raw (renderMode=terminal)`)
         } else {
@@ -1682,5 +1748,6 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     setAgentHealthMonitor,
     setClaudeSessionId,
     disposeClaudeSessions,
+    injectClaudeMessage,
   }
 }
