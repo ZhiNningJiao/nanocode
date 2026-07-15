@@ -76,6 +76,11 @@ const LAZY_PLUGINS = {
     render: (m, pane, plugin) => m.renderSessionsPane(pane, plugin),
     reset: (m) => m.resetSessionsLoadState(),
   },
+  rewind: {
+    key: 'rewind-panel', imp: () => import('./rewind-panel.js'),
+    render: (m, pane, plugin) => m.renderRewindPane(pane, plugin),
+    reset: (m) => m.resetRewindLoadState(),
+  },
   remote: {
     key: 'remote-panel', imp: () => import('./remote-panel.js'),
     render: (m, pane) => m.renderRemotePane(pane),
