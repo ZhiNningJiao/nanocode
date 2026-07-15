@@ -365,3 +365,26 @@ rewind.test.js 9 cases 覆盖：① 每条真实 user prompt = 一个检查点 �
 ### 10.5 "恢复代码"后续步骤（不假装，明示）
 
 Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕获工作树状态，rewind 时 `git restore --source=<sha>` 把文件也回退。实现路径（§6.1 已记）：钩 `nanocode:turn-complete`（或新加 turn-start）每轮 `git stash create` 捕获工作树快照 SHA + dirty 文件清单，存于 jsonl 同目录 sidecar；右栏 tab 列时间线，"恢复代码"=`git restore --source=<sha>`。复用 `compare.js` 的 git exec 模式；语义对齐 Claude Code（仅追踪 file-edit，bash 改动不追踪，非版本控制替代）。本轮**不实现**，面板诚实标注 `计划中`。
+
+---
+
+## 11. Push 历史（fork commit 号，热更新要求）
+
+> 热更新指令（2026-07-15）：「推送策略改为每个里程碑立即 `git push fork <本分支>`（一特性/一原型一 commit 一 push），不要攒到收工；REPORT 里记每次 push 的 commit 号。」fork = `ZhiNningJiao/nanocode`，随便推不开 PR。
+
+每行 = 一次 commit + push 到 `fork/zhining/nano-plugin-proto`。`git ls-remote fork zhining/nano-plugin-proto` 确认远端 HEAD 已跟随到表中最新一行。
+
+| # | commit | 时间 | 里程碑 | 内容 |
+|---|---|---|---|---|
+| 1 | `2076aeb` | 11:44:51 | **S1 原型** | feat(plugins): sessions browser plugin — browse/preview/fork Codex+Claude sessions（10 文件 / +1219 行，§4） |
+| 2 | `39c7e83` | 11:50:45 | S1 文档 | docs: REPORT + FLAG — codex/claude desktop survey → sessions plugin design |
+| 3 | `8a19541` | 12:00:24 | S1 文档 | docs: sharpen S5 hook + continuation verification |
+| 4 | `17e9ce2` | 12:51:01 | **S1 bugfix** | fix(sessions): claude cwd leading slash + fork project lookup 404（§5.1，浏览器实测发现并修复 2 个真实 bug + 回归测试） |
+| 5 | `f9bb1ff` | 12:51:46 | S1 文档 | docs: REPORT + FLAG — browser-found bugfix + re-verification |
+| 6 | `3bc5af6` | 12:57:25 | 续验 | docs: 2nd independent re-verification — FLAG validated, not fake-pass（§8） |
+| 7 | `5eaa948` | 13:02:09 | 续验 | docs: 3rd independent re-verification — FLAG confirmed valid（§9） |
+| 8 | `22c0db0` | 15:06:57 | **S2 原型** | feat(rewind): S2 checkpoint/rewind plugin — port Claude Code rewind to nanocode（9 文件 / +~600 行，§10） |
+| 9 | `11983da` | 15:07:36 | S2 文档 | docs: update FLAG with S2 rewind delivery |
+| 10 | (本次) | 15:1x | S2 文档 | docs: §11 push 历史 + 第 4 次独立复验（555/0 真跑） |
+
+**里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
