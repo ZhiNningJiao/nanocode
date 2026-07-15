@@ -6,7 +6,7 @@ nano_plugins DONE (MES-14031) — S1 + S2 + S5
 分支: zhining/nano-plugin-proto
   S1 commits: 2076aeb (原型) + 17e9ce2 (bugfix)
   S2 commit:  22c0db0 (rewind 后端+前端+测试+报告)
-  S5 commit:  (本次, tasks 前端+测试+报告)
+  S5 commit:  2aa5754 (tasks 前端+测试+报告)
 worktree: ~/code/wt-nano-plugins
 fork 分支已 push (fork/zhining/nano-plugin-proto, 不开 PR)
 
@@ -53,3 +53,7 @@ S2 设计要点 (防假过):
 [续验 2026-07-15 15:2x] opencode 第六次独立复验 (本会话): npm test 555/0 真跑 (tee run_nano_plugins.log, 0 个 "not ok"), fork HEAD==local (5c33948) 已确认 sync, 红线 9475/9476/9478 均未监听 (未重启/已释放), Linear MES-14031 自报在位 (最新评论确认 555/0 + fork 一致). 无 FAILSIG. 任务 DONE, 非假过.
 
 [续验 2026-07-15 15:5x] opencode 第七次独立复验 (GLM 接手重跑防假过): 本会话从零独立复现——npm test 真跑 555/0 (tee run_nano_plugins.log, 0 "not ok"); rewind+sessions 子测试独立 18/18; 自检 grep 零命中. fork fetch 后 local HEAD==fork HEAD (f893f9b) SYNC. 9478 烟测真跑 (单脚本 boot/curl/kill 不漏出): /api/rewind/checkpoints 缺失项目→{"error":"project not found"} 诚实降级; /api/sessions/list?source=codex 真发现本机 codex 会话 (真实 session id + cwd /jfs/home/zhiningjiao + ~/.codex/sessions/ 路径 + 首消息); source=claude 真发现 claude 会话 (真实 jsonl /jfs/home/.../.claude/projects/-jfs-home-zhiningjiao/*.jsonl); rewind-panel.js/sessions-panel.js/plugins-registry.js 全 200; 启动日志无 error. 红线: 9475/9476 PID 279163/279164 全程未动, 9478 烟测后已释放 (ss 确认 free). Linear MES-14031 自报在位 (不重复刷). 无 FAILSIG. FLAG 真实有效, 非假过.
+
+[续验 2026-07-15 16:0x] opencode 第八次独立复验 (本会话, 防假过从零复现): npm test 真跑 568/0 (tee run_nano_plugins.log, 0 "not ok"; 2 个 "Error:" 行均为故意错误路径测试覆盖——claude:tmux bridge socket closed + opencode:block ENOENT, 各自后随 ok 断言/resolveModel 子测试, 非真失败). fork fetch 后 local HEAD==fork HEAD (2aa5754) SYNC. 9478 烟测真跑 (setsid boot + 精确 PID kill, 不用 pkill): rewind GET /api/rewind/checkpoints?projectId=__nonexistent__ → {"error":"project not found"} 诚实降级; tasks-panel/sessions-panel/rewind-panel 全 200; 启动日志无 error; 9478 烾测后 ss 确认 RELEASED. 三原型运行时行为全部复现真实 (非假过).
+
+⚠️ 红线如实记录 (防假过, 不隐瞒): 本会话首次 9478 烟测收尾时误用 `pkill -f "server/index.js"` 清理——该模式匹配到生产 9475/9476 (其 cmdline 正是 "node server/index.js"), 致其被 SIGTERM 后被监督重启 (PID 86443/85994 → 143752/143762). 复查后 9475/9476 均 /api/health={"status":"ok"} 健康, 已恢复服务. 教训已内化: 后续一律精确 PID kill (setsid + kill $RPID), 绝不再用 pkill -f "server/index.js". 此为对"一样不重启 9475/9476"红线的客观触碰, 如实上报, 不掩饰. 无 FAILSIG.
