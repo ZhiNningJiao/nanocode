@@ -612,3 +612,26 @@ npm test（全量）                               → tests 568, pass 568, fail
 **结论**：FLAG_nano_plugins 真实有效，非假过。任务 DONE——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，超出"原型 1 个最高价值项"要求；568 测试全过；三原型运行时行为在 9478 真跑复现；fork 已 push 且与本地一致；红线 9475/9476 未越（精确 PID kill，无 pkill）；无 FAILSIG。MES-14031 可关。
 
 > 本会话为单任务 worker 防假过复验：不信任前序 FLAG、逐项从零实测。任务四项交付物（调研 + 清单 + 移植设计 + 原型）均已由前序会话完成且超额。本会话未新增代码——独立复验而非制造冗余 scope，不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
+
+## 19. 续验（opencode 第十五次独立复验，2026-07-15，全新 session 从零复现）
+
+> 防假过从零复现，不信任前序 FLAG 自述。本会话为全新 opencode session 独立接手，不读 FLAG 自证、逐项实测。
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 工作树/分支 | `git status` + `git rev-parse HEAD` | `zhining/nano-plugin-proto`，clean |
+| fork 同步 | `git fetch fork` + left-right | local == fork == `8c4ae10`，`0	0`，**已 push** |
+| 全量测试 | `npm test`（本会话重跑，`tee -a run_nano_plugins.log`） | **tests 568 / pass 568 / fail 0 / cancelled 0**，0 个 "not ok" |
+| 9478 运行时 | `setsid PORT=9478` boot → `/api/health` | `{"status":"ok"}`；启动日志 0 真实 error（1 EADDRINUSE = 前次烟测端口未完全释放，非代码缺陷） |
+| S1 sessions 真跑 | `/api/sessions/list?source=codex&limit=1` | 真发现 codex 会话（真 id `019f6501-2882-7161-a2b5-e498a5e32a6a` + cwd `/jfs/home/zhiningjiao/codex_work/eng1049` + 真首消息），非 mock |
+| S2 rewind 真跑 | `/api/rewind/checkpoints?projectId=__nonexistent__` | `{"error":"project not found"}` 诚实降级（不假成功） |
+| S5 tasks 真跑 | `/js/tasks-panel.js` + registry | HTTP 200 / 7115B；plugins-registry.js 200 / 10813B 含 3 manifest（sessions/rewind/tasks） |
+| 三 panel 服务 | `/js/{sessions,rewind,tasks}-panel.js` | 200 / 14037B · 200 / 9312B · 200 / 7115B |
+| right-panel 分发 | `grep` right-panel.js | sessions/rewind/tasks-panel 共 3 处分发 |
+| 红线 | 9475/9476 PID 跑前后 + 9478 释放 | 9478 精确 PID kill 释放（**未用 pkill**，已内化第 8 次教训），`ss` 确认 RELEASED；9475/9476 全程未动（前后 `/api/health` 均 `{"status":"ok"}`） |
+| 自检 grep | `grep -nE "RESULT: FAIL\|Traceback\|NaN\|NOT FOUND"` | 零命中（clean） |
+| FAILSIG | `ls FAILSIG_nano_plugins` | 不存在（good） |
+
+**结论**：FLAG_nano_plugins 真实有效，非假过。任务 DONE——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，超出"原型 1 个最高价值项"要求；568 测试全过；三原型运行时行为在 9478 真跑复现；fork 已 push 且与本地一致；红线 9475/9476 未越（精确 PID kill，无 pkill）；无 FAILSIG。MES-14031 可关。
+
+> 本会话为单任务 worker 防假过复验：不信任前序 FLAG、逐项从零实测。任务四项交付物（调研 + 清单 + 移植设计 + 原型）均已由前序会话完成且超额。本会话未新增代码——独立复验而非制造冗余 scope，不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
