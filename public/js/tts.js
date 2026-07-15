@@ -188,7 +188,7 @@ function enqueueTts(text) {
 }
 
 function onTerminalOutput(rawData) {
-  if (!ttsEnabled || !ttsAvailable) return
+  if (!ttsEnabled || !ttsAvailable || _isGloballyMuted()) return
   const clean = stripAnsi(rawData)
   if (!clean.trim()) return
   ttsBuffer += clean
@@ -255,6 +255,13 @@ document.addEventListener('nanocode:tts-streaming', (e) => {
   ttsStreaming = !!(e.detail && e.detail.streaming)
   localStorage.setItem('ttsStreaming', ttsStreaming)
   updateTtsUi()
+})
+// app.js setGlobalMuted dispatches this so we react live (it writes localStorage
+// but same-tab writes fire no 'storage' event). On mute we stop the audio that is
+// playing *right now* + drop the queue + cancel pending debounce, so the speaker
+// switch truly silences TTS instead of only blocking future items. (MES-14030)
+document.addEventListener('nanocode:mute-changed', (e) => {
+  if (e.detail && e.detail.muted) stopTts()
 })
 if (ttsSaveBtn) ttsSaveBtn.addEventListener('click', async () => {
   const ref = ttsRefAudioInput?.value?.trim()
