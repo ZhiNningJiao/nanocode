@@ -1223,6 +1223,15 @@ export class ClaudeBlockRenderer {
           cols: 200,
           rows: 50,
         })
+        // Sync thinking state with terminal-view after reconnect. On reconnect,
+        // _thinking was reset to false directly (line above, not via _setThinking),
+        // so terminal-view.js's isClaudeThinking may still be true from before the
+        // disconnect. If the turn completed while we were offline, no live events
+        // will arrive to correct it — the desktop input box stays permanently locked.
+        // Dispatch the current state so terminal-view can self-correct.
+        document.dispatchEvent(new CustomEvent('nanocode:claude-thinking', {
+          detail: { tabId: this.tabId, thinking: this._thinking },
+        }))
       })
       this._startPing()
     }
@@ -1233,6 +1242,14 @@ export class ClaudeBlockRenderer {
 
       if (msg.type === 'claude-event') {
         this._handleEvent(msg.event)
+      } else if (msg.type === 'busy-state') {
+        // Server sends the authoritative busy state on attach. Correct our local
+        // thinking flag to match — this fixes "desktop can't send" when a turn
+        // completed while the WS was disconnected and the client missed the result.
+        const serverBusy = !!msg.busy
+        if (this._thinking !== serverBusy) {
+          this._setThinking(serverBusy)
+        }
       } else if (msg.type === 'pong') {
         // ignore
       } else if (msg.type === 'exit') {

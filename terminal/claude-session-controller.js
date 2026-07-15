@@ -1068,6 +1068,15 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
     }
 
+    // Send the authoritative busy state so newly-attached (or re-attached) clients
+    // can correct their local thinking-state flag. Without this, a client that
+    // reconnects after a turn completed while it was offline has no way to learn
+    // that the session is idle — its isClaudeThinking stays stuck at true and the
+    // input box is permanently locked (the "desktop can't send" bug).
+    if (ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'busy-state', busy: !!cs.busy })) } catch {}
+    }
+
     cs.clients.add(ws)
 
     const onMsg = (raw) => {
@@ -1332,6 +1341,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       if (ws.readyState === 1) {
         try { ws.send(JSON.stringify({ type: 'claude-event', event })) } catch {}
       }
+    }
+
+    // Busy-state sync (same fix as claude sessions — prevents stuck input on reconnect)
+    if (ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'busy-state', busy: !!cs.busy })) } catch {}
     }
 
     cs.clients.add(ws)

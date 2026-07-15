@@ -813,11 +813,13 @@ function setupChatInput() {
     // happen when the WS 'result' event arrives confirming Claude is truly idle.
     updateInputBarForTabType({ skipFlush: true })
 
-    // If switching to a block-agent tab (claude/fable5/opencode-block) that was
-    // sent to background and is still running, restore the thinking UI (stop +
-    // bg buttons) so the user can interact again. 需求15 keystone: widen to
-    // isBlockAgentTab so fable5/opencode Block tabs restore too.
-    if (newTabId && isBlockAgentTab && _bgTabIds.has(newTabId)) {
+    // If switching to a block-agent tab, check the renderer's ground-truth
+    // thinking state to correct any stale isClaudeThinking in terminal-view.
+    // Previously this only checked bg tabs, but the thinking state can also
+    // become stale after a WS reconnect (the renderer resets _thinking=false
+    // directly, without dispatching the event to terminal-view). Checking ALL
+    // block-agent tabs on switch ensures the input bar always reflects reality.
+    if (newTabId && isBlockAgentTab) {
       const tabEntry = tabManager ? tabManager.tabs.find((t) => t.id === newTabId) : null
       const pane = tabEntry?.pane
       const stillRunning = pane && typeof pane.isThinking === 'function' && pane.isThinking()
@@ -829,7 +831,7 @@ function setupChatInput() {
         bgBtn.hidden = false
         sendBtn.hidden = true
         isClaudeThinking = true
-      } else {
+      } else if (_bgTabIds.has(newTabId)) {
         // Turn already completed while in bg — clean up the stale bg flag.
         _clearBgTab(newTabId)
       }
