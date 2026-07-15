@@ -17,7 +17,7 @@ import {
   getToolFoldLevel, setToolFoldLevel,
   getSubagentPromptVisible, setSubagentPromptVisible,
   getSubagentActivityVisible, setSubagentActivityVisible,
-} from './claude-block-renderer.js'
+} from './claude-block-settings.js'
 import { initI18n, setLang, t } from './i18n.js'
 
 let workspaceReady = false
@@ -33,6 +33,11 @@ function setGlobalMuted(v) {
   _globalMuted = v
   try { localStorage.setItem(MUTED_KEY, String(v)) } catch {}
   _updateMuteBtn()
+  // tts.js polls localStorage but cannot observe same-tab writes, so dispatch
+  // an event it listens for: on mute it stops the audio playing *now* + clears
+  // the queue, so the speaker switch actually silences in-progress TTS rather
+  // than only blocking future playback. (MES-14030 mute-fix)
+  document.dispatchEvent(new CustomEvent('nanocode:mute-changed', { detail: { muted: v } }))
 }
 
 function isGlobalMuted() {
@@ -177,6 +182,13 @@ function showNotifyToast(msg, duration = 6000) {
   el._timer = setTimeout(() => { el.style.opacity = '0' }, duration)
 }
 
+// Reconnect backoff for /ws/notify. A missing/old worker handler makes the
+// proxy return 502 every connect; a fixed 5s retry hammers the (overloaded)
+// worker forever, stealing accept-queue slots from /ws/terminal and /api/*
+// that actually need to work. Exponential backoff up to 5min — when the
+// endpoint comes back online (worker restart picks up extras.js) the next
+// scheduled attempt finds it. (upstream ae19703 改造)
+let _notifyAttempts = 0
 function initNotifyWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const ws = new WebSocket(`${proto}//${location.host}/ws/notify`)
@@ -215,7 +227,13 @@ function initNotifyWs() {
       }
     } catch {}
   }
-  ws.onclose = () => setTimeout(initNotifyWs, 5000)
+  ws.onopen = () => { _notifyAttempts = 0 }
+  ws.onclose = () => {
+    _notifyAttempts++
+    // 5s, 10s, 20s, 40s, 80s, capped at 5min. After ~7 attempts it stays at 5min.
+    const delay = Math.min(5 * 60_000, 5000 * Math.pow(2, Math.min(_notifyAttempts - 1, 6)))
+    setTimeout(initNotifyWs, delay)
+  }
   ws.onerror = () => {}
 }
 
@@ -498,7 +516,7 @@ const fable5RenderModeSaveBtn = document.getElementById('fable5-render-mode-save
 const fable5RenderModeStatusEl = document.getElementById('fable5-render-mode-status')
 
 function loadRenderModeSettings(serverSettings) {
-  const mode = (serverSettings?.renderMode) || 'block'
+  const mode = (serverSettings?.renderMode) || 'terminal'
   const radios = renderModeGroup?.querySelectorAll('input[name="render-mode"]')
   if (radios) {
     for (const radio of radios) radio.checked = radio.value === mode

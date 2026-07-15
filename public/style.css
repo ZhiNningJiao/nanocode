@@ -21,7 +21,16 @@
   font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 400 600;
-  font-display: swap;
+  /* `block` instead of `swap`: xterm measures the monospace cell width
+     ONCE at init and never re-measures on a font swap. With `swap`, the
+     fallback mono is used while the webfont loads, xterm computes cols
+     against the fallback's cellWidth, then the real font swaps in wider
+     and (cols × newCellWidth) overshoots the pane — the rightmost char
+     of every line clips. With `block` the browser holds text ~3 s for
+     the webfont; locally-served woff2 loads in <100 ms so users never
+     see the block period, but xterm's initial cellWidth is always
+     measured against the correct font. (port of upstream 70fd3c8) */
+  font-display: block;
   src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
@@ -1714,7 +1723,334 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   tab-size: 4;
 }
 
-/* -- Remote machines plugin (MES-13740 需求10) ------------------- */
+/* -- Sessions plugin (MES-14031 抄 codex resume/fork) ------------------- */
+
+.ses-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ses-row {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.ses-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.ses-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ses-limit { flex: 0 0 auto; max-width: 120px; }
+.ses-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.ses-hint {
+  margin: auto;
+  padding: var(--s-4);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.ses-error { color: var(--warning); }
+.ses-count {
+  padding: var(--s-2) var(--s-3);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.ses-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: 0 var(--s-2) var(--s-3);
+}
+.ses-row-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card, transparent);
+  cursor: pointer;
+}
+.ses-row-card:hover { background: var(--bg-hover); }
+.ses-row-card.active {
+  border-color: var(--border-active, var(--border));
+  background: var(--bg-card);
+}
+.ses-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.ses-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset, var(--bg-hover));
+  color: var(--text-secondary);
+}
+.ses-badge-codex { background: rgba(16, 163, 127, 0.15); color: #10a37f; }
+.ses-badge-claude { background: rgba(217, 119, 6, 0.15); color: #d97706; }
+.ses-ts {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+.ses-cwd {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  word-break: break-all;
+  line-height: 1.4;
+}
+.ses-msg {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ses-card-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+.ses-card-actions {
+  display: flex;
+  gap: var(--s-2);
+  margin-top: 2px;
+}
+.ses-fork-btn { font-weight: 600; }
+.ses-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ses-preview-crumb {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.ses-preview-meta {
+  padding: var(--s-2) var(--s-3);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  word-break: break-all;
+}
+.ses-turns {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s-2) var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.ses-turn {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-start;
+}
+.ses-turn-role { font-size: 16px; flex-shrink: 0; line-height: 1.4; }
+.ses-turn-text {
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+.ses-turn-assistant .ses-turn-text { color: var(--text-secondary); }
+.ses-fork-bar {
+  display: flex;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ses-cmd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: var(--s-2) var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  background: var(--bg-inset, var(--bg-hover));
+  border-radius: var(--radius-sm);
+}
+
+/* -- Rewind plugin (MES-14031 S2 抄 Claude Code checkpointing/rewind) -------- */
+
+.rw-head { padding: var(--s-3) var(--s-3) 0; }
+.rw-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+}
+.rw-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.rw-count { font-size: 12px; color: var(--text-secondary); }
+.rw-body { padding: var(--s-2) var(--s-3); overflow-y: auto; }
+.rw-hint { font-size: 13px; color: var(--text-secondary); padding: var(--s-2) 0; }
+.rw-error { color: var(--warning); }
+.rw-list { display: flex; flex-direction: column; gap: var(--s-2); }
+.rw-row-item {
+  min-height: 44px;                 /* mobile-readable touch target */
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card, var(--bg-elevated, var(--bg-inset, transparent)));
+  cursor: default;
+}
+.rw-row-item:hover { background: var(--bg-hover); }
+.rw-meta { display: flex; align-items: baseline; gap: var(--s-2); margin-bottom: 4px; }
+.rw-turn-label { font-size: 13px; font-weight: 600; }
+.rw-time { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
+.rw-preview {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 4px 0;
+}
+.rw-actions { display: flex; gap: var(--s-2); margin-top: 4px; }
+.rw-code-note { font-size: 11px; color: var(--text-secondary); margin-top: var(--s-3); }
+.rw-error { color: var(--warning); }
+
+
+/* -- Tasks plugin (MES-14031 S5 — agent task list / TODO panel) ------------ */
+
+.tk-head { padding: var(--s-3) var(--s-3) 0; }
+.tk-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+  min-height: 44px;
+}
+.tk-summary-text { font-size: 12px; color: var(--text-secondary); }
+.tk-source-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg-inset, var(--bg-hover));
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.tk-body { padding: var(--s-2) var(--s-3); overflow-y: auto; }
+.tk-hint { font-size: 13px; color: var(--text-secondary); padding: var(--s-2) 0; }
+.tk-list { display: flex; flex-direction: column; gap: var(--s-1); }
+.tk-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  min-height: 44px;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card, var(--bg-elevated, var(--bg-inset, transparent)));
+}
+.tk-row:hover { background: var(--bg-hover); }
+.tk-row.tk-completed { opacity: 0.6; }
+.tk-row.tk-completed .tk-text { text-decoration: line-through; }
+.tk-row.tk-in_progress {
+  border-color: var(--accent, var(--info, #4a9));
+  background: color-mix(in srgb, var(--accent, #4a9) 8%, transparent);
+}
+.tk-row.tk-blocked { border-color: var(--warning); }
+.tk-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tk-completed .tk-icon { color: var(--success, #4a9); }
+.tk-in_progress .tk-icon { color: var(--accent, var(--info, #4a9)); }
+.tk-pending .tk-icon { color: var(--text-secondary); }
+.tk-blocked .tk-icon { color: var(--warning); }
+.tk-text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.tk-priority {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.04em;
+}
+.tk-pri-high { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.tk-pri-medium { color: var(--text-secondary); background: var(--bg-inset, var(--bg-hover)); }
+.tk-pri-low { color: var(--text-secondary); background: transparent; }
+
+/* ── historian panel ─────────────────────────────────────────────────────── */
+.hist-subtitle { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin: var(--s-2) 0 var(--s-1); text-transform: uppercase; letter-spacing: 0.04em; }
+.hist-warn { color: var(--warning, #e8a); }
+.hist-grid { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-2); }
+.hist-kv { display: flex; gap: var(--s-1); font-size: 12px; }
+.hist-key { color: var(--text-secondary); }
+.hist-val { color: var(--text-primary); font-weight: 500; }
+.hist-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: var(--radius-sm); font-weight: 500; margin: 2px; }
+.hist-flag { background: color-mix(in srgb, var(--success, #4a9) 15%, transparent); color: var(--success, #4a9); }
+.hist-failsig { background: color-mix(in srgb, var(--warning, #e84) 15%, transparent); color: var(--warning, #e84); }
+.hist-port-up { background: color-mix(in srgb, var(--success, #4a9) 15%, transparent); color: var(--success, #4a9); }
+.hist-port-down { background: color-mix(in srgb, var(--warning, #e84) 15%, transparent); color: var(--warning, #e84); }
+.hist-row { padding: var(--s-1) var(--s-2); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: var(--s-1); background: var(--bg-card, transparent); }
+.hist-row-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.hist-row-detail { font-size: 11px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: 60px; overflow: hidden; margin-top: 2px; }
+.hist-stall-row { border-color: var(--warning, #e84); background: color-mix(in srgb, var(--warning, #e84) 5%, transparent); }
+.hist-ts { font-size: 11px; color: var(--text-secondary); text-align: right; padding: var(--s-1) 0; }
 
 .rm-info {
   margin-bottom: var(--s-3);
@@ -2192,13 +2528,38 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .terminal-track > .pane-terminal {
   /* Each pane occupies one full slot in the carousel; flex-basis
      pins it to 100% of the viewport width regardless of how many
-     panes precede or follow it. */
+     panes precede or follow it.
+
+     NO PADDING on the pane itself. FitAddon's proposeDimensions()
+     reads `getComputedStyle(parent).width` and subtracts only the
+     `.xterm` element's padding — NOT the parent's padding. So any
+     padding here makes xterm overshoot cols, drawing extra columns
+     past .xterm's right edge that get clipped (the "bleed" against
+     the pane border). Visual breathing room is applied on the
+     children instead: .xterm gets padding directly (FitAddon
+     respects it), .cbr-scroll already has its own internal padding. */
   flex: 0 0 100%;
   width: 100%;
   height: 100%;
   background: var(--bg-elevated);
-  padding: var(--s-2) 0 0 var(--s-2);
   overflow: hidden;
+}
+
+/* xterm renders directly inside pane-terminal. Padding HERE is what
+   FitAddon subtracts when proposing cols/rows — the only place we can
+   give the terminal breathing room without breaking the dimension calc.
+
+   Right padding is intentionally LARGER than the other sides as a
+   belt-and-suspenders safety margin: even if the cell-width measurement
+   ends up off by a fraction of a pixel (sub-pixel rendering, residual
+   webfont-swap mismatch, or browser-dependent scrollbar gutter), an
+   extra char-cell of empty space on the right absorbs the overshoot
+   so the rightmost character is always fully visible. The cost is
+   ~1ch (~9px) of unused space at the right edge, invisible against
+   the pane background. */
+.terminal-track > .pane-terminal > .xterm {
+  box-sizing: border-box;
+  padding: var(--s-2) var(--s-5) var(--s-2) var(--s-2);
 }
 
 .xterm-viewport { -webkit-overflow-scrolling: touch; }
@@ -4501,12 +4862,12 @@ body.workspace-active .landing-overlay { display: none; }
     overflow: hidden;
   }
 
-  /* 输入框移动端：确保 placeholder 不换行 */
-  .chat-textarea {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  /* Mobile: keep the placeholder on one line (no wrap / ellipsis
+     past the textarea width). Do NOT apply white-space:nowrap to
+     the textarea itself — that single-lines real input, hiding the
+     leftmost chars as you type past visible width and clipping the
+     rightmost with text-overflow, AND freezes the textarea at
+     38 px because scrollHeight can never grow (kills autoResize). */
   .chat-textarea::placeholder {
     white-space: nowrap;
     overflow: hidden;

@@ -71,6 +71,21 @@ const LAZY_PLUGINS = {
     render: (m, pane, plugin) => m.renderComparePane(pane, plugin),
     reset: (m) => m.resetCompareLoadState(),
   },
+  sessions: {
+    key: 'sessions-panel', imp: () => import('./sessions-panel.js'),
+    render: (m, pane, plugin) => m.renderSessionsPane(pane, plugin),
+    reset: (m) => m.resetSessionsLoadState(),
+  },
+  rewind: {
+    key: 'rewind-panel', imp: () => import('./rewind-panel.js'),
+    render: (m, pane, plugin) => m.renderRewindPane(pane, plugin),
+    reset: (m) => m.resetRewindLoadState(),
+  },
+  tasks: {
+    key: 'tasks-panel', imp: () => import('./tasks-panel.js'),
+    render: (m, pane) => m.renderTasksPane(pane),
+    reset: (m) => m.resetTasksLoadState(),
+  },
   remote: {
     key: 'remote-panel', imp: () => import('./remote-panel.js'),
     render: (m, pane) => m.renderRemotePane(pane),
@@ -88,6 +103,11 @@ const LAZY_PLUGINS = {
     key: 'services-panel', imp: () => import('./services-panel.js'),
     render: (m, pane) => m.renderServicesPane(pane),
     reset: (m) => m.resetServicesLoadState(),
+  },
+  historian: {
+    key: 'historian-panel', imp: () => import('./historian-panel.js'),
+    render: (m, pane) => m.renderHistorianPane(pane),
+    reset: (m) => m.resetHistorianLoadState(),
   },
   akari: {
     key: 'akari-panel', imp: () => import('./akari-panel.js'),

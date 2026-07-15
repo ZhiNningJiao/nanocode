@@ -357,6 +357,42 @@ const STARTUP_NOISE_RE = /^(?:[\\|\/\-]{1,4}$|-?npm\s+(?:error|warn|notice|info)
 // Capture up to but not including any trailing │ border char
 const SESSION_INFO_RE = /^[│]\s+(model|directory|permissions):\s+(.*?)\s*[│]?\s*$/
 
+// ── S5: todo_list event → nanocode:todo-update dispatch ───────────────────────
+// The Codex SDK emits structured events for todo list updates. The driver
+// forwards all raw events to the frontend via codex-event (codex-sdk-driver.js).
+// extractCodexTodos pulls the todo array from the recognized event shapes
+// (pure — no DOM — exported for unit testing); _maybeDispatchTodoUpdate wraps
+// it in the nanocode:todo-update CustomEvent for the tasks panel.
+//
+// SDK ThreadItem shape (per @openai/codex-sdk index.d.ts:90-102): a todo_list
+// item arrives inside item.started/updated/completed events as
+//   { type: 'item.started', item: { type: 'todo_list', items: [{ text, completed }] } }
+// The field is `items` (NOT `todos`). Both names are accepted for robustness.
+export function extractCodexTodos(event) {
+  if (!event) return null
+  if (event.type === 'todo_list') {
+    return Array.isArray(event.items) ? event.items
+      : Array.isArray(event.todos) ? event.todos : null
+  }
+  if (event.type === 'item.started' || event.type === 'item.completed' || event.type === 'item.updated') {
+    const item = event.item
+    if (item && item.type === 'todo_list') {
+      return Array.isArray(item.items) ? item.items
+        : Array.isArray(item.todos) ? item.todos : null
+    }
+  }
+  return null
+}
+
+function _maybeDispatchTodoUpdate(event, tabId) {
+  const todos = extractCodexTodos(event)
+  if (todos) {
+    document.dispatchEvent(new CustomEvent('nanocode:todo-update', {
+      detail: { source: 'codex', tabId, todos },
+    }))
+  }
+}
+
 // ── Main class ────────────────────────────────────────────────────────────────
 export class CodexBlockRenderer {
   constructor(container, opts = {}) {
@@ -1486,6 +1522,11 @@ export class CodexBlockRenderer {
 
   _handleCodexEvent(event) {
     if (!event) return
+    // S5 (MES-14031): forward todo_list events to the tasks panel. The Codex
+    // SDK emits structured events for todo list updates; the driver forwards
+    // all raw events here. We extract todos from the recognized shapes and
+    // dispatch a nanocode:todo-update CustomEvent for the tasks panel.
+    _maybeDispatchTodoUpdate(event, this.tabId)
     if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
       this._finalizeAgentMessage(event.item.id)
     }

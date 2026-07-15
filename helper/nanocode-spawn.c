@@ -17,7 +17,11 @@
  *   - The only privileged actions are mkdir/chown/chmod of a path
  *     deterministically derived from getuid(), then setuid(getuid()).
  *   - We never become anyone other than the invoking user.
- *   - PR_SET_NO_NEW_PRIVS=1 prevents the worker from regaining setuid.
+ *   - We deliberately do NOT set PR_SET_NO_NEW_PRIVS: blocking
+ *     descendant setuid binaries (sudo, mount, …) would break
+ *     legitimate workflows inside terminal tabs. The setuid drop
+ *     above is the privilege boundary; after it the worker has
+ *     exactly the user's normal capability set.
  *
  * Build:   make -C helper
  * Install: install -o root -g root -m 4755 nanocode-spawn /usr/lib/nanocode/
@@ -129,9 +133,24 @@ int main(int argc, char **argv) {
         errx(1, "unexpected euid %u (expected %u)", (unsigned)geteuid(), (unsigned)uid);
     }
 
-    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-        err(1, "PR_SET_NO_NEW_PRIVS");
-    }
+    /* PR_SET_NO_NEW_PRIVS is deliberately NOT set here.
+     *
+     * Setting it would block every setuid binary in the worker's
+     * descendant process tree — most notably sudo, but also
+     * mount/umount, ping, and anything else with mode 4755. From
+     * inside a nanocode terminal tab, `sudo apt …` would fail with
+     * `sudo: effective uid is not 0`. That's a worse UX than the
+     * marginal extra hardening this flag bought: the worker already
+     * runs as the invoking user and inherits exactly the user's
+     * normal capability set, so blocking further-privilege
+     * transitions doesn't change the security boundary — it just
+     * blocks legitimate user workflows that work fine in any other
+     * shell on the same host.
+     *
+     * The setuid drop above (initgroups → setgid → setuid) is the
+     * actual privilege boundary. After that boundary, the worker
+     * has exactly the access the invoking user already had via SSH
+     * or local login. */
 
     /* Construct a clean environment from passwd. The caller's environ
      * is intentionally dropped so the worker boots from a known base. */

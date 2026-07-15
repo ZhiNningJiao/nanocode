@@ -141,8 +141,8 @@
             <div class="settings-subsection">
               <div class="settings-label-row"><span data-i18n="settings.rendermode.claude.label">Render mode (claude tab)</span> <span class="settings-hint-inline" data-i18n="settings.rendermode.claude.hint">block=rich text / terminal=PTY fallback</span></div>
               <div class="settings-radio-group" id="render-mode-group">
-                <label class="settings-radio-label"><input type="radio" name="render-mode" value="block" checked /> <span data-i18n="settings.rendermode.claude.block">Block (default, rich text)</span></label>
-                <label class="settings-radio-label"><input type="radio" name="render-mode" value="terminal" /> <span data-i18n="settings.rendermode.claude.terminal">Terminal (PTY raw, fallback)</span></label>
+                <label class="settings-radio-label"><input type="radio" name="render-mode" value="block" /> <span data-i18n="settings.rendermode.claude.block">Block (rich text, experimental)</span></label>
+                <label class="settings-radio-label"><input type="radio" name="render-mode" value="terminal" checked /> <span data-i18n="settings.rendermode.claude.terminal">Terminal (default, PTY raw)</span></label>
               </div>
               <div class="settings-actions">
                 <button type="button" class="btn btn-primary" id="render-mode-save-btn" data-i18n="btn.save">Save</button>
@@ -409,6 +409,8 @@
               <button class="touch-btn" data-action="arrow-down">&darr;</button>
               <button class="touch-btn" data-action="tab">Tab</button>
               <button class="touch-btn" data-action="escape">Esc</button>
+              <button class="touch-btn" data-action="open-url" title="Open the URL on screen in a new browser tab">Open URL</button>
+              <button class="touch-btn" data-action="copy-url" title="Copy the URL on screen to clipboard">Copy URL</button>
             </div>
             <div class="input-row">
               <div class="active-tab-chip" id="active-tab-chip" role="group" aria-label="Tabs">

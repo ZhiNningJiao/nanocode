@@ -205,84 +205,12 @@ function getToolIcon(toolName) {
 // Three levels (persisted in localStorage):
 //   'full'    — show tool name + full input/output content
 //   'header'  — show only the tool name header (block state)
-//   'line'    — collapse to a single thin line (default, Q4 answer C)
-//
-// Cycle order (Q2 answer A): full → header → line → full → …
-// Default is 'line' (most screen-efficient, user-requested).
-const TOOL_FOLD_KEY = 'cbr_tool_fold'
-const TOOL_FOLD_LEVELS = ['full', 'header', 'line']
-
-// 2-state click cycle: full ↔ line (header accessible via settings panel only)
-const TOOL_FOLD_CYCLE = { full: 'line', header: 'full', line: 'full' }
-
-function getToolFoldLevel() {
-  const v = localStorage.getItem(TOOL_FOLD_KEY)
-  // Default: 'line' (Q4 answer C — most screen-efficient)
-  return TOOL_FOLD_LEVELS.includes(v) ? v : 'line'
-}
-
-/**
- * Cycle a tool block's data-fold attribute through 2 states on click.
- * full → line → full → …
- * Header state is still reachable via settings panel only.
- * Works for both .cbr-block-tool and .cbr-block-tool-result articles.
- */
-function cycleToolFold(article) {
-  const cur = article.getAttribute('data-fold') || getToolFoldLevel()
-  const next = TOOL_FOLD_CYCLE[cur] || 'full'
-  article.setAttribute('data-fold', next)
-}
-
-// ── Subagent visibility toggles ───────────────────────────────────────────────
-// Two independent booleans (persisted in localStorage):
-//   cbr_subagent_prompt  — show the message/prompt sent TO a subagent (default on)
-//   cbr_subagent_activity — show subagent internal activity (nested events, default off)
-const SUBAGENT_PROMPT_KEY = 'cbr_subagent_prompt'
-const SUBAGENT_ACTIVITY_KEY = 'cbr_subagent_activity'
-
-function getSubagentPromptVisible() {
-  const v = localStorage.getItem(SUBAGENT_PROMPT_KEY)
-  return v === null ? true : v !== 'false'
-}
-
-function setSubagentPromptVisible(val) {
-  localStorage.setItem(SUBAGENT_PROMPT_KEY, val ? 'true' : 'false')
-  // Apply immediately to all existing subagent-prompt blocks.
-  // Prompt blocks keep data-fold='full' so the body is always readable when visible.
-  document.querySelectorAll('.cbr-block-subagent-prompt').forEach((el) => {
-    el.style.display = val ? '' : 'none'
-    el.setAttribute('data-fold', 'full')
-  })
-  document.dispatchEvent(new CustomEvent('cbr:subagent-prompt-changed', { detail: { visible: val } }))
-}
-
-function getSubagentActivityVisible() {
-  const v = localStorage.getItem(SUBAGENT_ACTIVITY_KEY)
-  return v === null ? false : v === 'true'
-}
-
-function setSubagentActivityVisible(val) {
-  localStorage.setItem(SUBAGENT_ACTIVITY_KEY, val ? 'true' : 'false')
-  // Apply immediately to all existing subagent-activity blocks
-  document.querySelectorAll('.cbr-block-subagent-activity').forEach((el) => {
-    el.style.display = val ? '' : 'none'
-  })
-  document.dispatchEvent(new CustomEvent('cbr:subagent-activity-changed', { detail: { visible: val } }))
-}
-
-function setToolFoldLevel(level) {
-  if (!TOOL_FOLD_LEVELS.includes(level)) return
-  localStorage.setItem(TOOL_FOLD_KEY, level)
-  // Apply to all currently-rendered tool blocks in the page
-  document.querySelectorAll('.cbr-block-tool, .cbr-block-tool-result').forEach((el) => {
-    applyToolFold(el, level)
-  })
-  document.dispatchEvent(new CustomEvent('cbr:tool-fold-changed', { detail: { level } }))
-}
-
-function applyToolFold(el, level) {
-  el.setAttribute('data-fold', level || getToolFoldLevel())
-}
+import {
+  getToolFoldLevel, setToolFoldLevel, TOOL_FOLD_LEVELS,
+  getSubagentPromptVisible, setSubagentPromptVisible,
+  getSubagentActivityVisible, setSubagentActivityVisible,
+  applyToolFold, cycleToolFold,
+} from './claude-block-settings.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1295,6 +1223,15 @@ export class ClaudeBlockRenderer {
           cols: 200,
           rows: 50,
         })
+        // Sync thinking state with terminal-view after reconnect. On reconnect,
+        // _thinking was reset to false directly (line above, not via _setThinking),
+        // so terminal-view.js's isClaudeThinking may still be true from before the
+        // disconnect. If the turn completed while we were offline, no live events
+        // will arrive to correct it — the desktop input box stays permanently locked.
+        // Dispatch the current state so terminal-view can self-correct.
+        document.dispatchEvent(new CustomEvent('nanocode:claude-thinking', {
+          detail: { tabId: this.tabId, thinking: this._thinking },
+        }))
       })
       this._startPing()
     }
@@ -1305,6 +1242,14 @@ export class ClaudeBlockRenderer {
 
       if (msg.type === 'claude-event') {
         this._handleEvent(msg.event)
+      } else if (msg.type === 'busy-state') {
+        // Server sends the authoritative busy state on attach. Correct our local
+        // thinking flag to match — this fixes "desktop can't send" when a turn
+        // completed while the WS was disconnected and the client missed the result.
+        const serverBusy = !!msg.busy
+        if (this._thinking !== serverBusy) {
+          this._setThinking(serverBusy)
+        }
       } else if (msg.type === 'pong') {
         // ignore
       } else if (msg.type === 'exit') {
@@ -2121,6 +2066,17 @@ export class ClaudeBlockRenderer {
     // Root D: partial/loading state — input may be partial JSON or null
     const isLoading = opts.loading === true
 
+    // S5 (MES-14031): forward TodoWrite todos to the tasks panel. Dispatch
+    // only when the input is complete (not in loading/partial state) and has
+    // a todos array. The tasks panel listens for nanocode:todo-update and
+    // re-renders. Receiving the same todos twice (partial then final) is
+    // harmless — the panel just replaces with the latest.
+    if (!isLoading && part.name === 'TodoWrite' && part.input && Array.isArray(part.input.todos)) {
+      document.dispatchEvent(new CustomEvent('nanocode:todo-update', {
+        detail: { source: 'claude', tabId: this.tabId, todos: part.input.todos },
+      }))
+    }
+
     // Root F: subagentActivity flag means this tool block belongs to subagent internals
     // (not the prompt sent TO the subagent, but the subagent's own tool calls)
     const isSubagentActivity = opts.subagentActivity === true
@@ -2293,7 +2249,9 @@ export class ClaudeBlockRenderer {
   }
 }
 
-// Export fold helpers and subagent visibility helpers so settings panel (app.js) can wire them up
+// Re-export fold/visibility helpers for backward compat (app.js now imports
+// from claude-block-settings.js directly; these re-exports are kept in case
+// any other module imports them from here).
 export {
   getToolFoldLevel, setToolFoldLevel, TOOL_FOLD_LEVELS,
   getSubagentPromptVisible, setSubagentPromptVisible,

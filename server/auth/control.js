@@ -62,6 +62,20 @@ function handleControlConnection(socket, { registry, claimStore, logger }) {
     if (registered) registry.unregister(registered.uid)
   })
 
+  // A worker control connection can be reset by the kernel mid-read
+  // (the worker process died, a remote control socket blipped, the
+  // user ran `nanocode logout`, etc.). Without an 'error' handler
+  // Node propagates the ECONNRESET as an unhandled 'error' event on
+  // the Socket and the router process exits 1. systemd then restarts
+  // it, which RSTs every in-flight proxy connection and the browser
+  // sees `{"error":"worker unavailable","detail":"ECONNRESET"}` until
+  // the worker re-registers. Catching the error here drops the dead
+  // connection cleanly — 'close' still fires and unregisters the uid.
+  socket.on('error', (err) => {
+    logger.warn(`[control] socket error: ${err.code || err.message}`)
+    try { socket.destroy() } catch {}
+  })
+
   function send(obj) {
     if (socket.writable) socket.write(encodeFrame(obj))
   }

@@ -58,11 +58,13 @@ New files:
   - API smoke: `/api/health`, `/api/historian/state`, `/api/historian/briefing`, `/api/historian/waker/control`
   - UI smoke: homepage title, historian-panel.js served, style.css historian rules, plugins-registry historian entry
 
-## Verification
+## Verification (2026-07-16 final)
 
 - **572/0 pass** -- full `npm test` suite (`node --test server/tests/*.test.js`)
-- **16/16 Playwright pass** -- `TEST_PORT=9477 npx playwright test` (8 desktop + 8 mobile)
-- **Server start** -- `PORT=9477 node server/index.js` starts clean, health 200
-- **API endpoints** -- `/api/historian/state` returns `{ army, logTail, wakerHealth, akariUp }`
+- **22/22 Playwright pass** -- `TEST_PORT=9477 npx playwright test` (11 desktop + 11 mobile)
+- **9477 smoke** -- server starts clean, health 200, historian state returns live army data
+- **9476 deploy** -- hot-swap deployed, cwd confirmed `/jfs/home/zhiningjiao/code/wt-nano-akari`
+- **API endpoints** -- `/api/historian/state` returns `{ army, logTail, wakerHealth, akariUp }` with live agent data
 - **JS served** -- `/js/historian-panel.js` returns 200 with `renderHistorianPane`
 - **Existing tests preserved** -- plugins-registry.test.js (22/22), akari-proxy.test.js (20/20), historian.test.js (5/5), waker-control.test.js (4/4)
+- **Branch pushed** -- `zhining/nano-plugin-akari` pushed to fork (e73c6bd)
