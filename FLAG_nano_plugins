@@ -1,0 +1,13 @@
+nano_plugins DONE (MES-14031)
+============================
+原型: sessions 浏览器插件 (抄 codex resume/fork + claude --resume --fork-session)
+分支: zhining/nano-plugin-proto  commit: 2076aeb
+worktree: ~/code/wt-nano-plugins
+
+验证结果 (run_nano_plugins.log):
+- 9478 烟测: 231 codex + 1326 claude 真实会话发现, 预览 119 轮, 面板+manifest 正常服务
+- npm test: 545 pass / 0 fail (无回归)
+- 自检 grep: 无 FAIL/MISMATCH/NaN/NOT FOUND
+
+交付: REPORT_nano_plugins.md (调研12项 + 移植设计 + 原型 + 验证 + 后续)
+状态: 成功 (无 FAILSIG_nano_plugins)
