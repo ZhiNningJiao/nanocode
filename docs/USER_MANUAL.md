@@ -184,20 +184,27 @@ The **Historian** tab (Monitor domain) monitors the external waker system (`wake
 
 ### What It Shows
 
-1. **Waker Health**: tmux session alive/dead, singleton lock status, mode (LIVE/DRY), auto-live flag, last tick age (red warning if >10 min stale)
+1. **Waker Health**: tmux session alive/dead, singleton lock status, mode (LIVE/DRY), auto-live flag, last tick age (red warning if >10 min stale), akari status (up/down)
 
-2. **Army Fleet Table**: Real-time agent fleet status from `~/codex_work/army_status.json`:
+2. **Waker Usage**: Parsed stats from the waker state directory:
+   - **Beats**: Total tick count since the waker started
+   - **Skipped**: Total skipped injections, broken down by reason (busy = agent was typing, quiet = heartbeat quiet, rate = hourly cap hit)
+   - **Dry ticks**: Number of dry ticks completed (auto-promotes to LIVE after 3)
+   - **Coverage**: List of agent tags currently monitored by the waker
+
+3. **Army Fleet Table**: Real-time agent fleet status from `~/codex_work/army_status.json`:
    - Tag (task name)
    - Iteration count
    - Last active time
    - Status: running (green), STALL (yellow, >25min idle), FLAG (blue, completed)
    - Last output line
 
-3. **Briefing Stream**: Tail of `waker.log` showing recent historian briefings -- what was injected, what was skipped, gate reasons (min gap, hourly cap, busy)
+4. **Briefing Stream**: Tail of `waker.log` showing recent historian briefings -- what was injected, what was skipped, gate reasons (min gap, hourly cap, busy)
 
-4. **Controls**:
+5. **Controls**:
    - **Start/Stop**: Launch or kill the waker tmux session
    - **LIVE/DRY switch**: LIVE = inject briefings into the secretary session; DRY = log only, no injection
+   - **Day/Night/Auto interval**: Set waker tick cadence manually or let it auto-select based on time of day
 
 ### Waker Modes
 
@@ -208,9 +215,22 @@ The **Historian** tab (Monitor domain) monitors the external waker system (`wake
 
 ### Cadence
 
-- Work hours (09:00-19:30 Beijing): every 4.5 minutes
-- Off hours: every 20 minutes
+- Work hours (09:00-19:30 Beijing): every 4.5 minutes (270s)
+- Off hours: every 20 minutes (1200s)
 - Gate: min 270s between injections, max 15/hour, skip if user typed < 60s ago
+
+The interval buttons in the Controls section let you override this:
+- **Day (4.5m)**: Force work-hour cadence (WAKE_WORK_INTERVAL=270, WAKE_OFF_INTERVAL=270)
+- **Night (20m)**: Force off-hour cadence (WAKE_WORK_INTERVAL=1200, WAKE_OFF_INTERVAL=1200)
+- **Auto**: Remove the override, let waker auto-select based on current Beijing time
+
+### Historian as an Optional Plugin
+
+The historian is a standard nanocode plugin (group: `monitor`). It can be enabled/disabled in **Plugin Manager** like any other plugin. When disabled, no historian tab appears and no polling occurs. When the waker is not running, the panel degrades to a calm "stopped" state with a Start button.
+
+### akari Status Row
+
+The historian health card includes an **akari** status indicator (up/down). This is a quick-glance check -- for detailed akari monitoring (workers, lanes, concurrency), use the dedicated akari plugin tab.
 
 ---
 

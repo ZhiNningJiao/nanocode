@@ -19,7 +19,7 @@ import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 import { loadPersonalConfig } from '../terminal/personal-config.js'
 import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntry } from './akari-proxy.js'
 import { readArmyStatus, readWakerLogTail, getWakerHealth, collectBriefing } from './historian.js'
-import { startWaker, stopWaker, restartWaker, getWakerControlState } from './waker-control.js'
+import { startWaker, stopWaker, restartWaker, getWakerControlState, setInterval as setWakerInterval } from './waker-control.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // TTS failures (fetch timeout, connection refused, bad response, stream errors)
@@ -635,12 +635,16 @@ app.get('/api/akari/state', asyncWrap(async (_req, res) => {
 // Bundled state endpoint: one poll from the panel fetches everything.
 
 app.get('/api/historian/state', asyncWrap(async (_req, res) => {
-  const [army, logTail, wakerHealth] = await Promise.all([
+  const akariUrls = getAkariUrls()
+  const [army, logTail, wakerHealth, akariUp] = await Promise.all([
     readArmyStatus(),
     readWakerLogTail(30),
     getWakerHealth(),
+    akariUrls.serverUrl
+      ? checkAkariReachable(akariUrls.serverUrl, { timeout: 3000 }).catch(() => false)
+      : Promise.resolve(false),
   ])
-  res.json({ army, logTail, wakerHealth })
+  res.json({ army, logTail, wakerHealth, akariUp })
 }))
 
 app.get('/api/historian/briefing', asyncWrap(async (_req, res) => {
@@ -663,6 +667,17 @@ app.post('/api/historian/waker/restart', asyncWrap(async (req, res) => {
   const { live } = req.body || {}
   const result = await restartWaker({ live: !!live })
   res.json(result)
+}))
+
+app.post('/api/historian/waker/interval', asyncWrap(async (req, res) => {
+  const { seconds } = req.body || {}
+  const result = await setWakerInterval(Number(seconds) || 0)
+  res.json(result)
+}))
+
+app.get('/api/historian/waker/control', asyncWrap(async (_req, res) => {
+  const state = await getWakerControlState()
+  res.json(state)
 }))
 
 app.get('/api/agents', asyncWrap(async (_req, res) => {
