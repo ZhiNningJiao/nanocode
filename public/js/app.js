@@ -498,7 +498,7 @@ const fable5RenderModeSaveBtn = document.getElementById('fable5-render-mode-save
 const fable5RenderModeStatusEl = document.getElementById('fable5-render-mode-status')
 
 function loadRenderModeSettings(serverSettings) {
-  const mode = (serverSettings?.renderMode) || 'block'
+  const mode = (serverSettings?.renderMode) || 'terminal'
   const radios = renderModeGroup?.querySelectorAll('input[name="render-mode"]')
   if (radios) {
     for (const radio of radios) radio.checked = radio.value === mode
