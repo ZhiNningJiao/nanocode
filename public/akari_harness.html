@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=460, initial-scale=1" />
+  <title>akari panel harness</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    /* Harness-only frame so the screenshot matches the right-panel width. */
+    html, body { margin: 0; padding: 0; background: var(--bg); }
+    #harness { width: 460px; min-height: 1000px; padding: 8px; box-sizing: border-box; }
+    #pane { min-height: 600px; }
+  </style>
+</head>
+<body>
+  <div id="harness">
+    <div id="pane"></div>
+  </div>
+  <script type="module">
+    import { renderAkariPane } from '/js/akari-panel.js'
+    renderAkariPane(document.getElementById('pane'))
+  </script>
+</body>
+</html>

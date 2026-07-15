@@ -19,6 +19,7 @@ import { t } from './i18n.js'
 
 let activePane = null
 let services = []
+let managed = []
 let status = {}
 let loaded = false
 let loading = false
@@ -35,6 +36,7 @@ export async function renderServicesPane(pane) {
 export function resetServicesLoadState() {
   activePane = null
   services = []
+  managed = []
   status = {}
   loaded = false
   loading = false
@@ -55,10 +57,12 @@ async function loadServices() {
       fetch('/api/services').then((r) => r.json()),
     ])
     services = cfgRes.services || []
+    managed = cfgRes.managed || []
     status = statusRes || {}
     loaded = true
     loading = false
     renderGrid()
+    renderManaged()
     renderMeta(cfgRes)
   } catch (err) {
     loading = false
@@ -115,6 +119,18 @@ function renderShell(pane) {
   grid.className = 'services-grid'
   grid.id = 'pm-services-grid'
   section.appendChild(grid)
+
+  // MES-14049: managed (read-only) services — e.g. the akari dispatch server,
+  // whose up/down is probed via /api/health by the server. Injected fresh on
+  // every read; never editable/deletable here.
+  const mTitle = document.createElement('div')
+  mTitle.className = 'services-managed-title'
+  mTitle.textContent = 'Managed'
+  const mGrid = document.createElement('div')
+  mGrid.className = 'services-grid'
+  mGrid.id = 'pm-services-managed'
+  section.appendChild(mTitle)
+  section.appendChild(mGrid)
 
   const form = document.createElement('form')
   form.className = 'services-add-form'
@@ -213,6 +229,34 @@ function renderGrid({ loading: isLoading, error } = {}) {
     })
     actions.appendChild(edit)
     actions.appendChild(del)
+    row.appendChild(dot)
+    row.appendChild(nm)
+    row.appendChild(actions)
+    grid.appendChild(row)
+  }
+}
+
+// MES-14049: managed services (read-only) — rendered without edit/delete. The
+// dot id reuses the `pm-svc-dot-<name>` scheme so the live `service_status` WS
+// listener updates the akari dot in place, same as user services.
+function renderManaged() {
+  const grid = activePane?.querySelector('#pm-services-managed')
+  if (!grid) return
+  grid.innerHTML = ''
+  for (const svc of managed) {
+    const info = status[svc.name] || { status: 'unknown' }
+    const row = document.createElement('div')
+    row.className = 'service-item managed'
+    row.dataset.svc = svc.name
+    const dot = document.createElement('span')
+    dot.className = `service-dot ${info.status}`
+    dot.id = `pm-svc-dot-${cssEscape(svc.name)}`
+    dot.title = `${svc.name}: ${info.status}`
+    const nm = document.createElement('span')
+    nm.className = 'service-name'
+    nm.innerHTML = `${escapeHtml(svc.name)} <span class="service-port">${escapeHtml(svc.host)}:${escapeHtml(svc.port)}</span>`
+    const actions = document.createElement('span')
+    actions.className = 'service-actions'
     row.appendChild(dot)
     row.appendChild(nm)
     row.appendChild(actions)
