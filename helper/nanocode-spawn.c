@@ -17,7 +17,11 @@
  *   - The only privileged actions are mkdir/chown/chmod of a path
  *     deterministically derived from getuid(), then setuid(getuid()).
  *   - We never become anyone other than the invoking user.
- *   - PR_SET_NO_NEW_PRIVS=1 prevents the worker from regaining setuid.
+ *   - We deliberately do NOT set PR_SET_NO_NEW_PRIVS: blocking
+ *     descendant setuid binaries (sudo, mount, …) would break
+ *     legitimate workflows inside terminal tabs. The setuid drop
+ *     above is the privilege boundary; after it the worker has
+ *     exactly the user's normal capability set.
  *
  * Build:   make -C helper
  * Install: install -o root -g root -m 4755 nanocode-spawn /usr/lib/nanocode/
