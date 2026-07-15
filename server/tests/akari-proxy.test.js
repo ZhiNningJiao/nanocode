@@ -100,7 +100,7 @@ describe('akari-proxy: fetchJson', () => {
 
 const HEALTH = {
   ok: true, version: '0.4.0', build_commit: '92410bc8-dirty',
-  dispatch_caps: { lane_cap: 4, max_concurrent_workers: 8, max_vision_workers: 6, default_worker_model: 'litellm/SGLang-GLM-5.2' },
+  dispatch_caps: { lane_cap: 4, max_vision_workers: 6, default_worker_model: 'litellm/SGLang-GLM-5.2' },
   provider_fallback_enabled: true, instance_tokens_in: 0, instance_tokens_out: 0,
   agent_concurrency: { in_flight: 0, permits_available: 8 },
 }
@@ -120,8 +120,9 @@ describe('akari-proxy: fetchAkariState', () => {
     assert.equal(s.reachable, true)
     assert.equal(s.health.version, '0.4.0')
     assert.equal(s.health.build_commit, '92410bc8-dirty')
-    assert.equal(s.health.dispatch_caps.max_concurrent_workers, 8)
-    assert.equal(s.health.agent_concurrency.permits_available, 8)
+    assert.equal(s.health.dispatch_caps.lane_cap, 4)
+    assert.equal(s.health.dispatch_caps.max_vision_workers, 6)
+    assert.equal(s.health.agent_concurrency.in_flight + s.health.agent_concurrency.permits_available, 8)
     assert.equal(s.concurrency.open_lanes, 0)
     assert.equal(s.workers.instance_tokens_in, 0)
     assert.equal(s.lanes.lanes.length, 0)

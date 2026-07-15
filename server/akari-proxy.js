@@ -11,9 +11,9 @@
  * state without console spam.
  *
  * Endpoint field shapes are aligned to the akari-server source (NOT guessed):
- *   - GET /api/health     — crates/akari-server/src/small_handlers.rs::health
- *     { ok, version, build_commit, dispatch_caps{lane_cap, max_concurrent_workers,
- *       max_vision_workers, default_worker_model}, provider_fallback_enabled,
+ *   - GET /api/health     — crates/akari-server/src/health_handler.rs::health
+ *     { ok, version, build_commit, dispatch_caps{lane_cap, max_vision_workers,
+ *       default_worker_model}, provider_fallback_enabled,
  *       instance_tokens_in, instance_tokens_out,
  *       agent_concurrency{in_flight, permits_available} }
  *   - GET /api/concurrency — small_handlers.rs::concurrency

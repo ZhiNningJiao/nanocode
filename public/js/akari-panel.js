@@ -6,7 +6,7 @@
  * renders:
  *   - health summary  — version / build_commit / dispatch_caps / agent_concurrency
  *     / provider_fallback_enabled / instance tokens (aligned to akari-server
- *     small_handlers.rs::health, NOT guessed)
+ *     health_handler.rs::health, NOT guessed)
  *   - concurrency    — running / peak / open_lanes (/api/concurrency)
  *   - workers table  — live worker status (/api/workers)
  *   - lane fleet     — lane pool state (/api/lanes): id / state / marker /
@@ -197,7 +197,7 @@ function renderHealth(h) {
   grid.className = 'rp-stats-grid'
   grid.appendChild(stat('version', h?.version || '–'))
   grid.appendChild(stat('build', (h?.build_commit || '–').slice(0, 12)))
-  grid.appendChild(stat('workers cap', caps.max_concurrent_workers ?? '–'))
+  grid.appendChild(stat('agent cap', (ac.in_flight ?? 0) + (ac.permits_available ?? 0)))
   grid.appendChild(stat('vision cap', caps.max_vision_workers ?? '–'))
   grid.appendChild(stat('lane cap', caps.lane_cap ?? '–'))
   grid.appendChild(stat('in-flight', ac.in_flight ?? '–'))
