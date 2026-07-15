@@ -326,6 +326,20 @@ class Session {
   }
 
   /**
+   * Write raw input to the PTY — the server-side equivalent of the WS
+   * 'input' message (see attach()'s onMessage handler). Used by
+   * POST /api/sessions/:id/inject (localhost-only) so an external watchdog
+   * can inject a keystroke/message into a bash tab. No-op once the process
+   * has exited.
+   * @param {string} data
+   */
+  write(data) {
+    if (this._proc && !this._exited && typeof data === 'string') {
+      this._proc.write(data)
+    }
+  }
+
+  /**
    * @param {(data: string) => void} fn
    */
   onOutput(fn) {
@@ -447,6 +461,16 @@ export function listProjectSessions(projectId) {
     if (key.startsWith(prefix)) ids.push(key.slice(prefix.length))
   }
   return ids
+}
+
+/**
+ * List all active bash PTY session keys (across every project). Used by
+ * GET /api/sessions (localhost-only) so an external watchdog can enumerate
+ * live sessions for the inject workflow.
+ * @returns {string[]}
+ */
+export function listAllSessionKeys() {
+  return Array.from(sessions.keys())
 }
 
 /**
