@@ -121,6 +121,18 @@ app.use(createFileRoutes(store))
 
 const server = createServer(app)
 
+// Keep idle keep-alive sockets ALIVE on the worker side longer than the
+// router's proxy http.Agent holds them on the client side (4s timeout in
+// server/proxy.js). Otherwise the worker silently closes a socket the
+// agent still believes is fresh; the next request from the router
+// writes to a dead socket -> ECONNRESET -> the proxy surfaces
+// "worker unavailable" as a 502 to the browser, especially noticeable
+// after any pause >5s (the Node default keepAliveTimeout).
+// headersTimeout must be greater than keepAliveTimeout per the Node
+// docs to avoid spurious 408s.
+server.keepAliveTimeout = 120_000  // 120s
+server.headersTimeout    = 125_000  // 125s
+
 // WS: one server per path, like the single-user mode.
 const terminalWss = new WebSocketServer({ noServer: true })
 const tabsWss = new WebSocketServer({ noServer: true })
