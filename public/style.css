@@ -5397,6 +5397,40 @@ body.workspace-active .landing-overlay { display: none; }
 .services-managed-title { font-size: 10px; color: var(--text-tertiary); margin-top: 10px; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
 
 /* ============================================================
+ * Historian waker health plugin
+ * ============================================================ */
+.historian-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.historian-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+.historian-title .service-dot { width: 9px; height: 9px; }
+.historian-meta { width: 100%; font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); word-break: break-all; }
+.historian-block { margin-top: var(--s-2); }
+.historian-block .rp-stats-grid { grid-template-columns: 1fr 1fr 1fr; }
+.historian-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
+.historian-table th { text-align: left; font-weight: 500; color: var(--text-tertiary); padding: 3px 6px 3px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.historian-table td { padding: 3px 6px 3px 0; color: var(--text-secondary); border-bottom: 1px solid var(--border); }
+.historian-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 4px; }
+.historian-table-scroll .historian-table { margin-top: 0; }
+.historian-mono { font-family: var(--font-mono); }
+.historian-line { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 10px; }
+.historian-stalled td { color: var(--warning) !important; }
+.historian-flagged td { color: var(--success) !important; }
+.historian-status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.historian-status-dot.running { background: #4caf50; }
+.historian-status-dot.stalled { background: #ffb300; }
+.historian-status-dot.flagged { background: #2196f3; }
+.historian-warn { font-size: 11px; color: var(--warning); margin-top: 4px; padding: 4px 8px; background: rgba(255, 179, 0, 0.1); border-radius: 4px; }
+.historian-log { font-family: var(--font-mono); font-size: 10px; line-height: 1.5; color: var(--text-secondary); background: var(--surface-dim); padding: 8px; border-radius: 4px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 4px; }
+.historian-controls { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.rp-btn-warn { background: var(--error); color: #fff; }
+.rp-btn-warn:hover { opacity: 0.85; }
+.rp-btn-ok { background: var(--success); color: #fff; }
+.rp-btn-ok:hover { opacity: 0.85; }
+.historian-flash { font-size: 11px; margin-top: 4px; opacity: 0; transition: opacity 0.3s; }
+.historian-flash.show { opacity: 1; }
+.historian-flash.error { color: var(--error); }
+.service-dot.degraded { background: #ffb300; }
+
+/* ============================================================
  * Claude Block Renderer (cbr-*)
  * Applied only to claude-type tabs; replaces xterm canvas with
  * native DOM blocks for mobile-friendly reading and per-block copy.
