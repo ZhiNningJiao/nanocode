@@ -16,3 +16,5 @@ fork 分支已 push (fork/zhining/nano-plugin-proto, 不开 PR)
 
 交付: REPORT_nano_plugins.md (调研12项 + 移植设计 + 原型 + 验证 + bugfix + 后续)
 状态: 成功 (无 FAILSIG_nano_plugins)
+
+[续验 2026-07-15 12:53] opencode 第二次独立复验 (防假过): npm test 546/0, fork HEAD==local (f9bb1ff), 9478 真跑 codex 231 + claude 1327 真实会话 + 预览 119 轮, 9475/9476 未动, 日志干净. FLAG 真实有效, 非假过. 详见 REPORT §8.
