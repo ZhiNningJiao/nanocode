@@ -2192,16 +2192,29 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .terminal-track > .pane-terminal {
   /* Each pane occupies one full slot in the carousel; flex-basis
      pins it to 100% of the viewport width regardless of how many
-     panes precede or follow it. Padding is symmetric so xterm's
-     last column has the same breathing room as its first one —
-     asymmetric padding combined with overflow:hidden clipped the
-     rightmost / bottom-most character against the pane edge. */
+     panes precede or follow it.
+
+     NO PADDING on the pane itself. FitAddon's proposeDimensions()
+     reads `getComputedStyle(parent).width` and subtracts only the
+     `.xterm` element's padding — NOT the parent's padding. So any
+     padding here makes xterm overshoot cols, drawing extra columns
+     past .xterm's right edge that get clipped (the "bleed" against
+     the pane border). Visual breathing room is applied on the
+     children instead: .xterm gets padding directly (FitAddon
+     respects it), .cbr-scroll already has its own internal padding. */
   flex: 0 0 100%;
   width: 100%;
   height: 100%;
   background: var(--bg-elevated);
-  padding: var(--s-2);
   overflow: hidden;
+}
+
+/* xterm renders directly inside pane-terminal. Padding HERE is what
+   FitAddon subtracts when proposing cols/rows — the only place we can
+   give the terminal breathing room without breaking the dimension calc. */
+.terminal-track > .pane-terminal > .xterm {
+  box-sizing: border-box;
+  padding: var(--s-2);
 }
 
 .xterm-viewport { -webkit-overflow-scrolling: touch; }

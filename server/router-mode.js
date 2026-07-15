@@ -212,7 +212,7 @@ export function startRouterMode({
   // no-cache header on assets pinned before the v2 flush — re-firing
   // Clear-Site-Data once on the next page load gives every browser
   // a clean slate for the v1.3.0 mobile-composer fixes.
-  const CACHE_BUST_COOKIE = 'nano_cache_bust_v6'
+  const CACHE_BUST_COOKIE = 'nano_cache_bust_v7'
   // Fire on any URL that LOOKS like an HTML page — not just `/`. SPA
   // deep-links such as /local/<projectId> are how users actually open
   // nanocode; restricting the bust to `/` left those users stranded on
