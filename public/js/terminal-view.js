@@ -1815,7 +1815,12 @@ function setupChatInput() {
         case 'tab':
           activePane.sendRaw('\t'); break
         case 'escape':
-          // Same priority logic as keyboard Esc
+          // Same priority logic as keyboard Esc. The final branch is
+          // UNCONDITIONAL: when no UI-level branch matches, ESC must
+          // always reach the PTY (vim, claude's own interactive prompts,
+          // codex menus, etc.). The earlier guard `!isClaudeTab` swallowed
+          // ESC on a claude tab with empty input + not-thinking, leaving
+          // the mobile Esc button dead in that state.
           if (claudeSlashOpen) {
             hideSlashCommands()
           } else if (suggestionsOpen) {
@@ -1824,7 +1829,7 @@ function setupChatInput() {
             doInterrupt()
           } else if (chatInput.value) {
             chatInput.value = ''; autoResize()
-          } else if (!isClaudeTab) {
+          } else {
             activePane.sendRaw('\x1b')
           }
           break

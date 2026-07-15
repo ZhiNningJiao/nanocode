@@ -2192,12 +2192,15 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 .terminal-track > .pane-terminal {
   /* Each pane occupies one full slot in the carousel; flex-basis
      pins it to 100% of the viewport width regardless of how many
-     panes precede or follow it. */
+     panes precede or follow it. Padding is symmetric so xterm's
+     last column has the same breathing room as its first one —
+     asymmetric padding combined with overflow:hidden clipped the
+     rightmost / bottom-most character against the pane edge. */
   flex: 0 0 100%;
   width: 100%;
   height: 100%;
   background: var(--bg-elevated);
-  padding: var(--s-2) 0 0 var(--s-2);
+  padding: var(--s-2);
   overflow: hidden;
 }
 
@@ -4501,12 +4504,12 @@ body.workspace-active .landing-overlay { display: none; }
     overflow: hidden;
   }
 
-  /* 输入框移动端：确保 placeholder 不换行 */
-  .chat-textarea {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  /* Mobile: keep the placeholder on one line (no wrap / ellipsis
+     past the textarea width). Do NOT apply white-space:nowrap to
+     the textarea itself — that single-lines real input, hiding the
+     leftmost chars as you type past visible width and clipping the
+     rightmost with text-overflow, AND freezes the textarea at
+     38 px because scrollHeight can never grow (kills autoResize). */
   .chat-textarea::placeholder {
     white-space: nowrap;
     overflow: hidden;
