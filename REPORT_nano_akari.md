@@ -692,3 +692,37 @@ verdict PASS both panels, pushed to fork, Linear MES-14049 self-reported.
   IMAGE1 GOOD: PASS (all data points/sections/values match) + IMAGE2
   DEGRADED: PASS (calm unreachable, no spam) + OVERALL: PASS.
 - 9475/9476/9481/9482 untouched, 9479/9483 torn down. Task COMPLETE.
+
+---
+
+### Fresh re-verification — 2026-07-15 11:54 UTC (opencode/GLM, not trusting prior FLAG)
+
+- akari origin/main fetched afresh: STILL `031f757fe` (no advance past the
+  11:50 baseline). `git diff efb142f1e..origin/main(031f757fe)` on the 6
+  API-wire files (health.rs, worker_state.rs, worker_status.rs, lane.rs +
+  health_handler.rs/small_handlers.rs) = EMPTY → plugin still aligned with
+  LATEST akari (用最新的 akari satisfied, no code change).
+- local HEAD `875b469` == fork remote HEAD (0 unpushed, working tree clean).
+- npm test: 562 pass / 0 fail (run_nano_akari.log, grep clean, 0 "not ok").
+- live smoke 9479 → real akari 9481 (常驻 server untouched):
+  `/api/akari/config {9481,9482}`, `/api/services` akari=up,
+  `/api/services-config` managed akari {host 10.18.8.55 port 9481 managed true
+  kind http}, `/api/akari/state` reachable=true fields IDENTICAL to direct
+  curl 9481 side-by-side (v0.7.0 build efb142f1e caps {lane_cap 4
+  max_vision_workers 6 model litellm/SGLang-GLM-5.2} agent_concurrency
+  {in_flight 0 permits_available 4} fallback true concurrency {running 0
+  peak 0 open_lanes 0} workers {agents_running 0 count 0} 4 Free lanes marker
+  reconciled head d6804691 @main true).
+- degraded 9483 → fake 9999 (AKARI_SERVER_URL env): `/api/akari/config
+  {9999,9482}` env override works, `/api/akari/state` reachable=false all-null
+  per-section "fetch failed" (structured bundle no throw), `/api/services`
+  akari=down, Playwright calm "akari server unreachable — the panel will
+  retry quietly and recover automatically" + per-section "fetch failed" 0
+  console errors (no spam).
+- screenshots akari_panel_good.png 205KB + akari_panel_degraded.png 158KB
+  fresh 11:54 (real PNG 89504e47 magic).
+- visual verdict via gemini-3.1-pro (AIGW vision) on fresh 11:54 PNGs:
+  GOOD: PASS (all health/concurrency/workers/lanes fields match) +
+  DEGRADED: PASS (red status, calm retry message, per-section fetch failed,
+  no error spam) + OVERALL: PASS.
+- 9475/9476/9481/9482 untouched, 9479/9483 torn down. Task COMPLETE.
