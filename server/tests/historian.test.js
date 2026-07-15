@@ -55,6 +55,17 @@ describe('historian data collectors', () => {
     if (h.dryCount !== undefined) {
       assert.equal(typeof h.dryCount, 'number', 'dryCount must be number')
     }
+    // Enhanced fields: intervalLabel and currentInterval always present
+    assert.ok(typeof h.intervalLabel === 'string', 'intervalLabel must be a string')
+    assert.ok(typeof h.currentInterval === 'number', 'currentInterval must be a number')
+    // Optional enhanced fields
+    if (h.injectCount !== undefined) {
+      assert.equal(typeof h.injectCount, 'number', 'injectCount must be number')
+    }
+    if (h.gateStats !== undefined) {
+      assert.ok(typeof h.gateStats === 'string' || typeof h.gateStats === 'object',
+        'gateStats must be string or object')
+    }
   })
 
   it('collectBriefing returns structured briefing with all top-level keys', async () => {

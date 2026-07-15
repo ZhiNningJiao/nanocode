@@ -635,13 +635,13 @@ app.get('/api/akari/state', asyncWrap(async (_req, res) => {
 // Bundled state endpoint: one poll from the panel fetches everything.
 
 app.get('/api/historian/state', asyncWrap(async (_req, res) => {
-  const akariUrls = getAkariUrls()
+  const ak = akariUrls()
   const [army, logTail, wakerHealth, akariUp] = await Promise.all([
     readArmyStatus(),
     readWakerLogTail(30),
     getWakerHealth(),
-    akariUrls.serverUrl
-      ? checkAkariReachable(akariUrls.serverUrl, { timeout: 3000 }).catch(() => false)
+    ak.serverUrl
+      ? checkAkariReachable(ak.serverUrl, { timeout: 3000 }).catch(() => false)
       : Promise.resolve(false),
   ])
   res.json({ army, logTail, wakerHealth, akariUp })

@@ -5425,6 +5425,8 @@ body.workspace-active .landing-overlay { display: none; }
 .rp-btn-warn:hover { opacity: 0.85; }
 .rp-btn-ok { background: var(--success); color: #fff; }
 .rp-btn-ok:hover { opacity: 0.85; }
+.rp-btn-active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.rp-btn-active:hover { opacity: 0.85; }
 .historian-flash { font-size: 11px; margin-top: 4px; opacity: 0; transition: opacity 0.3s; }
 .historian-flash.show { opacity: 1; }
 .historian-flash.error { color: var(--error); }

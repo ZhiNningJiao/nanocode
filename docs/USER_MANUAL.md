@@ -189,7 +189,10 @@ The **Historian** tab (Monitor domain) monitors the external waker system (`wake
 2. **Waker Usage**: Parsed stats from the waker state directory:
    - **Beats**: Total tick count since the waker started
    - **Skipped**: Total skipped injections, broken down by reason (busy = agent was typing, quiet = heartbeat quiet, rate = hourly cap hit)
+   - **Injected**: Total successful briefing injections
    - **Dry ticks**: Number of dry ticks completed (auto-promotes to LIVE after 3)
+   - **Gate stats**: Injection gate counters (gap = too soon after last inject, cap = hourly limit hit, busy = user was typing)
+   - **Interval**: Current cadence mode (day/night/auto or custom seconds)
    - **Coverage**: List of agent tags currently monitored by the waker
 
 3. **Army Fleet Table**: Real-time agent fleet status from `~/codex_work/army_status.json`:
@@ -223,6 +226,8 @@ The interval buttons in the Controls section let you override this:
 - **Day (4.5m)**: Force work-hour cadence (WAKE_WORK_INTERVAL=270, WAKE_OFF_INTERVAL=270)
 - **Night (20m)**: Force off-hour cadence (WAKE_WORK_INTERVAL=1200, WAKE_OFF_INTERVAL=1200)
 - **Auto**: Remove the override, let waker auto-select based on current Beijing time
+
+The currently active interval button is highlighted (blue). The Stop button requires confirmation to prevent accidental shutdown.
 
 ### Historian as an Optional Plugin
 
@@ -318,6 +323,27 @@ Active sessions (PTY processes) survive the server restart; WebSocket reconnects
 
 **Cause**: The API source (AIGW, OAuth) is down or the token expired.
 **Fix**: This is honest degradation -- nanocode shows what's available and labels unavailable sources clearly. Check the specific source's health independently.
+
+### Historian shows stale tick warning (yellow)
+
+**Cause**: Waker is alive but hasn't ticked in >10 minutes. Could be stuck in a long data collection, rate-limited, or the waker_core.py process crashed inside the tmux session while tmux session survives.
+**Fix**:
+1. Check the tmux pane: `tmux attach -t waker` -- look for errors or hung state
+2. If crashed: `tmux kill-session -t waker` then restart via the panel
+3. If rate-limited: wait for the rate window to reset (usually <5 minutes)
+
+### Interval buttons don't seem to take effect
+
+**Cause**: The interval override is written to `~/code/.waker_env`, but the running waker process only reads it on the next tick. Changes take effect on the *next* waker cycle, not immediately.
+**Fix**: Wait for one tick cycle (up to the current interval duration). Or restart the waker via the controls to pick up the new interval immediately.
+
+### Waker injects but secretary doesn't respond
+
+**Cause**: The secretary claude session may have exited or be in a "deaf" state.
+**Fix**:
+1. Check that the secretary session is alive in the tab bar
+2. If the tab shows "exited", open a new session and resume
+3. The waker's inject mechanism uses WebSocket `claude-input` -- if the WS is dead, injection silently fails. Check waker.log for "inject failed" entries.
 
 ---
 
