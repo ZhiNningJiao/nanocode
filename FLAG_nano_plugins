@@ -1,13 +1,18 @@
 nano_plugins DONE (MES-14031)
 ============================
 原型: sessions 浏览器插件 (抄 codex resume/fork + claude --resume --fork-session)
-分支: zhining/nano-plugin-proto  commit: 2076aeb
+分支: zhining/nano-plugin-proto  commits: 2076aeb (原型) + 17e9ce2 (bugfix)
 worktree: ~/code/wt-nano-plugins
+fork 分支已 push (fork/zhining/nano-plugin-proto, 不开 PR)
 
 验证结果 (run_nano_plugins.log):
 - 9478 烟测: 231 codex + 1326 claude 真实会话发现, 预览 119 轮, 面板+manifest 正常服务
-- npm test: 545 pass / 0 fail (无回归)
+- 浏览器端到端实测: Sessions 列表/预览/Fork 三流均验, 发现并修复 2 个真实 bug
+  bug1: claudeSlugToCwd 丢前导 / (cwd 显示错 + fork 匹配不到项目) → 修复 + 回归测试
+  bug2: fork 调用不存在的 GET /api/projects/:id (404 静默跳过导航) → 复用已 resolve 的 project 对象
+  修复后实测: Fork claude 会话 → 跳转 #/local/skelconv2 + 真造 claude tab + 加载 435 条历史
+- npm test: 546 pass / 0 fail (原 545 + 1 新回归测试, 无回归)
 - 自检 grep: 无 FAIL/MISMATCH/NaN/NOT FOUND
 
-交付: REPORT_nano_plugins.md (调研12项 + 移植设计 + 原型 + 验证 + 后续)
+交付: REPORT_nano_plugins.md (调研12项 + 移植设计 + 原型 + 验证 + bugfix + 后续)
 状态: 成功 (无 FAILSIG_nano_plugins)
