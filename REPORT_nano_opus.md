@@ -83,3 +83,45 @@ To promote the integration build to 9475 (the primary):
 - No `/tmp` writes (only `/tmp/nano-9476-integration.log` for the server)
 - No secrets in git
 - No PR created (push only, per instructions)
+
+---
+
+## 2026-07-15 21:05 UTC — Opus independent re-verification (Team2 Opus, fresh session)
+
+Fresh independent verification of the entire integration, not trusting prior FLAGs.
+
+### Per-line test verification (fresh `npm test` on each worktree)
+| Line | Worktree | Tests | Result |
+|------|----------|-------|--------|
+| Akari | `wt-nano-akari` | 562/0 | PASS |
+| Upstream | `wt-nano-upstream` | 543/0 | PASS |
+| Plugins | `wt-nano-plugins` | 581/0 | PASS |
+| **Integration** | `wt-nano-integration` | **614/0** | **PASS** |
+
+### Smoke test matrix (port 9477 ephemeral, then 9476 live deployment)
+
+| Feature | Endpoint | 9477 Result | 9476 Result |
+|---------|----------|-------------|-------------|
+| Health | `/api/health` | `{"status":"ok"}` | `{"status":"ok"}` |
+| Akari config | `/api/akari/config` | `{serverUrl:9481, lensUrl:9482}` | same |
+| Akari state | `/api/akari/state` | `reachable=True, version=0.7.0` | same |
+| Akari services | `/api/services` -> akari | `status: up` | `status: up` |
+| Akari managed | `/api/services-config` | `{name:akari, host:10.18.8.55, port:9481, managed:true}` | same |
+| Sessions codex | `/api/sessions/list?source=codex` | `total=232` | `total=232` |
+| Sessions claude | `/api/sessions/list?source=claude` | `total=1327` | `total=1327` |
+| Panel JS (akari) | `/js/akari-panel.js` | 200 | 200 |
+| Panel JS (sessions) | `/js/sessions-panel.js` | 200 | 200 |
+| Panel JS (rewind) | `/js/rewind-panel.js` | 200 | 200 |
+| Panel JS (tasks) | `/js/tasks-panel.js` | 200 | 200 |
+| TTS JS | `/js/tts.js` | 200 | 200 |
+| Plugin registry | 12 plugins registered | akari/sessions/rewind/tasks all present | same |
+| Mute fix | `nanocode:mute-changed` in tts.js | 1 listener | 1 listener |
+| TTS stale-drop | `Discard queue` in tts.js | 1 code path | 1 code path |
+| 9475 untouched | `curl localhost:9475/api/health` | `{"status":"ok"}` | `{"status":"ok"}` |
+
+9477 was torn down after verification. 9476 confirmed serving the integration build.
+
+### Observations
+- All three GLM lines are **real work, not fake passes**. The akari proxy faithfully relays live data from 9481; sessions browser discovers real 1559 codex+claude sessions; upstream ports are real cherry-picks from origin.
+- The GLM agents were extremely repetitive — akari had ~20 docs-only re-verification commits, plugins had **46** re-verification iterations. The actual code was correct from early on.
+- No code changes needed in this verification pass — the integration was already complete and functional.
