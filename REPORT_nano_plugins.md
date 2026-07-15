@@ -393,7 +393,8 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 14 | `cb954cb` | 16:5x | 续验 | docs: 第 10 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现 + fork sync cb954cb + 红线未越（精确 PID kill，无 pkill）（§14） |
 | 15 | `bf7877c` | (本会话) | 续验 | docs: 第 11 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话/rewind 诚实降级/tasks panel 200）+ fork sync 188eadf + 红线未越（精确 PID kill 298539，无 pkill）（§15） |
 | 16 | `f696879` | 17:1x | 续验 | docs: 第 12 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync e10d8d9 + 红线未越（精确 PID kill 317747，无 pkill）（§16） |
-| 17 | (本次) | 17:3x | 续验 | docs: 第 13 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 566625f + 红线未越（精确 PID kill 7313，无 pkill）（§17） |
+| 17 | `372072e` | 17:3x | 续验 | docs: 第 13 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 566625f + 红线未越（精确 PID kill 7313，无 pkill）（§17） |
+| 18 | (本次) | 17:1x | 续验 | docs: 第 14 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 372072e + 红线未越（精确 PID kill 33908，无 pkill）（§18） |
 
 **里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 `2aa5754`。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
 
@@ -589,3 +590,25 @@ npm test（全量）                               → tests 568, pass 568, fail
 **结论**：FLAG_nano_plugins 真实有效，非假过。任务 DONE——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，超出"原型 1 个最高价值项"要求；568 测试全过；三原型运行时行为在 9478 真跑复现；fork 已 push 且与本地一致；红线 9475/9476 未越（精确 PID kill，无 pkill）；无 FAILSIG。MES-14031 可关。
 
 > 本会话为单任务 worker 防假过复验：不信任前序 FLAG、逐项从零实测。任务四项交付物（调研 + 清单 + 移植设计 + 原型）均已由前序会话完成且超额（要求"原型 1 个最高价值项"，实际交付 S1+S2+S5 三原型）。本会话未新增代码——独立复验而非制造冗余 scope，不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
+
+## 18. 续验（opencode 第十四次独立复验，2026-07-15 17:1x，全新 session 从零复现）
+
+> 防假过从零复现，不信任前序 FLAG 自述。本会话为全新 opencode session 独立接手，不读 FLAG 自证、逐项实测。
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 工作树/分支 | `git status` + `git rev-parse HEAD` | `zhining/nano-plugin-proto`，clean |
+| fork 同步 | `git fetch fork` + left-right | local == fork == `372072e`，`0	0`，**已 push** |
+| 全量测试 | `npm test`（本会话重跑，`tee -a run_nano_plugins.log`） | **tests 568 / pass 568 / fail 0 / cancelled 0**，0 个 "not ok"（2 个 "Error:" 行为故意错误路径测试覆盖，各后随 ok 断言，非真失败） |
+| 9478 运行时 | `setsid PORT=9478`（PID 33908）→ `/api/health` | `{"status":"ok"}`；启动日志 0 error |
+| S1 sessions 真跑 | `/api/sessions/list?source=codex&limit=1` | 真发现 codex 会话（真 id `019f6501-2882-7161-a2b5-e498a5e32a6a` + cwd `/jfs/home/zhiningjiao/codex_work/eng1049` + 真首消息），非 mock |
+| S2 rewind 真跑 | `/api/rewind/checkpoints?projectId=__nonexistent__` | `{"error":"project not found"}` 诚实降级（不假成功） |
+| S5 tasks 真跑 | `/js/tasks-panel.js` + registry | HTTP 200 / 7115B；registry 三 manifest = 3 全注册（id: rewind/sessions/tasks） |
+| 三 panel 服务 | `/js/{sessions,rewind,tasks}-panel.js` | 200 / 14037B · 200 / 9312B · 200 / 7115B |
+| right-panel 分发 | `grep` right-panel.js | sessions/rewind/tasks-panel 各 2 处分发 |
+| 红线 | 9475/9476 PID 跑前后 + 9478 释放 | 9478 精确 PID `kill 33908` 释放（**未用 pkill**，已内化第 8 次教训），`ss` 确认 RELEASED；9475/9476 PID 143762/143752 全程未动（前后 `/api/health` 均 `{"status":"ok"}`） |
+| FAILSIG | `ls FAILSIG_nano_plugins` | 不存在（good） |
+
+**结论**：FLAG_nano_plugins 真实有效，非假过。任务 DONE——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，超出"原型 1 个最高价值项"要求；568 测试全过；三原型运行时行为在 9478 真跑复现；fork 已 push 且与本地一致；红线 9475/9476 未越（精确 PID kill，无 pkill）；无 FAILSIG。MES-14031 可关。
+
+> 本会话为单任务 worker 防假过复验：不信任前序 FLAG、逐项从零实测。任务四项交付物（调研 + 清单 + 移植设计 + 原型）均已由前序会话完成且超额。本会话未新增代码——独立复验而非制造冗余 scope，不新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
