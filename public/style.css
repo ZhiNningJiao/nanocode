@@ -2211,10 +2211,19 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 
 /* xterm renders directly inside pane-terminal. Padding HERE is what
    FitAddon subtracts when proposing cols/rows — the only place we can
-   give the terminal breathing room without breaking the dimension calc. */
+   give the terminal breathing room without breaking the dimension calc.
+
+   Right padding is intentionally LARGER than the other sides as a
+   belt-and-suspenders safety margin: even if the cell-width measurement
+   ends up off by a fraction of a pixel (sub-pixel rendering, residual
+   webfont-swap mismatch, or browser-dependent scrollbar gutter), an
+   extra char-cell of empty space on the right absorbs the overshoot
+   so the rightmost character is always fully visible. The cost is
+   ~1ch (~9px) of unused space at the right edge, invisible against
+   the pane background. */
 .terminal-track > .pane-terminal > .xterm {
   box-sizing: border-box;
-  padding: var(--s-2);
+  padding: var(--s-2) var(--s-5) var(--s-2) var(--s-2);
 }
 
 .xterm-viewport { -webkit-overflow-scrolling: touch; }

@@ -72,6 +72,31 @@ document.addEventListener('nanocode:theme', () => {
   }
 })
 
+// When the JetBrains Mono webfont arrives AFTER xterm has already measured
+// its cellWidth against the fallback monospace, every live xterm needs to
+// remeasure and refit — otherwise the cached fallback cellWidth × cols ends
+// up wider than the pane and the last character of each line clips (bleed).
+//
+// fontSize toggle is the most reliable public-API remeasure trigger: it
+// ALWAYS fires the option-change event (xterm recomputes both cellWidth AND
+// cellHeight when fontSize changes), even if the numeric value differs by
+// less than a pixel. letterSpacing/fontFamily toggles were both being
+// short-circuited by xterm's option-change handler. The +1 / restore
+// round-trip happens within a single animation frame so the visible glitch
+// is sub-perceptible.
+if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => {
+    for (const pane of PANES) {
+      try {
+        const fs = pane.term.options.fontSize
+        pane.term.options.fontSize = fs + 1
+        pane.term.options.fontSize = fs
+        pane._fit()
+      } catch {}
+    }
+  })
+}
+
 // Reconnect backoff: 500ms → 1s → 2s → 4s → 8s → 10s cap
 const BACKOFF_BASE = 500
 const BACKOFF_MAX = 10000
@@ -128,12 +153,32 @@ export class TerminalPane {
       scrollback: mobile ? 2000 : 4000,
       cursorBlink: true,
       allowProposedApi: true,
+      // OSC 8 hyperlinks (some programs, including claude code, wrap URLs
+      // in OSC 8 markers instead of relying on link autodetection). xterm
+      // parses the markers but does nothing on click unless a handler is
+      // registered — open the URI in a real browser tab, stripping opener.
+      linkHandler: {
+        activate(_event, uri) {
+          try { window.open(uri, '_blank', 'noopener,noreferrer') } catch {}
+        },
+      },
     })
     PANES.add(this)
 
     this.fitAddon = new FitAddon()
     this.term.loadAddon(this.fitAddon)
-    this.term.loadAddon(new WebLinksAddon())
+    // Custom URL handler: nanocode runs in a browser, so workers have no
+    // system clipboard or xdg-open equivalent. When the user taps a URL in
+    // the terminal, open it in a real browser tab and strip opener so the
+    // new tab can't reach back into this origin. window.open(uri, '_blank',
+    // 'noopener,noreferrer') is more reliable than the addon's default
+    // window.open() + location.href dance, which iOS Safari blocks as a
+    // synthetic popup.
+    this.term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        window.open(uri, '_blank', 'noopener,noreferrer')
+      })
+    )
 
     // Local echo for high-latency: show typed chars immediately, reconcile with server output
     this.localEcho = new LocalEcho({
@@ -142,6 +187,33 @@ export class TerminalPane {
 
     // Open in container
     this.term.open(container)
+
+    // OSC 52 — programmatic clipboard write. Claude Code's "press c to copy
+    // URL" prompt emits `ESC ] 52 ; c ; <base64-of-text> BEL`. The worker
+    // has no system clipboard (headless), so the sequence must be handled
+    // here on the browser side and routed through the user's browser
+    // clipboard. xterm.js doesn't enable OSC 52 by default for security
+    // (a remote program writing the user's clipboard is a real risk on a
+    // multi-user host), but in nanocode the only program writing to the PTY
+    // is one the user explicitly launched, so the trust model covers it.
+    // Read requests (payload === '?') are refused — we never echo the
+    // user's clipboard back to the program.
+    try {
+      this.term.parser.registerOscHandler(52, (data) => {
+        // Payload format: <selection>;<base64-data>
+        // - selection: c=clipboard, p=primary, q,s=others. Treat all as clipboard.
+        // - data == '?'  → read request; refuse (don't echo the user's clipboard).
+        const sep = data.indexOf(';')
+        if (sep < 0) return true
+        const payload = data.slice(sep + 1)
+        if (payload === '?' || payload === '') return true
+        try {
+          const text = atob(payload)
+          if (text) navigator.clipboard.writeText(text).catch(() => {})
+        } catch {}
+        return true   // handled; don't let xterm pass to default
+      })
+    } catch {}
 
     // Mobile: fix touch scrolling — xterm.js sets inline touch-action:none on
     // .xterm-screen which blocks all touch gestures. Override it and add manual
@@ -181,9 +253,10 @@ export class TerminalPane {
       this._send({ type: 'input', data })
     })
 
-    // Paste handler — Ctrl+V / Ctrl+Shift+V
+    // Paste / copy handlers.
     this._keyDisposable = this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
+      // Ctrl+V / Cmd+V — paste from system clipboard into the PTY.
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
         navigator.clipboard
           .readText()
@@ -192,6 +265,25 @@ export class TerminalPane {
           })
           .catch(() => {})
         return false
+      }
+      // Copy semantics:
+      //   Ctrl+Shift+C / Cmd+Shift+C → ALWAYS copy current selection, never
+      //   forward to the PTY. The standard terminal convention.
+      //   Ctrl+C / Cmd+C with an active selection → copy the selection and
+      //   suppress \x03 so the running program isn't interrupted.
+      //   Ctrl+C / Cmd+C with no selection → fall through (xterm sends \x03).
+      const isCopyChord =
+        (e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')
+      if (isCopyChord) {
+        const wantsExplicitCopy = e.shiftKey
+        const hasSelection = this.term.hasSelection && this.term.hasSelection()
+        if (wantsExplicitCopy || hasSelection) {
+          const sel = this.term.getSelection ? this.term.getSelection() : ''
+          if (sel) {
+            try { navigator.clipboard.writeText(sel) } catch {}
+          }
+          return false
+        }
       }
       return true
     })
