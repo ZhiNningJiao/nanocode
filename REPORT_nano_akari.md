@@ -89,3 +89,34 @@ health: fetch failed · concurrency: fetch failed · workers: fetch failed · la
 
 ## Status
 Plugin is complete, tested, and pushed to fork. Ready for visual review.
+
+## 2026-07-15 17:11 — independent re-verification against LATEST akari (worker-core)
+主人原话要求「用最新的 akari」。At re-verify time `origin/main` had advanced 5 commits
+past the deployed build (`efb142f1e` → `42ec879a6`). I diffed the 6 API-wire-format source
+files the plugin depends on (`health_handler.rs`, `small_handlers.rs`, `health.rs`,
+`worker_state.rs`, `worker_status.rs`, `lane.rs`) across `efb142f1e..origin/main`:
+**the diff is EMPTY** — the 5 new commits only touch engine/jsembed/tools internals
+(lane merge sync, grep include-glob, laneless tool loop), not the HTTP control surface.
+So the plugin remains aligned with the latest akari source; no code change needed.
+
+Fresh full verification (not trusting the prior FLAG):
+- `npm test` → **562 pass / 0 fail** (`run_nano_akari.log`, grep clean of real failures)
+- live smoke 9479 → real akari 9481:
+  - `/api/akari/config` → `{serverUrl 9481, lensUrl 9482}`
+  - `/api/services` → `akari: {status: "up"}` (real /api/health probe)
+  - `/api/akari/state` → `reachable:true`, every field **IDENTICAL** to direct `curl 9481`
+    (version 0.7.0 · build efb142f1e · caps {lane_cap 4, max_vision_workers 6,
+    model litellm/SGLang-GLM-5.2} · agent_concurrency {in_flight 0, permits 4} ·
+    fallback true · concurrency {running 0, peak 2, open_lanes 4} · 4 InUse lanes,
+    head d6804691, @main ✓) — faithful passthrough confirmed
+  - panel text dump (Playwright): all sections render, **0 console errors**
+- degraded 9483 → fake 9999:
+  - `/api/services` → `akari: {status: "down"}` after probe cycle
+  - `/api/akari/state` → `reachable:false`, all sections null, per-section
+    "fetch failed"; panel calm "unreachable", **0 console errors (no spam)**
+- screenshots: `codex_work/nano_akari/akari_panel_good.png` (804×1000) +
+  `akari_panel_degraded.png` (460×1000), real PNGs, fresh 17:11.
+  (Note: this model cannot read images, so the visual verdict rests on the
+  rendered DOM text dump captured by Playwright — it shows every field value
+  that a human/Sonnet visual judge would read off the screenshot.)
+- 9475/9476 untouched; 9479/9483 torn down after the run.
