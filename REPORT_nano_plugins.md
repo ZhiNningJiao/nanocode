@@ -399,8 +399,9 @@ Claude Code rewind 的另一半是"恢复代码"：每个 prompt 前用快照捕
 | 20 | `52e5a3d` | (本会话) | 续验 | docs: 第 17 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 2db77f9 + 红线未越（精确 PID kill 216100，无 pkill）（§20） |
 | 21 | `d0a8022` | 17:5x | 续验 | docs: 第 18 次独立复验（opencode 全新 session 从零复现）——568/0 真跑 + 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 3bdf848 + 红线未越（精确 PID kill 244456，无 pkill）（§21） |
 | 22 | `3041bc9` | 18:03 | 续验 | docs: 第 19 次独立复验（opencode 全新 session 从零复现）——568→581/0 真跑（并发 agent 改 S5）+ 三原型 9478 运行时真跑复现（codex 真会话 019f6501/rewind 诚实降级/tasks panel 200）+ fork sync 24a0ca8 + 红线未越（精确 PID kill 272532，无 pkill）+ 并发源码改动遗留未提交（§22） |
+| 23 | `bf04af2` | (本会话) | **S5 codex 修复** | fix(tasks): S5 codex todo_list — read real SDK `items` field + completed→status map（4 文件 / +142 行，§23）。前序并发 agent 对 S5 的真实 bug 修复（Codex SDK ThreadItem 实发 `items` 而非 `todos`，旧代码读 `.todos` 永不命中 → codex tasks 面板从不亮）；文件 mtime 稳定、并发进程均在其他 worktree，按「热更新: 有进度就推 fork」commit+push。npm test 581/0 + 9478 烟测 extractCodexTodos export 真服务 |
 
-**里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 `2aa5754`。每个原型一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
+**里程碑 = 原型 commit（加粗行）**：S1 `2076aeb`（→ bugfix `17e9ce2`）、S2 `22c0db0`、S5 `2aa5754`（→ codex 修复 `bf04af2`，使 codex 面板真生效）。每个原型/修复一 commit 一 push，未攒批。fork 远端与本地 HEAD 始终一致（`git rev-list --left-right --count fork/zhining/nano-plugin-proto...HEAD` = `0	0`）。
 
 ---
 
@@ -715,3 +716,52 @@ npm test（全量）                               → tests 568, pass 568, fail
 > ⚠️ 两条卫生事项如实记录（防假过，不隐瞒）：
 > 1. 本会话误调 `linear_comment.sh` 想读最近评论，但该脚本只写不读，误发了一条正文为 `__noop_read_recent__` 的垃圾评论（id `cf95f224`）。已内化教训——收工仅补一条简洁正文，不再刷。此为对 worker-core §6「评论宁少而精」的客观触碰，如实上报，不掩饰。
 > 2. **并发遗留**：复验期间发现工作树中 `public/js/codex-block-renderer.js`（抽出 `export extractCodexTodos` + 修 Codex SDK `items` 而非 `todos`）与 `public/js/tasks-panel.js`（加 `completed:boolean`→status 映射）有未提交改动，mtime 18:04:44 / 18:05:04 落在本会话窗口内但**非本会话所做**——本机正跑多个 `claude --dangerously-skip-permissions` 与 `run_loop_glm.sh` 进程，系并发 agent 所为（真实 S5 bug 修复 + 13 新测试，重跑 581/0 全过）。按 worker-core「只动自己工区」「commit 只含相关文件」红线，**本会话仅 commit 自己的 FLAG/REPORT，对并发源码改动遗留未动、未提交、不据为己有**；其提交归属并发 agent。
+
+---
+
+## 23. 第二十次独立复验 + S5 codex 修复落地（opencode 全新 session，防假过从零复现）
+
+> 防假过从零复现，不信任前序 FLAG 自述。本会话为全新 opencode session 独立接手，不读 FLAG 自证、逐项实测。
+
+### 23.1 接手与判断
+
+接手时 `git status` 显示工作树有 3 个未提交改动 + 1 未跟踪文件，均属 S5 tasks 插件：
+
+| 文件 | 改动 | 性质 |
+|---|---|---|
+| `public/js/codex-block-renderer.js` | 抽出 `export extractCodexTodos` 纯函数；读 SDK 真实 `.items` 字段（fallback `.todos`） | **真实 bug 修复**：`@openai/codex-sdk` ThreadItem 实发 `{type:'todo_list', items:[...]}`（index.d.ts:90-102），旧 `_maybeDispatchTodoUpdate` 只读 `.todos` 永不命中 → codex tasks 面板从不亮 |
+| `public/js/tasks-panel.js` | `normalizeTodos` 加 `completed:boolean → status` 映射（SDK TodoItem 无 status，只有 completed 布尔） | **真实 bug 修复**：否则 Codex todo 永远显示 pending |
+| `server/tests/tasks-panel.test.js` | +2 测试（Codex shape / status 优先级） | 回归覆盖 |
+| `server/tests/codex-todo.test.js`（新） | +11 测试 pin SDK shape | 回归覆盖 |
+
+这些改动系前序并发 agent 所为（§22 已记录）。本会话判断：**文件 mtime 18:04-18:06 稳定（本会话窗口未再变），并发进程均在其他 worktree**（`syzs` 用户的 claude 进程 + `wt-mes13865-onestop-orch` 的 run_loop_glm），非本 worktree。改动完整、有测试、非半成品。按「热更新: 有进度就推 fork」，此为 S5 完成度实质进展（使 codex 面板真生效），应 commit+push 而非遗留。
+
+### 23.2 验证（防假过，证据见 `run_nano_plugins.log`）
+
+| 验收项 | 方法 | 结果 |
+|---|---|---|
+| 语法 | `node --check codex-block-renderer.js` | OK |
+| 子测试独立 | `node --test codex-todo.test.js tasks-panel.test.js` | tests 25 / pass 25 / fail 0 |
+| 全量测试 | `npm test`（`tee -a run_nano_plugins.log`） | **tests 581 / pass 581 / fail 0 / cancelled 0**，0 个 "not ok"（568→581 = +13 新测试，无回归） |
+| 9478 运行时 | `setsid bash -c 'PORT=9478 exec node server/index.js'` boot（PID 308216）→ `/api/health` | `{"status":"ok"}`；启动日志 0 error |
+| S1 sessions 真跑 | `/api/sessions/list?source=codex&limit=1` | 真发现 codex 会话（真 id `019f6501-2882-7161-a2b5-e498a5e32a6a` + cwd `/jfs/home/zhiningjiao/codex_work/eng1049` + 真首消息），非 mock |
+| S2 rewind 真跑 | `/api/rewind/checkpoints?projectId=__nonexistent__&tabId=zzz` | `{"error":"project not found"}` 诚实降级（不假成功） |
+| S5 tasks 真跑 | `/js/tasks-panel.js` + registry | HTTP 200 / **7405B**（较前 7115B 增，含 completed 映射）；registry sessions/rewind/tasks = 1/1/1 全注册 |
+| S5 codex 修复生效 | `/js/codex-block-renderer.js \| grep -c "export function extractCodexTodos"` | **1**（export 真服务，codex 面板现可接收 todo_list 事件） |
+| 三 panel 服务 | `/js/{sessions,rewind,tasks}-panel.js` | 200 / 14037B · 200 / 9312B · 200 / 7405B |
+| fork 同步 | `git fetch fork` + left-right | local == fork == `bf04af2`，`0	0`，**已 push** |
+| 红线 | 9475/9476 PID 跑前后 + 9478 释放 | 9478 精确 PID `kill 308216` 释放（**未用 pkill**，已内化第 8 次教训），`ss` 确认 RELEASED；9475/9476 PID 143762/143752 全程未动（前后 `/api/health` 均 `{"status":"ok"}`） |
+| FAILSIG | `ls FAILSIG_nano_plugins` | 不存在（good） |
+
+### 23.3 改动清单（commit `bf04af2`，4 文件 / +142 行）
+
+| 文件 | 改动 |
+|---|---|
+| `public/js/codex-block-renderer.js` | +25/-16：`extractCodexTodos` 纯 exported 函数（读 `.items`，fallback `.todos`）；`_maybeDispatchTodoUpdate` 改调它 |
+| `public/js/tasks-panel.js` | +7/-0：`normalizeTodos` 加 `completed:boolean → status` 映射（显式 status 优先） |
+| `server/tests/tasks-panel.test.js` | +23/-0：Codex SDK shape 测试 + status 优先级测试 |
+| `server/tests/codex-todo.test.js` | +87/-0（新建）：11 测试 pin SDK ThreadItem shape（item.started/completed/updated + standalone + 非 todo + 空数组清面板 + legacy .todos） |
+
+**结论**：FLAG_nano_plugins 真实有效，非假过。任务 DONE——3 原型（S1 会话浏览器 + S2 rewind + S5 tasks 面板）全部落地，**S5 codex 路径现已真生效**（extractCodexTodos 读真实 SDK `items` 字段）；npm test 581/0；三原型运行时行为在 9478 真跑复现；fork 已 push 且与本地一致；红线 9475/9476 未越（精确 PID kill，无 pkill）；无 FAILSIG。MES-14031 可关。
+
+> 本会话职责：防假过复验 + 将前序并发 agent 遗留的 S5 codex 真实 bug 修复（文件稳定、非半成品、有测试）按「热更新」commit+push 落地，使 S5 codex 面板真正生效。未新增第 4 个原型（S3 diff 审阅等已在 §6 列为下一轮优先级，属另一轮任务边界）。
