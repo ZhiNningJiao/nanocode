@@ -127,3 +127,37 @@ New Opus session independently re-verified the entire integration from scratch.
 
 ### Verdict
 **PASS** — integration is genuine, complete, tested (618/0), live on 9476, and pushed to fork.
+
+---
+
+## Desktop input permanently locked — root cause + fix (2026-07-15, commit `b588574`)
+
+### Symptom
+Desktop browsers on both 9475 and 9476 could not send messages (input box locked in "thinking" state). Mobile worked fine.
+
+### Root cause
+When the browser's WebSocket disconnects and reconnects (common on desktop due to sleep/wake, network transitions):
+
+1. `claude-block-renderer.js` resets `this._thinking = false` **directly** (line 1193) without dispatching `nanocode:claude-thinking`
+2. `terminal-view.js`'s `isClaudeThinking` remains `true` from before the disconnect
+3. History replay uses `fromReplay=true`, which skips `_setThinking()` calls
+4. If the turn completed while offline, no live events arrive to correct the stale state
+5. Result: `isClaudeThinking` stuck at `true` forever, send button hidden, stop button shown
+
+### Three-layer fix
+
+| Layer | File | Change |
+|-------|------|--------|
+| **Server** | `claude-session-controller.js` | Send `busy-state` message on attach so client knows ground truth |
+| **Client CBR** | `claude-block-renderer.js` | Handle `busy-state` to correct `_thinking`; dispatch sync event after reconnect replay |
+| **Client terminal-view** | `terminal-view.js` | On tab switch, check `pane.isThinking()` for ALL block-agent tabs (not just bg tabs) |
+
+### User-side immediate workaround
+If still stuck after refresh: switch to another tab (Tab key) then switch back. The tab-switch handler now queries the renderer's ground-truth state and corrects the input bar.
+
+### Tests
+618/0 pass, no regression.
+
+### Deployment
+- 9476 restarted with fix at `b588574` (PID 263183)
+- 9475 untouched (needs server restart to get `busy-state` message, but tab-switch + CBR-dispatch fixes are frontend-only and will help after cache-bust refresh)
