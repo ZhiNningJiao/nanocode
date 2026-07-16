@@ -595,3 +595,19 @@ commit 03beb00
 - fork/main：仍 4 ahead（5945c5a/e68ed60/d3da9db/570c744，与 R7 一致，无新增）——opus_burn codex 块渲染大改未并入 9476，按任务书「大改先在任务书下等批」继续不动，留主人定夺
 - 过程产物：run_nano_maint.log gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
 - 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；仅提交 work-log 记账，无 push 无部署
+
+## 2026-07-16 [nano_maint R9 — 九巡，9475/9476 健康，fork/main 已并 opus_burn 4 提交，push fork 同步 8 work-log 提交，NOTHING-TO-DO]
+- 接班状态：HEAD 1b1c7c9（R8 work-log 提交），工作树干净（仅未跟踪 .git.bak-migrate，前置遗留不动）
+- 健康巡检（`tee -a run_nano_maint.log`）：
+  - 9475 = 200（未触碰，按红线不动 9475）
+  - 9476 = 200；/api/health = ok；/api/services：nanocode up / akari up（mblend·dccpipeline·regression·TTS down，非 nanocode 维护面，预期，与 R1-R8 一致）；/api/sessions = 200
+- 前端报错巡检（Playwright headless 加载 http://localhost:9476/，networkidle+2.5s，脚本 _fe_check.mjs 仓内起、用后即删）：
+  - title="Nanocode"，console error/warning = 0，pageerror = 0，failed request = 0
+- npm test（`tee -a run_nano_maint.log`）：`node --test server/tests/*.test.js` → 653 pass / 0 fail
+- run.log 自查：`git check-ignore run_nano_maint.log` 命中（gitignored）；`rg --no-ignore -c "^not ok"` = 0 匹配；npm test 汇总 `# fail 0` 确认零失败
+- 待办扫描：~/codex_work/REVIEW_REQ_* / CHORE_* = 0；FLAG_* 仍 6 月遗留空旗（按 handoff 跳过）
+- fork/main 状态变更（本轮新发现）：fork/main 已前进到 5945c5a——主人已将 opus_burn 的 4 个实质提交（5945c5a/e68ed60/d3da9db/570c744）并入 fork/main。`git merge-base --is-ancestor` 逐条确认 4 提交均 IN fork/main。R1-R8 报的「fork/main 4 ahead（未并入）」已清零
+- 本分支相对 fork/main：8 ahead（R1+R2~R9 共 8 个 work-log doc 提交，均为 NOTHING-TO-DO 巡检记账，无源码改动）——达 WORKER_CORE §6「3+ 未推 commit → push」里程碑
+- 动作：push fork 同步分支（仅 docs work-log，不开 PR，不动 9475，无功能改动故不部署 9476）
+- 过程产物：run_nano_maint.log gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
+- 本轮无可修复 bug / 无待办 → NOTHING-TO-DO
