@@ -97,7 +97,13 @@ When the Codex SDK driver is active, codex tabs use **structured event rendering
 - **Copy output buttons**: Every command block, response block, and sync-output block has a "Copy" button in the header for one-click clipboard copy
 - **Fold states**: Click any block header to cycle between full/header/line views (persisted in localStorage). **Ctrl+Shift+F** toggles all blocks open/closed at once
 - **PTY text markdown**: Even in PTY mode (non-SDK), text output is rendered as markdown with syntax highlighting and copy buttons
-- **Session stats bar**: Live counters for total blocks, commands, file changes, and turns
+- **Session stats bar**: Live counters for total blocks, commands, file changes, turns, and errors (click error count to jump to last error)
+- **Search in blocks** (Ctrl+G): Opens a search overlay to find text across all rendered blocks. Use Enter/Shift+Enter to navigate matches. Also accessible via the search icon in the stats bar
+- **File change grouping**: When multiple file changes arrive in quick succession, they are automatically grouped under a collapsible "N files changed" header showing affected paths
+- **File path & URL auto-linking**: File paths and URLs in agent messages and PTY output are automatically detected and made clickable. File paths open in the explorer; URLs open in new tabs
+- **Word-level inline diff**: Adjacent removed/added lines in file change diffs show word-level highlights to pinpoint exactly what changed within a line
+- **Expandable diff context**: Collapsed "N unchanged lines" sections in diffs are clickable to reveal the hidden lines in-place
+- **Rate-limit indicator**: Displays a countdown when the model is rate-limited
 
 ---
 
@@ -369,6 +375,9 @@ Active sessions (PTY processes) survive the server restart; WebSocket reconnects
 ## Keyboard & Navigation Tips
 
 - **Ctrl+Shift+`** (backtick): Toggle right panel open/close
+- **Ctrl+G**: Open search overlay in codex block renderer (search through blocks)
+- **Ctrl+Shift+F**: Toggle fold all blocks open/closed (codex block renderer)
+- **Ctrl+C** (in codex tab): Sends interrupt via POST API to properly stop the agent
 - Click a tab name in the tab bar to switch sessions
 - Right-click a tab for context menu (close, rename, etc.)
 - The right panel has two domains: **Work** (top) and **Monitor** (bottom) -- switch with the domain buttons at the top of the panel
