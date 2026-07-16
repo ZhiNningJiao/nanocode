@@ -85,14 +85,14 @@ Switch via **Settings > Session > Render Mode**:
 When the Codex SDK driver is active, codex tabs use **structured event rendering** instead of raw PTY text:
 
 - **Agent messages**: Rendered as markdown with code blocks, syntax highlighting, and **copy buttons** on each code fence
-- **Command execution**: Foldable blocks showing the command, live "running..." status, exit code (green checkmark or red X), and **HH:MM:SS timestamps**. Successful commands (exit 0) **auto-fold** to save screen space
+- **Command execution**: Foldable blocks showing the command, live "running..." status with **elapsed timer** (counts seconds while running), exit code (green checkmark or red X), and **HH:MM:SS timestamps**. Successful commands (exit 0) **auto-fold** to save screen space
 - **File changes**: Diff blocks with **LCS-based diffing** (same quality as Claude tab) showing added/removed/unchanged lines with **line numbers** and context collapse
 - **Reasoning blocks**: Collapsible thinking summaries with markdown rendering, elapsed time badge, and first-sentence preview when folded
 - **MCP tool calls**: Blocks for external tool invocations via Model Context Protocol, showing tool name, server, arguments, and success/error status
 - **Web search**: Visual indicator when Codex performs web searches
 - **Usage/token display**: End-of-turn token usage (input, output, cached, reasoning tokens) shown below each turn separator
 - **Thinking indicator**: Animated dot with elapsed timer showing how long Codex has been processing
-- **Turn separators**: Visual dividers between conversation turns with a notification event for the alert system
+- **Turn separators**: Visual dividers between conversation turns with **HH:MM:SS timestamps** and a notification event for the alert system
 - **Smart auto-scroll**: Auto-scrolling pauses when you scroll up to read earlier output, and resumes when you click the scroll-to-bottom button or send new input
 - **Copy output buttons**: Every command block, response block, and sync-output block has a "Copy" button in the header for one-click clipboard copy
 - **Fold states**: Click any block header to cycle between full/header/line views (persisted in localStorage). **Ctrl+Shift+F** toggles all blocks open/closed at once
@@ -104,6 +104,12 @@ When the Codex SDK driver is active, codex tabs use **structured event rendering
 - **Word-level inline diff**: Adjacent removed/added lines in file change diffs show word-level highlights to pinpoint exactly what changed within a line
 - **Expandable diff context**: Collapsed "N unchanged lines" sections in diffs are clickable to reveal the hidden lines in-place
 - **Rate-limit indicator**: Displays a countdown when the model is rate-limited
+- **Connection loss recovery**: Connection-lost messages update in-place instead of flooding the output with multiple banners. Shows reconnect attempt count and auto-clears on successful reconnect
+- **File change preview**: New files show up to 200 lines (up from 50) for better visibility into created content
+- **Image rendering**: Inline images from tool results (base64 or URL) are rendered directly in blocks. Supports MCP tool outputs and command execution results that include screenshots or diagrams
+- **Block navigation** (Alt+Up/Down): Jump between blocks with keyboard shortcuts. The target block is briefly highlighted and its header receives focus for keyboard-first UX
+- **Keyboard-accessible fold headers**: All fold headers are focusable (Tab key), operable via Enter/Space, and have proper `aria-expanded` and `role="button"` attributes for screen readers
+- **MCP result markdown**: MCP tool results are now rendered as markdown with syntax highlighting and copy buttons instead of plain JSON
 
 ---
 
@@ -377,6 +383,8 @@ Active sessions (PTY processes) survive the server restart; WebSocket reconnects
 - **Ctrl+Shift+`** (backtick): Toggle right panel open/close
 - **Ctrl+G**: Open search overlay in codex block renderer (search through blocks)
 - **Ctrl+Shift+F**: Toggle fold all blocks open/closed (codex block renderer)
+- **Alt+Up/Down**: Navigate between blocks in codex block renderer (jumps to prev/next block)
+- **Enter/Space on fold headers**: Toggle fold state (keyboard-only navigation)
 - **Ctrl+C** (in codex tab): Sends interrupt via POST API to properly stop the agent
 - Click a tab name in the tab bar to switch sessions
 - Right-click a tab for context menu (close, rename, etc.)
