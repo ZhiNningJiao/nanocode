@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-16
 **Branch**: `zhining/nano-plugin-akari`
-**Commits**: 32fca57 (Round 1) + 6334638 (Round 2) + 04dac4e (Round 3)
+**Commits**: 32fca57 (Round 1) + 6334638 (Round 2) + 04dac4e (Round 3) + f72cca2 (Round 4)
 
 ---
 
@@ -58,6 +58,7 @@
 Round 1: 652 tests, 144 suites, 652 pass, 0 fail
 Round 2: 652 tests, 144 suites, 652 pass, 0 fail
 Round 3: 652 tests, 144 suites, 652 pass, 0 fail
+Round 4: 653 tests, 144 suites, 653 pass, 0 fail
 ```
 
 Smoke test on port 9477: health=ok, services respond.
@@ -93,3 +94,21 @@ Round 3:
 - `public/js/codex-block-renderer.js` — diff line numbers, expandable output, session stats bar, timestamps
 - `public/style.css` — stats bar, timestamp badge, diff line numbers, show-all button, akari gauge + detail row
 - `public/js/akari-panel.js` — lane utilization gauge + worker detail expansion
+
+## Round 4 (f72cca2)
+
+### Line 1: Codex Rendering
+16. **Keyboard navigation** — j/k cycle through blocks with focus outline, G jump to bottom, F fold/unfold all blocks
+17. **Block search overlay** — Ctrl+Shift+F opens a floating search bar, finds matching blocks, Enter/Shift+Enter navigates between matches
+18. **Usage/token display** — `turn.completed` SDK events show token counts (in/out/cache_read) and cost, matching Claude tab's usage block
+19. **Stats bar token tracking** — Cumulative tokens in/out and total cost shown in the session stats bar
+
+### Line 3: Akari Polish
+20. **Auto-refresh pulse** — Refresh button animates (spin) during poll, visual feedback that data is updating
+21. **Last poll time** — Meta area shows "polled Xs ago" for recency context
+22. **Sortable worker table** — Click any column header (id/state/model/turn/tool/elapsed/tokens) to sort ascending/descending, with arrow indicators
+
+Round 4:
+- `public/js/codex-block-renderer.js` — keyboard nav, block search overlay, usage/token display, stats bar tokens
+- `public/style.css` — focused block outline, search overlay, usage block, akari poll pulse, sortable headers
+- `public/js/akari-panel.js` — auto-refresh pulse, last poll time, sortable worker table
