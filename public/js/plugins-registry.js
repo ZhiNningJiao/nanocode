@@ -255,7 +255,7 @@ export const BUILTIN_PLUGINS = [
     apiVersion: '1.0',
     group: 'monitor',
     tab: { id: 'historian', labelKey: 'plugin.historian.label' },
-    permissions: ['fs.read', 'tmux.read'],
+    permissions: ['fs.read', 'tmux.read', 'network'],
     descriptionKey: 'plugin.historian.desc',
     refreshOnActivate: true,
     builtin: true,
@@ -277,23 +277,6 @@ export const BUILTIN_PLUGINS = [
     tab: { id: 'akari', labelKey: 'plugin.akari.label' },
     permissions: ['network', 'personal.akari'],
     descriptionKey: 'plugin.akari.desc',
-    refreshOnActivate: true,
-    builtin: true,
-  },
-  {
-    // Historian waker health — monitor the external waker (waker_core.py /
-    // waker.sh) that produces structured briefings for the secretary session.
-    // Displays army_status.json (agent fleet table), waker.log tail (briefing
-    // stream), waker self-health (tmux / lock / last tick / mode), and controls
-    // (start/stop, LIVE/DRY switch). Optional: zero impact when waker is not
-    // running — degrades to a calm "stopped" state.
-    name: 'historian',
-    version: '1.0.0',
-    apiVersion: '1.0',
-    group: 'monitor',
-    tab: { id: 'historian', labelKey: 'plugin.historian.label' },
-    permissions: ['tmux.read', 'fs.read', 'network'],
-    descriptionKey: 'plugin.historian.desc',
     refreshOnActivate: true,
     builtin: true,
   },
