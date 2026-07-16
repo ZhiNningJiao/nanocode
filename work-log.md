@@ -524,3 +524,17 @@ commit 03beb00
 - fork/main：仍 4 ahead（5945c5a/e68ed60/d3da9db/570c744，与 R2 一致，无新增）——opus_burn codex 块渲染大改未并入 9476，按任务书「大改先等批」继续不动，留主人定夺
 - 过程产物：run_nano_maint.log 已确认 gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
 - 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；仅提交 work-log 记账，无 push 无部署
+
+## 2026-07-16 [nano_maint R4 — 四巡，状态不变，NOTHING-TO-DO]
+- 接班状态：HEAD 5bbb869（R3 work-log 提交），工作树干净（仅未跟踪 .git.bak-migrate，前置遗留不动）
+- 健康巡检（本轮自带 curl，`tee -a run_nano_maint.log`）：
+  - 9475 = 200（未触碰，按红线不动 9475）
+  - 9476 = 200；/api/services：nanocode up / akari up（mblend·dccpipeline·regression·TTS down，非 nanocode 维护面，预期，与 R1-R3 一致）
+- 前端报错巡检（Playwright headless 加载 http://localhost:9476/，networkidle+2.5s，脚本 _fe_check.mjs 仓内起、用后即删）：
+  - title="Nanocode"，console error/warning = 0，pageerror = 0，failed request = 0
+- npm test（本轮自带，`tee -a run_nano_maint.log`）：`node --test server/tests/*.test.js` → 653 pass / 0 fail
+- run.log 自查：`git check-ignore run_nano_maint.log` 命中（gitignored）；rg 失败关键字仅命中测试名子串，无真实失败
+- 待办扫描：~/codex_work/REVIEW_REQ_* / CHORE_* = 0；FLAG_* 仍为 6 月遗留空旗（按 handoff 跳过）
+- fork/main：仍 4 ahead（5945c5a/e68ed60/d3da9db/570c744，与 R3 一致，无新增）——opus_burn codex 块渲染大改未并入 9476，按任务书「大改先等批」继续不动，留主人定夺
+- 过程产物：run_nano_maint.log gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
+- 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；仅提交 work-log 记账，无 push 无部署
