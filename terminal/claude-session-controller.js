@@ -11,8 +11,11 @@ import { createCodexSdkDriver } from './codex-sdk-driver.js'
 import { createOpencodeBlockDriver } from './opencode-block-driver.js'
 import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
+import { copyTranscriptToTeam, teamModelDefaults } from './team-failover.js'
+import { loadPersonalConfig } from './personal-config.js'
+import { acquireSessionLock, releaseSessionLock } from './session-lock.js'
 
-export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl }) {
+export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl, port }) {
   const IS_WIN = platform() === 'win32'
   const SHELL = IS_WIN
     ? (process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe')
@@ -139,6 +142,44 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     cs.claudeSessionId = claudeSessionId
     if (resetTurnCount) cs.turnCount = 0
     if (resetTurnCount) cs._replayUserTextCounts = new Map()
+  }
+
+  // team-failover opt-in toggle for a live session (secretary sessions). Applies
+  // immediately to the running cs so the next turn honours it.
+  function setAllowTeamFailover(projectId, tabId, allow) {
+    const cs = claudeSessions.get(sessionKeyFor(projectId, tabId))
+    if (cs) cs.allowTeamFailover = !!allow
+  }
+
+  // Manually move the current conversation to another team NOW: copy the
+  // transcript into the target team's projects dir, switch the tab + live cs to
+  // that team's CLAUDE_CONFIG_DIR, and upgrade the model to that team's default
+  // (Team1→fable/high, other→opus/high). The next turn resumes on the target
+  // org's quota. Reuses the failover machinery; also clears any auto-failover
+  // state so the manual choice sticks.
+  function switchTeam(projectId, tabId, targetConfigDir) {
+    const tab = store.getTab ? store.getTab(projectId, tabId) : null
+    if (!tab || tab.type !== 'claude') return { ok: false, error: 'not a claude tab' }
+    if (!targetConfigDir || !existsSync(targetConfigDir)) return { ok: false, error: 'target team not found' }
+    const cs = claudeSessions.get(sessionKeyFor(projectId, tabId))
+    const project = store.getProject ? store.getProject(projectId) : null
+    const fromDir = cs ? resolveClaudeConfigDir({ cs, store, home }) : (tab.claudeConfigDir || join(home, '.claude'))
+    if (fromDir === targetConfigDir) return { ok: false, error: 'already on that team' }
+    const cwd = (cs && cs.cwd) || tab.claudeSessionCwd || project?.cwd || home
+    const sid = (cs && cs.claudeSessionId) || tab.claudeSessionId
+    const copied = copyTranscriptToTeam(sid, cwd, fromDir, targetConfigDir)
+    const md = teamModelDefaults(targetConfigDir, { home, personalTeams: loadPersonalConfig({ home })?.claude?.teams || [] })
+    store.updateTabMetadata(projectId, tabId, { claudeConfigDir: targetConfigDir })
+    if (cs) {
+      cs.claudeConfigDir = targetConfigDir
+      cs.claudeModelOverride = md.model
+      cs.claudeEffortOverride = md.effort
+      cs.explicitSessionId = true
+      cs._failedOver = false
+      cs._originalConfigDir = null
+    }
+    console.log(`[team-switch] ${projectId}:${tabId} ${fromDir} → ${targetConfigDir} (${md.model}) copied=${copied}`)
+    return { ok: true, team: targetConfigDir, model: md.model, copied }
   }
 
   function primeReplayHistory(projectId, tabId, events) {
@@ -392,6 +433,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
+    const cacheTtl = store.getSetting('claude_cache_ttl') || ''
     const globalPerm = store.getSetting('global_permission') || 'full-auto'
     const tabLabel = cs.tabLabel || ''
 
@@ -414,6 +456,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     if (claudeModel) launchArgs.push('--model', claudeModel)
     if (claudeEffort) launchArgs.push('--effort', claudeEffort)
+    if (cacheTtl === '1h') launchArgs.push('--betas', 'extended-cache-ttl-2025-04-11')
     if (tabLabel) launchArgs.push('--name', tabLabel)
     // 需求8: persona injection (CLI flag). Re-applied every turn so the persona
     // survives resume/reconnect. Empty prompt = no flag (no-op).
@@ -579,6 +622,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     const claudeModel = store.getSetting('claude_model') || ''
     const claudeEffort = store.getSetting('claude_effort') || ''
+    const cacheTtl = store.getSetting('claude_cache_ttl') || ''
     const globalPerm = store.getSetting('global_permission') || 'full-auto'
     const tabLabel = cs.tabLabel || ''
 
@@ -600,6 +644,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     if (claudeModel) launchArgs.push('--model', claudeModel)
     if (claudeEffort) launchArgs.push('--effort', claudeEffort)
+    if (cacheTtl === '1h') launchArgs.push('--betas', 'extended-cache-ttl-2025-04-11')
     if (tabLabel) launchArgs.push('--name', tabLabel)
     // 需求8: persona injection (CLI flag). Re-applied every turn so the persona
     // survives resume/reconnect. Empty prompt = no flag (no-op).
@@ -814,6 +859,73 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     codexSdkDriver.runCodexTurn(cs, userText, sessionKey, cwd)
   )
 
+  // External inject: write a user message into an ACTIVE claude session's input
+  // channel — the server-side equivalent of the WS 'claude-input' message. Used
+  // by POST /api/sessions/:id/inject (localhost-only) so an external crontab
+  // watchdog can wake a stuck/idle secretary session (nanocode --watch restarts
+  // kill all internal listeners, so an HTTP inject is the only reliable external
+  // wake path). Reuses the EXACT same dispatch path as a real user message —
+  // broadcast the user-echo event, then dispatchClaudeTurn — so there is no
+  // separate code path and no task special-case (red line).
+  //
+  // sendNow mirrors the "立刻发送" WS path: when true AND the session is mid-turn,
+  // atomically interrupt+flush so the injected message lands immediately (force,
+  // but the SDK remaps force to q.interrupt() — never kills the process or
+  // sub-agents, red line). When false (default), a busy session queues the
+  // message behind the running turn like a normal typed message. A watchdog
+  // firing on a stuck secretary should pass sendNow=true.
+  function injectClaudeMessage(sessionKey, text, { sendNow = false } = {}) {
+    const cs = claudeSessions.get(sessionKey)
+    if (!cs) return { ok: false, error: 'session not found' }
+    if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'empty text' }
+    // ── Session singleton lock: a read-only server must not spawn a consumer ──
+    // The WS 'claude-input' path blocks read-only input (see attachClaudeSession),
+    // but the HTTP inject path (POST /api/sessions/:id/inject, used by the crontab
+    // watchdog / secretary-wake) is a SEPARATE entry point. Without this guard a
+    // server that lost the lock would still spawn a second Claude consumer via
+    // inject — exactly the "two secretaries" conflict the lock is meant to stop.
+    if (cs.readOnly) {
+      const holderPort = cs.lockHolder?.port
+      console.warn(
+        `[claude:lock] ${sessionKey}: inject blocked — session ${cs.claudeSessionId} ` +
+        `is hosted by :${holderPort} (read-only mode).`
+      )
+      return {
+        ok: false,
+        error: `read-only: session hosted by :${holderPort}`,
+        readOnly: true,
+        lockHolderPort: holderPort,
+      }
+    }
+    const userEvent = {
+      type: 'user',
+      uuid: randomUUID(),
+      replay_id: buildUserReplayId(text, cs._replayUserTextCounts),
+      message: { role: 'user', content: [{ type: 'text', text }] },
+      _nonce: null,
+    }
+    claudeBroadcast(cs, userEvent)
+    const wasBusy = sendNow === true && cs.busy && !!cs.currentProc
+    dispatchClaudeTurn(cs, text, sessionKey, cs.cwd)
+    if (wasBusy) {
+      try {
+        Promise.resolve(_interruptRunningClaudeTurn(cs, { force: true, andFlush: true })).catch((err) => {
+          console.error(`[claude:inject] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+        })
+      } catch (err) {
+        console.error(`[claude:inject] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+      }
+    }
+    return {
+      ok: true,
+      sessionKey,
+      type: 'claude',
+      claudeSessionId: cs.claudeSessionId || null,
+      busy: !!cs.busy,
+      dispatched: true,
+    }
+  }
+
   function attachClaudeSession(ws, { projectId, tabId, project }) {
     const sessionKey = sessionKeyFor(projectId, tabId)
     let cs = claudeSessions.get(sessionKey)
@@ -948,6 +1060,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // claude --resume finds the jsonl in the matching project-slug dir and keeps
         // the conversation's file context — falling back to the project cwd.
         claudeConfigDir: tab?.claudeConfigDir || null,
+        // team-failover opt-in (secretary sessions only; default off; inherited by
+        // child tabs). When true, a 429 triggers switch-team + copy transcript +
+        // resume on the other org's quota. See terminal/team-failover.js.
+        allowTeamFailover: !!tab?.allowTeamFailover,
         cwd: (tab?.claudeSessionCwd && typeof tab.claudeSessionCwd === 'string' && tab.claudeSessionCwd.trim()) ? tab.claudeSessionCwd.trim() : project.cwd,
         currentProc: null,
         tabLabel: tab?.label || '',
@@ -966,13 +1082,79 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       claudeSessions.set(sessionKey, cs)
     }
 
+    // ── Session singleton lock ──────────────────────────────────────────────
+    // Prevent two nanocode servers from simultaneously owning the same Claude
+    // conversation. The first to acquire the lock becomes the host; the other
+    // enters read-only follow mode (can see output, cannot send input).
+    // The lock is released when the last client on this server disconnects,
+    // so a read-only server can promote on its next attach.
+    if (!cs._lockHeld) {
+      const lockOpts = { pid: process.pid, port }
+      const result = acquireSessionLock(cs.claudeSessionId, lockOpts, home)
+      if (result.acquired) {
+        cs._lockHeld = true
+        if (cs.readOnly) {
+          cs.readOnly = false
+          cs.lockHolder = null
+          cs._justPromoted = true
+          console.log(`[claude:lock] ${sessionKey}: promoted to host for session ${cs.claudeSessionId}`)
+        }
+      } else {
+        cs.readOnly = true
+        cs.lockHolder = result.holder
+        cs._lockHeld = false
+        console.warn(
+          `[claude:lock] ${sessionKey}: session ${cs.claudeSessionId} is hosted by ` +
+          `:${result.holder?.port} (pid ${result.holder?.pid}). Read-only mode.`
+        )
+      }
+    }
+
     for (const event of cs.history) {
       if (ws.readyState === 1) {
         try { ws.send(JSON.stringify({ type: 'claude-event', event })) } catch {}
       }
     }
 
+    // Send the authoritative busy state so newly-attached (or re-attached) clients
+    // can correct their local thinking-state flag. Without this, a client that
+    // reconnects after a turn completed while it was offline has no way to learn
+    // that the session is idle — its isClaudeThinking stays stuck at true and the
+    // input box is permanently locked (the "desktop can't send" bug).
+    if (ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'busy-state', busy: !!cs.busy })) } catch {}
+    }
+
+    // Read-only banner: if another server owns this session, tell the client.
+    if (cs.readOnly && ws.readyState === 1) {
+      const holderPort = cs.lockHolder?.port
+      const bannerEvent = {
+        type: 'system',
+        subtype: 'info',
+        text: `会话由 :${holderPort} 托管（只读模式）`,
+        _readonly: true,
+        _lockHolderPort: holderPort,
+      }
+      try { ws.send(JSON.stringify({ type: 'claude-event', event: bannerEvent })) } catch {}
+    }
+
     cs.clients.add(ws)
+
+    // If we just promoted from read-only to host, tell all clients to clear
+    // the read-only banner. (Not pushed to history — ephemeral UI state.)
+    if (cs._justPromoted) {
+      cs._justPromoted = false
+      const promoteEvent = {
+        type: 'system',
+        subtype: 'info',
+        text: '会话已恢复为可编辑模式',
+        _readonly: false,
+      }
+      const promoteMsg = JSON.stringify({ type: 'claude-event', event: promoteEvent })
+      for (const client of cs.clients) {
+        if (client.readyState === 1) try { client.send(promoteMsg) } catch {}
+      }
+    }
 
     const onMsg = (raw) => {
       let msg
@@ -1003,6 +1185,22 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         return
       }
       if (msg.type === 'claude-input' && typeof msg.text === 'string' && msg.text.trim()) {
+        // ── Read-only mode: block input when another server hosts the session ──
+        if (cs.readOnly) {
+          try { ws.send(JSON.stringify({ type: 'claude-event', event: { type: 'result', subtype: 'success' } })) } catch {}
+          try {
+            ws.send(JSON.stringify({
+              type: 'claude-event',
+              event: {
+                type: 'system',
+                subtype: 'info',
+                text: `会话由 :${cs.lockHolder?.port} 托管，无法发送消息（只读模式）`,
+                _readonly: true,
+              },
+            }))
+          } catch {}
+          return
+        }
         // ── /resume interception ─────────────────────────────────────────────
         // claude --print (non-interactive) blocks /resume with "isn't available
         // in this environment". Intercept here and route to nanocode's own
@@ -1115,6 +1313,12 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     ws.on('close', () => {
       ws.removeListener('message', onMsg)
       cs.clients.delete(ws)
+      // Release the session singleton lock when the last client disconnects,
+      // so another server can promote from read-only to host.
+      if (cs.clients.size === 0 && cs._lockHeld) {
+        releaseSessionLock(cs.claudeSessionId, { pid: process.pid, port }, home)
+        cs._lockHeld = false
+      }
     })
   }
 
@@ -1238,6 +1442,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
     }
 
+    // Busy-state sync (same fix as claude sessions — prevents stuck input on reconnect)
+    if (ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'busy-state', busy: !!cs.busy })) } catch {}
+    }
+
     cs.clients.add(ws)
 
     const onMsg = (raw) => {
@@ -1293,7 +1502,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         console.warn(`[claude:interrupt] ${sessionKey}: force-unwedge (busy=true, currentProc=null); settling turn locally, process untouched`)
         cs.busy = false
         cs.currentProc = null
-        _emitAgentStop(cs, sessionKey, { subtype: 'error' })
+        // The archived p1p5-plugin-host line emitted a plugin agent:stop event
+        // here via _emitAgentStop; that helper does not exist on this lineage
+        // (merge 66867e5 strategy=ours) and the orphan call broke this unwedge
+        // path with a ReferenceError. Re-add only together with a pluginHost.
         claudeBroadcast(cs, { type: 'result', subtype: 'error_during_execution' })
         if (!Array.isArray(cs.queue)) cs.queue = []
         const drained = cs.queue.splice(0)
@@ -1489,6 +1701,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       console.log(`[ws:attach] projectId=${projectId} tabId=${tabId} tabType=${tabType}`)
 
       if (tabType === 'claude') {
+        // Server default MUST match the client default (state.js: 'block').
+        // If they diverge, the browser opens a TerminalPane (PTY-protocol JSON
+        // frames) but the server routes the WS to attachClaudeSession (stream-json
+        // events) — protocol mismatch → tab looks "stuck" with both ends alive.
         const renderMode = store.getSetting('renderMode') || 'block'
         if (renderMode === 'terminal') {
           console.log(`[ws:attach] routing claude to PTY raw (renderMode=terminal)`)
@@ -1615,11 +1831,17 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   function disposeClaudeSessions() {
     for (const cs of claudeSessions.values()) {
       try { sdkDriver.teardownStreamingSession(cs) } catch {}
+      // Release the session singleton lock on shutdown.
+      if (cs._lockHeld) {
+        try { releaseSessionLock(cs.claudeSessionId, { pid: process.pid, port }, home) } catch {}
+      }
     }
     claudeSessions.clear()
   }
 
   return {
+    setAllowTeamFailover,
+    switchTeam,
     claudeSessions,
     codexSessions,
     handleInterrupt,
@@ -1629,5 +1851,6 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     setAgentHealthMonitor,
     setClaudeSessionId,
     disposeClaudeSessions,
+    injectClaudeMessage,
   }
 }

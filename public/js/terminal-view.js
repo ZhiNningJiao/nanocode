@@ -132,6 +132,13 @@ function setupTabs(projectId) {
       } else {
         setStatus(false)
       }
+      // Expose the active claude tab so the Team & Model pane can offer a
+      // per-session "switch this conversation to another team" button + the
+      // failover opt-in toggle. Null for non-claude tabs.
+      window.__nanocodeActiveClaudeTab = (tabMeta && tabMeta.type === 'claude')
+        ? { projectId: currentProjectId, tabId: tabMeta.id, claudeConfigDir: tabMeta.claudeConfigDir || null, allowTeamFailover: !!tabMeta.allowTeamFailover }
+        : null
+      document.dispatchEvent(new CustomEvent('nanocode:active-claude-tab', { detail: window.__nanocodeActiveClaudeTab }))
       // Notify chat input bar about tab type change
       document.dispatchEvent(new CustomEvent('nanocode:tab-active', {
         detail: { type: tabMeta?.type || 'bash', tabId: tabMeta?.id },
@@ -210,6 +217,84 @@ document.addEventListener('nanocode:resume-session', async (e) => {
     }
   } catch (err) {
     console.warn('[resume-session] error', err)
+  }
+})
+
+// ── Fork session from sessions plugin (MES-14031) ────────────────────────────
+//
+// The sessions-panel dispatches 'nanocode:fork-session' with
+// { source, id, cwd, cmd }. For Claude sessions we create a new claude tab
+// that resumes the same conversation (a "fork" — the original tab keeps its
+// own session; both share the append-only jsonl). For Codex sessions we do
+// NOT call preventDefault — the panel falls back to showing `codex resume <id>`
+// because the codex SDK driver has no tab-creation path to pre-set a thread id.
+
+document.addEventListener('nanocode:fork-session', async (e) => {
+  const { source, id, cwd } = e.detail || {}
+  if (!id || source !== 'claude') return // only Claude is wired for in-tab fork
+  e.preventDefault() // signal handled → panel skips the command fallback
+
+  // Find or create the project for this session's cwd
+  let projectId = currentProjectId
+  let project = null
+  try {
+    if (cwd) {
+      const projects = await fetch('/api/projects').then(r => r.json())
+      project = projects.find(p => p.cwd === cwd)
+      if (!project && currentProjectId) {
+        // cwd not in store but we're in a workspace — try the current project
+        const cur = projects.find(p => p.id === currentProjectId)
+        if (cur && cur.cwd === cwd) project = cur
+      }
+      if (project) {
+        projectId = project.id
+      } else {
+        const name = cwd.split('/').filter(Boolean).pop() || 'fork'
+        project = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, cwd }),
+        }).then(r => r.json())
+        projectId = project?.id || currentProjectId
+      }
+    }
+  } catch (err) {
+    console.warn('[fork-session] project lookup failed', err)
+  }
+  if (!projectId || !tabManager) return
+
+  // Navigate to the project workspace if needed. Reuse the `project` object
+  // resolved above (it already carries ssh_host + name) instead of re-fetching
+  // by id — there is no GET /api/projects/:id route, so that call 404'd and
+  // silently skipped navigation (MES-14031 fix).
+  if (currentProjectId !== projectId && project) {
+    const host = project.ssh_host
+      ? project.ssh_host.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+      : 'local'
+    const base = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed'
+    location.hash = `#/${host}/${base}`
+    await new Promise(resolve => setTimeout(resolve, 300))
+  }
+
+  // Create a new claude tab pre-loaded with this sessionId (a fork/resume)
+  try {
+    const body = { type: 'claude', label: 'fork', claudeSessionId: id }
+    if (cwd) body.claudeSessionCwd = cwd
+    const newTab = await fetch(`/api/projects/${projectId}/tabs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json())
+
+    if (newTab?.id) {
+      tabManager._pendingActiveId = newTab.id
+      if (tabManager.projectId === projectId && tabManager.tabs.some(t => t.id === newTab.id)) {
+        tabManager._pendingActiveId = null
+        tabManager.setActive(newTab.id)
+      }
+    }
+  } catch (err) {
+    console.warn('[fork-session] tab creation failed', err)
   }
 })
 
@@ -538,16 +623,34 @@ function setupChatInput() {
         return `<div class="cq-item">` +
           `<span class="cq-pos">${i + 1}</span>` +
           `<span class="cq-text">${escapeHtml(truncated)}</span>` +
+          `<button class="cq-send-one" data-idx="${i}" aria-label="Send this message now" title="打断当前回合并立即发送此条（只停主回合，不杀后台 sub-agent）">发送</button>` +
           `<button class="cq-remove" data-idx="${i}" aria-label="Remove queued message" title="Remove from queue">×</button>` +
           `</div>`
       }).join('') +
-      `<div class="cq-hint">↑ 取回编辑 · 立刻发送=打断当前回合马上发 · 空闲时自动发送 · Esc 可清空</div>`
+      `<div class="cq-hint">↑ 取回编辑 · 立刻发送=打断当前回合马上发 · 单条发送=只发该条 · 空闲时自动发送 · Esc 可清空</div>`
     queueTray.querySelectorAll('.cq-remove').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
         _pendingQueue.splice(+btn.dataset.idx, 1)
         _persistQueueNow()
         updateQueueTray()
+      })
+    })
+    // Per-message "send now" button: interrupt the current turn and send ONLY
+    // this one queued message immediately, leaving the rest in the queue.
+    // Same atomic backend path as the global sendNowFlush (sendNow: true).
+    queueTray.querySelectorAll('.cq-send-one').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const idx = +btn.dataset.idx
+        if (idx < 0 || idx >= _pendingQueue.length) return
+        const text = _pendingQueue.splice(idx, 1)[0]
+        _persistQueueNow()
+        updateQueueTray()
+        if (activePane) activePane.sendInputWithEcho(text, { sendNow: true })
+        pushHistory(text)
+        resetHistoryNav()
+        chatInput.focus()
       })
     })
     // "立即发送" button: force-interrupt the current turn AND submit the queued
@@ -710,11 +813,13 @@ function setupChatInput() {
     // happen when the WS 'result' event arrives confirming Claude is truly idle.
     updateInputBarForTabType({ skipFlush: true })
 
-    // If switching to a block-agent tab (claude/fable5/opencode-block) that was
-    // sent to background and is still running, restore the thinking UI (stop +
-    // bg buttons) so the user can interact again. 需求15 keystone: widen to
-    // isBlockAgentTab so fable5/opencode Block tabs restore too.
-    if (newTabId && isBlockAgentTab && _bgTabIds.has(newTabId)) {
+    // If switching to a block-agent tab, check the renderer's ground-truth
+    // thinking state to correct any stale isClaudeThinking in terminal-view.
+    // Previously this only checked bg tabs, but the thinking state can also
+    // become stale after a WS reconnect (the renderer resets _thinking=false
+    // directly, without dispatching the event to terminal-view). Checking ALL
+    // block-agent tabs on switch ensures the input bar always reflects reality.
+    if (newTabId && isBlockAgentTab) {
       const tabEntry = tabManager ? tabManager.tabs.find((t) => t.id === newTabId) : null
       const pane = tabEntry?.pane
       const stillRunning = pane && typeof pane.isThinking === 'function' && pane.isThinking()
@@ -726,7 +831,7 @@ function setupChatInput() {
         bgBtn.hidden = false
         sendBtn.hidden = true
         isClaudeThinking = true
-      } else {
+      } else if (_bgTabIds.has(newTabId)) {
         // Turn already completed while in bg — clean up the stale bg flag.
         _clearBgTab(newTabId)
       }
@@ -1654,8 +1759,12 @@ function setupChatInput() {
         // Priority 5: clear input
         chatInput.value = ''
         autoResize()
-      } else if (!isClaudeTab && activePane) {
-        // Bash/codex tab: send raw Escape to PTY
+      } else if (activePane) {
+        // Fall-through: send raw ESC to the PTY (claude/codex/bash all
+        // benefit — claude's /login prompt cancels on ESC, codex menus
+        // close, vim leaves insert mode). Previously gated by
+        // `!isClaudeTab`, which left Esc dead on an idle terminal-mode
+        // claude tab. (upstream 59a7eb2 改造)
         activePane.sendRaw('\x1b')
       }
       e.preventDefault()
@@ -1740,6 +1849,79 @@ function setupChatInput() {
     }, 150)
   })
 
+  // ── URL utilities for the toolbar Open URL / Copy URL buttons ──
+  // We can't rely on xterm's WebLinksAddon click (touch hit-area is
+  // unreliable on mobile) or on claude's OSC 52 (clipboard API may be
+  // gated by user-gesture timing across the WS roundtrip). Instead we
+  // scrape the active terminal's buffer for a URL synchronously inside
+  // the user's click event, and act on it from inside that same gesture.
+  const URL_RE = /\bhttps?:\/\/[^\s"'<>(){}|\\^`]+[^\s"'<>(){}|\\^`,.;!?]/g
+
+  function findUrlInTerminal(pane) {
+    // 1. xterm terminal: walk the buffer (visible + scrollback) backwards
+    //    so the URL the user just saw is preferred over older ones.
+    try {
+      const term = pane?.term
+      const buf = term?.buffer?.active
+      if (buf && typeof buf.getLine === 'function') {
+        const lines = []
+        const end = buf.length
+        const start = Math.max(0, end - 200)   // last 200 lines is plenty
+        for (let y = start; y < end; y++) {
+          const line = buf.getLine(y)
+          if (!line) continue
+          lines.push(line.translateToString(true))
+        }
+        // Concatenate AFTER stripping per-line wrap so a URL spanning
+        // multiple visual lines matches as one string.
+        const joined = lines.join('')
+        const matches = joined.match(URL_RE)
+        if (matches && matches.length) return matches[matches.length - 1]
+      }
+    } catch {}
+    // 2. Block-renderer pane: look inside the scroll container's text.
+    try {
+      const scroll = pane?._scroll || pane?.container?.querySelector?.('.cbr-scroll')
+      if (scroll) {
+        const text = scroll.innerText || scroll.textContent || ''
+        const matches = text.match(URL_RE)
+        if (matches && matches.length) return matches[matches.length - 1]
+      }
+    } catch {}
+    return null
+  }
+
+  function flashToolbarBtn(btn, label) {
+    const original = btn.textContent
+    btn.textContent = label
+    btn.disabled = true
+    setTimeout(() => {
+      btn.textContent = original
+      btn.disabled = false
+    }, 900)
+  }
+
+  function copyViaTextarea(text, onSuccess) {
+    // Fallback for browsers that block navigator.clipboard.writeText off
+    // a user gesture, or when run over plain HTTP (clipboard API requires
+    // secure context). Synchronous execCommand still works in most
+    // browsers and runs inside our click handler.
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.setAttribute('readonly', '')
+      ta.style.position = 'fixed'
+      ta.style.top = '-9999px'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      ta.setSelectionRange(0, text.length)
+      const ok = document.execCommand && document.execCommand('copy')
+      document.body.removeChild(ta)
+      if (ok && onSuccess) onSuccess()
+    } catch {}
+  }
+
   // Touch toolbar
   const touchToolbar = document.getElementById('touch-toolbar')
   if (touchToolbar) {
@@ -1790,7 +1972,12 @@ function setupChatInput() {
         case 'tab':
           activePane.sendRaw('\t'); break
         case 'escape':
-          // Same priority logic as keyboard Esc
+          // Same priority logic as keyboard Esc. The final branch is
+          // UNCONDITIONAL: when no UI-level branch matches, ESC must
+          // always reach the PTY (vim, claude's own interactive prompts,
+          // codex menus, etc.). The earlier guard `!isClaudeTab` swallowed
+          // ESC on a claude tab with empty input + not-thinking, leaving
+          // the mobile Esc button dead in that state.
           if (claudeSlashOpen) {
             hideSlashCommands()
           } else if (suggestionsOpen) {
@@ -1799,10 +1986,38 @@ function setupChatInput() {
             doInterrupt()
           } else if (chatInput.value) {
             chatInput.value = ''; autoResize()
-          } else if (!isClaudeTab) {
+          } else {
             activePane.sendRaw('\x1b')
           }
           break
+        case 'open-url':
+        case 'copy-url': {
+          // Bypass everything async / xterm / OSC-related: scrape the
+          // visible screen + scrollback for a URL and act on it now,
+          // inside this synchronous click handler. That keeps us inside
+          // the user-gesture stack so navigator.clipboard.writeText and
+          // window.open are both allowed (Safari and Chrome are strict
+          // about both off-gesture).
+          const url = findUrlInTerminal(activePane)
+          if (!url) {
+            flashToolbarBtn(btn, 'No URL')
+            break
+          }
+          if (action === 'open-url') {
+            try { window.open(url, '_blank', 'noopener,noreferrer') } catch {}
+            flashToolbarBtn(btn, 'Opened')
+          } else {
+            try {
+              navigator.clipboard.writeText(url).then(
+                () => flashToolbarBtn(btn, 'Copied'),
+                () => copyViaTextarea(url, () => flashToolbarBtn(btn, 'Copied')),
+              )
+            } catch {
+              copyViaTextarea(url, () => flashToolbarBtn(btn, 'Copied'))
+            }
+          }
+          break
+        }
       }
       if (document.activeElement === chatInput) chatInput.focus()
     })

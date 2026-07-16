@@ -71,6 +71,21 @@ const LAZY_PLUGINS = {
     render: (m, pane, plugin) => m.renderComparePane(pane, plugin),
     reset: (m) => m.resetCompareLoadState(),
   },
+  sessions: {
+    key: 'sessions-panel', imp: () => import('./sessions-panel.js'),
+    render: (m, pane, plugin) => m.renderSessionsPane(pane, plugin),
+    reset: (m) => m.resetSessionsLoadState(),
+  },
+  rewind: {
+    key: 'rewind-panel', imp: () => import('./rewind-panel.js'),
+    render: (m, pane, plugin) => m.renderRewindPane(pane, plugin),
+    reset: (m) => m.resetRewindLoadState(),
+  },
+  tasks: {
+    key: 'tasks-panel', imp: () => import('./tasks-panel.js'),
+    render: (m, pane) => m.renderTasksPane(pane),
+    reset: (m) => m.resetTasksLoadState(),
+  },
   remote: {
     key: 'remote-panel', imp: () => import('./remote-panel.js'),
     render: (m, pane) => m.renderRemotePane(pane),
@@ -88,6 +103,16 @@ const LAZY_PLUGINS = {
     key: 'services-panel', imp: () => import('./services-panel.js'),
     render: (m, pane) => m.renderServicesPane(pane),
     reset: (m) => m.resetServicesLoadState(),
+  },
+  historian: {
+    key: 'historian-panel', imp: () => import('./historian-panel.js'),
+    render: (m, pane) => m.renderHistorianPane(pane),
+    reset: (m) => m.resetHistorianLoadState(),
+  },
+  akari: {
+    key: 'akari-panel', imp: () => import('./akari-panel.js'),
+    render: (m, pane) => m.renderAkariPane(pane),
+    reset: (m) => m.resetAkariLoadState(),
   },
 }
 
@@ -378,9 +403,12 @@ function applySubTab(domain) {
   }
   if (tabId) {
     const entry = mountedEntryByTab(domain, tabId)
-    if (entry && !entry.rendered) {
+    if (entry && (!entry.rendered || entry.plugin.refreshOnActivate)) {
       // 块A: 懒加载 — 首次激活插件 tab 时才 import() pane 模块，然后渲染。
       // 先标记 rendered=true 防止快速切换重复触发；import 完成后异步渲染。
+      // Plugins that opt into `refreshOnActivate` (e.g. usage — 主人要求每次
+      // 切到该 tab 都刷新) re-render on EVERY activation so data stays fresh
+      // without a manual click (renderer replaces content in place, no flash).
       const lazy = LAZY_PLUGINS[entry.plugin.name]
       // Pass the plugin manifest as the 2nd arg so renderers can read
       // `plugin.settings` (需求14 compare reads settings.defaultBranches).

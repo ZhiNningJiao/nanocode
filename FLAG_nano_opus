@@ -1,0 +1,6 @@
+PASS — nano_opus integration verified 2026-07-15
+Tests: 618/0 pass
+Branch: zhining/nano-integration-0715-v2 @ aa30940
+Fork: pushed, no PR
+9476: live, all endpoints healthy
+Features: akari panel, 3 prototypes, TTS stale-drop, mute fix, input seat fix, mobile scroll fix, historian plugin, native waker

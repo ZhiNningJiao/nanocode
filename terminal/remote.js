@@ -163,8 +163,48 @@ export function listMachines(store) {
   return readMachines(store).map((m) => ({ ...m, type: m.type || 'rustdesk' }))
 }
 
-export function getMachine(store, recId) {
+/**
+ * Merge read-only personal dev machines (from ~/.config/nanocode/personal.json,
+ * MES-13824) ahead of the user's address-book machines. Each personal entry is
+ * run through sanitizeMachine (the SAME validator as the address book) so the
+ * shape is consistent and key/path/host are bounded; entries that fail
+ * validation are dropped. Personal machines get a stable id `personal:<alias>`
+ * and are tagged `personal:true, readOnly:true` so the UI can mark them and the
+ * update/delete routes can reject them. The user's address book is untouched.
+ *
+ * @param {Array} storeMachines  - machines from the settings store
+ * @param {Array|null} personalMachines - raw machines from the personal config
+ * @returns {Array} merged list (personal first, then store machines)
+ */
+export function mergePersonalMachines(storeMachines, personalMachines) {
+  const personal = Array.isArray(personalMachines) ? personalMachines : []
+  const merged = []
+  for (const raw of personal) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const r = sanitizeMachine({ ...raw, type: raw.type || 'ssh' })
+    if (!r.ok) continue
+    merged.push({ ...r.machine, id: `personal:${r.machine.alias}`, personal: true, readOnly: true })
+  }
+  return [...merged, ...storeMachines]
+}
+
+export function getMachine(store, recId, personalMachines) {
   if (typeof recId !== 'string' || !recId) return null
+  // MES-13824: personal dev machines (id `personal:<alias>`) are read-only seeds
+  // declared in ~/.config/nanocode/personal.json. They are not in the settings
+  // store; resolve them from the personal list passed in by the caller (the
+  // connect route + WS handler pass loadPersonalConfig().remote.machines). When
+  // personalMachines is omitted the behaviour is unchanged (store-only lookup).
+  if (recId.startsWith('personal:')) {
+    const list = Array.isArray(personalMachines) ? personalMachines : []
+    for (const raw of list) {
+      const r = sanitizeMachine({ ...raw, type: raw.type || 'ssh' })
+      if (r.ok && `personal:${r.machine.alias}` === recId) {
+        return { ...r.machine, id: recId, personal: true, readOnly: true }
+      }
+    }
+    return null
+  }
   const m = readMachines(store).find((x) => x.id === recId)
   if (!m) return null
   return { ...m, type: m.type || 'rustdesk' }

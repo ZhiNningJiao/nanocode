@@ -141,8 +141,8 @@
             <div class="settings-subsection">
               <div class="settings-label-row"><span data-i18n="settings.rendermode.claude.label">Render mode (claude tab)</span> <span class="settings-hint-inline" data-i18n="settings.rendermode.claude.hint">block=rich text / terminal=PTY fallback</span></div>
               <div class="settings-radio-group" id="render-mode-group">
-                <label class="settings-radio-label"><input type="radio" name="render-mode" value="block" checked /> <span data-i18n="settings.rendermode.claude.block">Block (default, rich text)</span></label>
-                <label class="settings-radio-label"><input type="radio" name="render-mode" value="terminal" /> <span data-i18n="settings.rendermode.claude.terminal">Terminal (PTY raw, fallback)</span></label>
+                <label class="settings-radio-label"><input type="radio" name="render-mode" value="block" checked /> <span data-i18n="settings.rendermode.claude.block">Block (rich text, experimental)</span></label>
+                <label class="settings-radio-label"><input type="radio" name="render-mode" value="terminal" /> <span data-i18n="settings.rendermode.claude.terminal">Terminal (default, PTY raw)</span></label>
               </div>
               <div class="settings-actions">
                 <button type="button" class="btn btn-primary" id="render-mode-save-btn" data-i18n="btn.save">Save</button>
@@ -201,6 +201,19 @@
                  to the team-model plugin (Session → Team & Model tab). Storage keys
                  are unchanged (claude_model / codex_model / claude_effort) so
                  existing configs carry over with no migration step. MES-13740 R2. -->
+
+            <!-- Cache TTL selector -->
+            <div class="settings-subsection">
+              <div class="settings-label-row"><span data-i18n="settings.cachettl.label">Cache TTL</span> <span class="settings-hint-inline" data-i18n="settings.cachettl.hint">Takes effect on next session</span></div>
+              <div class="settings-radio-group" id="claude-cache-ttl-group">
+                <label class="settings-radio-label"><input type="radio" name="claude-cache-ttl" value="5m" checked /> <span data-i18n="settings.cachettl.5m">5 minutes — write 1.25× / read 0.1×</span></label>
+                <label class="settings-radio-label"><input type="radio" name="claude-cache-ttl" value="1h" /> <span data-i18n="settings.cachettl.1h">1 hour — write 2× / read 0.1×</span></label>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="btn btn-primary" id="claude-cache-ttl-save-btn" data-i18n="btn.save">Save</button>
+                <span class="settings-status" id="claude-cache-ttl-status"></span>
+              </div>
+            </div>
 
             <!-- Global Permission mode (drives both Claude and Codex) -->
             <div class="settings-subsection">
@@ -396,6 +409,8 @@
               <button class="touch-btn" data-action="arrow-down">&darr;</button>
               <button class="touch-btn" data-action="tab">Tab</button>
               <button class="touch-btn" data-action="escape">Esc</button>
+              <button class="touch-btn" data-action="open-url" title="Open the URL on screen in a new browser tab">Open URL</button>
+              <button class="touch-btn" data-action="copy-url" title="Copy the URL on screen to clipboard">Copy URL</button>
             </div>
             <div class="input-row">
               <div class="active-tab-chip" id="active-tab-chip" role="group" aria-label="Tabs">

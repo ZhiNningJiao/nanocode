@@ -22,7 +22,7 @@ run-*.log
 round*.png
 
 # personal config — never commit real secrets
-**/personal.json
+**/personal*.json
 !**/personal.example.json
 .nanocode-personal*
 *.local.secret*

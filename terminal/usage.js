@@ -91,12 +91,15 @@ export function resolveClaudeCwdForTab(tab, project) {
 
 /**
  * Encode a cwd the way Claude does for its per-project jsonl directory:
- * every '/' becomes '-'. (`cwdToClaudeProjectDir` equivalent that takes an
- * explicit config dir instead of home, so Team switch (CLAUDE_CONFIG_DIR)
- * is honoured.)
+ * every '/' and '.' becomes '-'. The '.' replacement matters for paths with
+ * dotfiles / dot-segments (e.g. "/.../nanocode/.interrupt-probe" encodes to
+ * "...-nanocode--interrupt-probe"); without it such cwds failed to resolve
+ * their jsonl dir → empty/wrong session replay. (`cwdToClaudeProjectDir`
+ * equivalent that takes an explicit config dir instead of home, so Team
+ * switch (CLAUDE_CONFIG_DIR) is honoured.)
  */
 export function claudeProjectsDir(configDir, cwd) {
-  const encoded = String(cwd).replace(/\//g, '-')
+  const encoded = String(cwd).replace(/[/.]/g, '-')
   return join(configDir, 'projects', encoded)
 }
 
@@ -292,10 +295,20 @@ export function listTeams(home, store) {
   const homeDir = home || homedir()
   const teams = []
   const seen = new Set()
+  // Friendly-name overrides from personal config, keyed by configDir. Lets the
+  // auto-discovered ~/.claude / ~/.claude-team* show real org names (e.g.
+  // "Meshy-Algorithm") instead of the generic "Team 1 / Team 2".
+  const personal = loadPersonalConfig({ home: homeDir })
+  const personalTeams = Array.isArray(personal?.claude?.teams) ? personal.claude.teams : []
+  const nameByPath = {}
+  for (const t of personalTeams) {
+    const dir = t?.configDir || t?.path
+    if (dir && t?.name) nameByPath[dir] = t.name
+  }
   const pushTeam = (id, name, path) => {
     if (!path || seen.has(path)) return
     seen.add(path)
-    teams.push({ id, name, path, exists: existsSync(path) })
+    teams.push({ id, name: nameByPath[path] || name, path, exists: existsSync(path) })
   }
   // 1. auto-discover ~/.claude (team1) + ~/.claude-team*
   const defaultDir = join(homeDir, '.claude')
@@ -310,18 +323,14 @@ export function listTeams(home, store) {
     const id = m ? m[1] : d.name
     pushTeam(id, `Team ${id}`, fullPath)
   }
-  // 2. merge teams declared in the personal config (adds/labels extra teams)
-  const personal = loadPersonalConfig({ home: homeDir })
-  if (Array.isArray(personal?.claude?.teams)) {
-    for (const t of personal.claude.teams) {
-      const dir = t?.configDir || t?.path
-      if (!dir) continue
-      // derive a friendly id from the dir basename: .claude-team3 -> team3
-      const base = String(dir).split('/').filter(Boolean).pop() || dir
-      const m = String(base).match(/claude[-_](.+)$/)
-      const id = m ? m[1] : base
-      pushTeam(id, t.name || `Team ${id}`, dir)
-    }
+  // 2. merge extra teams declared only in the personal config
+  for (const t of personalTeams) {
+    const dir = t?.configDir || t?.path
+    if (!dir) continue
+    const base = String(dir).split('/').filter(Boolean).pop() || dir
+    const m = String(base).match(/claude[-_](.+)$/)
+    const id = m ? m[1] : base
+    pushTeam(id, t.name || `Team ${id}`, dir)
   }
   const active = effectiveClaudeConfigDir(store, homeDir)
   return { teams, activePath: active }
@@ -785,6 +794,11 @@ export function scanAllOpencodeUsage(home) {
 
 const CLAUDE_OAUTH_USAGE_URL = process.env.CLAUDE_OAUTH_USAGE_URL || 'https://api.anthropic.com/api/oauth/usage'
 const CLAUDE_OAUTH_BETA = 'oauth-2025-04-20'
+// Public PKCE client (no secret) — the Claude Code CLI's own OAuth client. Lets
+// the usage monitor refresh an expired access token via the stored refresh token
+// so it keeps showing real OAuth windows instead of degrading to jsonl estimate.
+const CLAUDE_OAUTH_TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL || 'https://platform.claude.com/v1/oauth/token'
+const CLAUDE_OAUTH_CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID || '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const WINDOW_5H_MS = 5 * 60 * 60 * 1000
 const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000
 // LiteLLM admin/billing endpoints probed in order by the legacy probeAigwSpend
@@ -835,27 +849,72 @@ export function readClaudeOAuthCredentials(configDir) {
  * Live network is not unit-tested (needs a real token); the response→windows
  * mapping is exercised via the pure `mapClaudeOAuthToWindows` instead.
  */
+/**
+ * Refresh an expired Claude OAuth access token using the stored refresh token
+ * (public PKCE client — no secret needed). On success, persists the rotated
+ * tokens back to <configDir>/.credentials.json (backup first) and returns the
+ * fresh cred; on ANY failure returns null so the caller degrades to jsonl
+ * estimation. Never throws. A dead/rotated refresh token (invalid_grant) → null
+ * → user must re-login that team (`CLAUDE_CONFIG_DIR=<dir> claude` then /login).
+ */
+export async function refreshClaudeOAuthToken(configDir, { fetchImpl } = {}) {
+  try {
+    const credPath = join(configDir, '.credentials.json')
+    if (!existsSync(credPath)) return null
+    const raw = JSON.parse(readFileSync(credPath, 'utf8'))
+    const o = raw?.claudeAiOauth
+    if (!o?.refreshToken) return null
+    const f = fetchImpl || fetch
+    const res = await f(CLAUDE_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: o.refreshToken, client_id: CLAUDE_OAUTH_CLIENT_ID }),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) return null
+    const body = await res.json().catch(() => null)
+    if (!body?.access_token) return null
+    o.accessToken = body.access_token
+    if (body.refresh_token) o.refreshToken = body.refresh_token
+    if (typeof body.expires_in === 'number') o.expiresAt = Date.now() + body.expires_in * 1000
+    try { copyFileSync(credPath, credPath + '.bak-refresh') } catch {}
+    writeFileSync(credPath, JSON.stringify(raw))
+    return {
+      accessToken: o.accessToken,
+      expiresAt: Number(o.expiresAt) || null,
+      subscriptionType: o.subscriptionType || null,
+      rateLimitTier: o.rateLimitTier || null,
+      scopes: Array.isArray(o.scopes) ? o.scopes : [],
+    }
+  } catch { return null }
+}
+
 export async function fetchClaudeOAuthUsage(configDir, { fetchImpl } = {}) {
-  const cred = readClaudeOAuthCredentials(configDir)
+  let cred = readClaudeOAuthCredentials(configDir)
   if (!cred) return { error: 'no Claude OAuth credentials at <configDir>/.credentials.json' }
-  // If the token is past expiry, skip the network call and degrade directly
-  // (we cannot refresh without the OAuth client secret). Still return a
-  // structured error so the caller can fall back to jsonl.
+  // Token past expiry: refresh it (public PKCE client) rather than giving up.
+  // Only if refresh fails (dead refresh token) do we degrade to jsonl estimation.
   if (cred.expiresAt && cred.expiresAt < Date.now()) {
-    return { error: 'Claude OAuth token expired (no client secret to refresh)', expired: true }
+    const refreshed = await refreshClaudeOAuthToken(configDir, { fetchImpl })
+    if (!refreshed) return { error: 'Claude OAuth token expired and refresh failed (re-login needed)', expired: true }
+    cred = refreshed
   }
   if (!cred.scopes.includes('user:profile')) {
     return { error: 'Claude OAuth token lacks user:profile scope (cannot read usage)' }
   }
   const f = fetchImpl || fetch
+  const call = (token) => f(CLAUDE_OAUTH_USAGE_URL, {
+    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': CLAUDE_OAUTH_BETA },
+    signal: AbortSignal.timeout(12000),
+  })
   try {
-    const res = await f(CLAUDE_OAUTH_USAGE_URL, {
-      headers: {
-        Authorization: `Bearer ${cred.accessToken}`,
-        'anthropic-beta': CLAUDE_OAUTH_BETA,
-      },
-      signal: AbortSignal.timeout(12000),
-    })
+    let res = await call(cred.accessToken)
+    // 401 despite a non-expired timestamp → token revoked/rotated on the server.
+    // Try one refresh + retry before degrading.
+    if (res.status === 401) {
+      const refreshed = await refreshClaudeOAuthToken(configDir, { fetchImpl })
+      if (refreshed) { cred = refreshed; res = await call(cred.accessToken) }
+    }
     if (!res.ok) {
       let body = null
       try { body = await res.json() } catch {}
@@ -1186,6 +1245,25 @@ export async function buildClaudeSourceSummary({ configDir, source, label, home,
     base.subscriptionType = cred.subscriptionType
     base.rateLimitTier = cred.rateLimitTier
   }
+  // Per-model token breakdown for THIS team (Fable / Opus / Sonnet / Haiku …),
+  // from the team's own jsonl. OAuth gives no per-model limit, so this is token
+  // counts + message rows — surfaced under each team card in the UI.
+  try {
+    const scan = scanClaudeUsage(dir, {})
+    base.byModel = (scan.byModel || [])
+      .filter((m) => m.model && m.model !== '<synthetic>')
+      .map((m) => ({
+        model: m.model,
+        tokens: (m.input || 0) + (m.output || 0) + (m.cacheCreation || 0) + (m.cacheRead || 0),
+        input: m.input || 0,
+        output: m.output || 0,
+        cacheRead: m.cacheRead || 0,
+        rows: m.rows || 0,
+      }))
+      .slice(0, 8)
+    base.rows = scan.totals?.rows || 0
+    base.filesScanned = scan.files || 0
+  } catch { base.byModel = [] }
   // collect the 7d timeline once (used for both 5h and weekly burn)
   const timeline = collectClaudeTimeline(dir, { sinceMs: now - WINDOW_7D_MS })
   const oauth = await fetchClaudeOAuthUsage(dir)
@@ -1489,6 +1567,186 @@ export async function buildAigwSourceSummary({ now = Date.now(), home, fetchImpl
   }
 }
 
+// ── AIGW monthly budget (MES-13788 延续: /user/info 剩余额度 + 自适配档) ────────
+//
+// The 4th honest source: GET https://aigw.meshy.team/user/info → user_info.
+//   { max_budget, spend, budget_reset_at, budget_duration, user_email }
+// `remaining = max_budget - spend`, `pct_remaining = remaining / max_budget * 100`,
+// `days_left` = whole days from now to budget_reset_at (floor 0). The
+// self-adapting strategy tier is ported verbatim from ~/code/aigw_budget.sh:
+//   FREE_ONLY  : 剩<10%           → 只免费 GLM/Kimi
+//   BURN       : reset≤4天 且 剩>25% → 用不完就清零, 猛往付费堆
+//   SPEND_PAID : >40% 且 reset 还远 → 硬活放开上付费 gpt-5.5/opus
+//   BALANCED   : 10-40%           → 免费铺量, 付费只给硬骨头
+// No fabricated numbers — every field comes from the gateway response.
+
+/** Tier advice strings (mirror aigw_budget.sh, zh source of truth). */
+export const AIGW_BUDGET_ADVICE = {
+  FREE_ONLY: '剩<10%: 只蹬免费 GLM/Kimi; 付费仅留给主人点名的紧急活。',
+  BALANCED: '10-40%: 免费铺量; 付费(gpt-5.5/opus)只给高优先级硬骨头。',
+  SPEND_PAID: '>40% 且离重置远: 硬活/交叉审放开上付费 gpt-5.5/claude-opus, 不心疼。',
+  BURN: '临近月末且剩余多: use-it-or-lose-it! 硬活猛往付费堆, 别让额度清零白瞎。',
+}
+
+/**
+ * Pure: compute the self-adapting strategy tier from remaining% + days to
+ * reset. Ported verbatim from aigw_budget.sh (the order matters: BURN is
+ * checked before SPEND_PAID so a near-reset surplus is not mislabelled).
+ * `pctRemaining` is remaining / max_budget * 100; `daysLeft` may be null when
+ * the reset time is unknown (then BURN is unreachable — honest).
+ */
+export function computeAigwBudgetTier({ pctRemaining, daysLeft }) {
+  const pct = Number(pctRemaining)
+  if (!Number.isFinite(pct)) return 'BALANCED'
+  if (pct < 10) return 'FREE_ONLY'
+  // daysLeft null/undefined = reset unknown -> BURN unreachable (honest: don't
+  // cry "use-it-or-lose-it" when we don't actually know when reset happens).
+  // Number(null)===0 would otherwise slip through the finite guard below.
+  if (daysLeft == null) return pct > 40 ? 'SPEND_PAID' : 'BALANCED'
+  const dl = Number(daysLeft)
+  if (Number.isFinite(dl) && dl <= 4 && pct > 25) return 'BURN'
+  if (pct > 40) return 'SPEND_PAID'
+  return 'BALANCED'
+}
+
+/**
+ * Pure: parse a budget_reset_at ISO string into whole days from `now` to reset,
+ * floored to 0. Returns null when the string is missing/unparseable. Mirrors
+ * aigw_budget.sh (UTC day diff). Never throws.
+ */
+export function computeBudgetDaysLeft(resetAt, now = Date.now()) {
+  if (typeof resetAt !== 'string' || !resetAt) return null
+  const rt = Date.parse(resetAt)
+  if (!Number.isFinite(rt)) return null
+  const diff = rt - now
+  if (diff <= 0) return 0
+  return Math.floor(diff / 86400_000)
+}
+
+/**
+ * Pure: map a successful AIGW /user/info response body into the budget object.
+ * The body's `user_info` carries max_budget / spend / budget_reset_at. Returns
+ * { available:true, ...budget } or { available:false, error } — no fabrication.
+ * This is the testable core; the live fetch is in fetchAigwBudget.
+ */
+export function mapAigwBudgetResponse(body, { now = Date.now() } = {}) {
+  const ui = body && typeof body === 'object' ? body.user_info : null
+  if (!ui || typeof ui !== 'object') {
+    return { available: false, error: '/user/info returned no user_info body' }
+  }
+  const maxb = Number(ui.max_budget)
+  const spend = Number(ui.spend)
+  if (!Number.isFinite(spend)) {
+    return { available: false, error: '/user/info user_info.spend is not a number' }
+  }
+  const maxBudget = Number.isFinite(maxb) && maxb > 0 ? maxb : null
+  const remaining = maxBudget != null ? Math.round((maxBudget - spend) * 100) / 100 : null
+  const pctRemaining = maxBudget != null ? Math.round((remaining / maxBudget) * 1000) / 10 : null
+  const pctUsed = maxBudget != null ? Math.round((spend / maxBudget) * 1000) / 10 : null
+  const resetAt = typeof ui.budget_reset_at === 'string' && ui.budget_reset_at ? ui.budget_reset_at : null
+  const daysLeft = computeBudgetDaysLeft(resetAt, now)
+  const tier = computeAigwBudgetTier({ pctRemaining: pctRemaining ?? -1, daysLeft })
+  return {
+    available: true,
+    user_email: typeof ui.user_email === 'string' && ui.user_email ? ui.user_email : null,
+    max_budget: maxBudget,
+    spend: Math.round(spend * 100000) / 100000,
+    remaining,
+    pct_remaining: pctRemaining,
+    pct_used: pctUsed,
+    reset_at: resetAt,
+    days_left: daysLeft,
+    budget_duration: typeof ui.budget_duration === 'string' && ui.budget_duration ? ui.budget_duration : null,
+    tier,
+    advice: AIGW_BUDGET_ADVICE[tier] || null,
+  }
+}
+
+/**
+ * Fetch the AIGW /user/info budget endpoint. Uses the well-known meshy-aigw.key
+ * (readAigwKey). Never throws — returns { available:false, error, keyPresent }
+ * on any failure so the route can 200 with a clear reason. Accepts a fetchImpl
+ * injection so unit tests can stub the network without a real gateway.
+ */
+export async function fetchAigwBudget({ key, home, fetchImpl, now = Date.now() } = {}) {
+  const base = getAigwBase({ home })
+  const apiKey = (key ?? readAigwKey({ home })).trim()
+  if (!apiKey) {
+    return { available: false, keyPresent: false, base, error: 'AIGW key not found (~/.config/meshy-aigw.key)' }
+  }
+  const f = fetchImpl || fetch
+  try {
+    const res = await f(`${base}/user/info`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) {
+      let body = null
+      try { body = await res.json() } catch {}
+      const msg = body?.detail || body?.error || `HTTP ${res.status}`
+      return { available: false, keyPresent: true, base, error: `AIGW /user/info ${msg}` }
+    }
+    const data = await res.json()
+    return { ...mapAigwBudgetResponse(data, { now }), keyPresent: true, base }
+  } catch (err) {
+    return { available: false, keyPresent: true, base, error: `AIGW /user/info fetch failed: ${err?.message || err}` }
+  }
+}
+
+/**
+ * Build the AIGW monthly-budget source summary for /api/usage/summary. Probes
+ * /user/info and surfaces a monthly window carrying the tier + advice + reset
+ * for the AI-readable surface. No fabricated numbers — unavailable is honest.
+ */
+export async function buildAigwBudgetSourceSummary({ now = Date.now(), fetchImpl } = {}) {
+  const budget = await fetchAigwBudget({ fetchImpl, now })
+  const base = {
+    source: 'aigw-budget', label: 'AIGW 月度额度', kind: 'litellm-budget',
+    configDir: null, available: !!budget.available, base: budget.base,
+    keyPresent: !!budget.keyPresent,
+  }
+  if (budget.available) {
+    const pctUsed = budget.pct_used
+    const sev = pctUsed == null ? null : (pctUsed >= 90 ? 'critical' : pctUsed >= 75 ? 'warning' : 'normal')
+    return {
+      ...base,
+      user_email: budget.user_email,
+      max_budget: budget.max_budget,
+      spend: budget.spend,
+      remaining: budget.remaining,
+      pct_remaining: budget.pct_remaining,
+      days_left: budget.days_left,
+      reset_at: budget.reset_at,
+      tier: budget.tier,
+      advice: budget.advice,
+      windows: [{
+        source: 'aigw-budget', label: 'AIGW 月度额度',
+        windowType: 'monthly',
+        used: budget.spend, limit: budget.max_budget, remaining: budget.remaining,
+        utilization: pctUsed, unit: 'usd',
+        resetAt: budget.reset_at,
+        burnRatePerMin: null, projectedHitAt: null,
+        estimated: false, severity: sev, usedTokens: null,
+        pctRemaining: budget.pct_remaining, daysLeft: budget.days_left,
+        tier: budget.tier, advice: budget.advice,
+        note: `AIGW /user/info: 预算 $${budget.max_budget} / 已花 $${budget.spend} / 剩余 $${budget.remaining} (${budget.pct_remaining}%). 重置 ${budget.reset_at || '?'}${budget.days_left != null ? ` (还剩 ~${budget.days_left} 天)` : ''}. 策略档=${budget.tier}`,
+      }],
+    }
+  }
+  return {
+    ...base,
+    windows: [{
+      source: 'aigw-budget', label: 'AIGW 月度额度',
+      windowType: 'monthly',
+      used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
+      resetAt: null, burnRatePerMin: null, projectedHitAt: null,
+      estimated: false, severity: null, usedTokens: null,
+      note: budget.error || 'AIGW /user/info budget unavailable.',
+    }],
+    error: budget.error,
+  }
+}
+
 // ── /api/usage/summary entry point ────────────────────────────────────────────
 
 /**
@@ -1520,6 +1778,8 @@ export async function buildUsageSummary({ home, store, now = Date.now(), fetchIm
   }
   // AIGW (LiteLLM) — /key/info real spend + /spend/logs/v2 burn + local budgetUsd.
   sources.push(await buildAigwSourceSummary({ now, home: homeDir, fetchImpl }))
+  // AIGW monthly budget — /user/info max_budget + spend + reset + tier (MES-13788 延续)
+  sources.push(await buildAigwBudgetSourceSummary({ now, fetchImpl }))
   // flat entries for AI consumption
   const entries = []
   for (const s of sources) {

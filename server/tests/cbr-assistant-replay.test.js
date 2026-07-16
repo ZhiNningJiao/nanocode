@@ -81,6 +81,7 @@ function makeElement(tag) {
   return el
 }
 
+global.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail } }
 global.document = {
   createElement: (tag) => makeElement(tag),
   createDocumentFragment: () => makeElement('fragment'),

@@ -72,6 +72,31 @@ document.addEventListener('nanocode:theme', () => {
   }
 })
 
+// When the JetBrains Mono webfont arrives AFTER xterm has already measured
+// its cellWidth against the fallback monospace, every live xterm needs to
+// remeasure and refit — otherwise the cached fallback cellWidth × cols ends
+// up wider than the pane and the last character of each line clips (bleed).
+//
+// fontSize toggle is the most reliable public-API remeasure trigger: it
+// ALWAYS fires the option-change event (xterm recomputes both cellWidth AND
+// cellHeight when fontSize changes), even if the numeric value differs by
+// less than a pixel. letterSpacing/fontFamily toggles were both being
+// short-circuited by xterm's option-change handler. The +1 / restore
+// round-trip happens within a single animation frame so the visible glitch
+// is sub-perceptible.
+if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => {
+    for (const pane of PANES) {
+      try {
+        const fs = pane.term.options.fontSize
+        pane.term.options.fontSize = fs + 1
+        pane.term.options.fontSize = fs
+        pane._fit()
+      } catch {}
+    }
+  })
+}
+
 // Reconnect backoff: 500ms → 1s → 2s → 4s → 8s → 10s cap
 const BACKOFF_BASE = 500
 const BACKOFF_MAX = 10000
@@ -98,6 +123,14 @@ export class TerminalPane {
    *   onStatusChange?: (connected: boolean) => void,
    *   wsPath?: string,            // override WS endpoint (default '/ws/terminal')
    *   attachExtra?: object,       // extra fields merged into the 'attach' message
+   *   skipTouchScroll?: boolean,  // true when this pane is a transient placeholder
+   *                               // that a block renderer will replace — skips
+   *                               // attaching the non-passive touchmove listener
+   *                               // so iOS never "poisons" the gesture (once
+   *                               // preventDefault fires, iOS commits the current
+   *                               // touch to a non-scroll gesture even after the
+   *                               // listener is removed). Call initTouchScroll()
+   *                               // later if the block renderer fails to load.
    * }} opts
    */
   constructor(container, opts = {}) {
@@ -110,6 +143,7 @@ export class TerminalPane {
     // original project-tab behaviour so existing callers are unaffected.
     this._wsPath = opts.wsPath || WS_PATH
     this._attachExtra = opts.attachExtra || null
+    this._skipTouchScroll = opts.skipTouchScroll || false
 
     this._ws = null
     this._exited = false
@@ -128,12 +162,32 @@ export class TerminalPane {
       scrollback: mobile ? 2000 : 4000,
       cursorBlink: true,
       allowProposedApi: true,
+      // OSC 8 hyperlinks (some programs, including claude code, wrap URLs
+      // in OSC 8 markers instead of relying on link autodetection). xterm
+      // parses the markers but does nothing on click unless a handler is
+      // registered — open the URI in a real browser tab, stripping opener.
+      linkHandler: {
+        activate(_event, uri) {
+          try { window.open(uri, '_blank', 'noopener,noreferrer') } catch {}
+        },
+      },
     })
     PANES.add(this)
 
     this.fitAddon = new FitAddon()
     this.term.loadAddon(this.fitAddon)
-    this.term.loadAddon(new WebLinksAddon())
+    // Custom URL handler: nanocode runs in a browser, so workers have no
+    // system clipboard or xdg-open equivalent. When the user taps a URL in
+    // the terminal, open it in a real browser tab and strip opener so the
+    // new tab can't reach back into this origin. window.open(uri, '_blank',
+    // 'noopener,noreferrer') is more reliable than the addon's default
+    // window.open() + location.href dance, which iOS Safari blocks as a
+    // synthetic popup.
+    this.term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        window.open(uri, '_blank', 'noopener,noreferrer')
+      })
+    )
 
     // Local echo for high-latency: show typed chars immediately, reconcile with server output
     this.localEcho = new LocalEcho({
@@ -143,11 +197,54 @@ export class TerminalPane {
     // Open in container
     this.term.open(container)
 
+    // OSC 52 — programmatic clipboard write. Claude Code's "press c to copy
+    // URL" prompt emits `ESC ] 52 ; c ; <base64-of-text> BEL`. The worker
+    // has no system clipboard (headless), so the sequence must be handled
+    // here on the browser side and routed through the user's browser
+    // clipboard. xterm.js doesn't enable OSC 52 by default for security
+    // (a remote program writing the user's clipboard is a real risk on a
+    // multi-user host), but in nanocode the only program writing to the PTY
+    // is one the user explicitly launched, so the trust model covers it.
+    // Read requests (payload === '?') are refused — we never echo the
+    // user's clipboard back to the program.
+    try {
+      this.term.parser.registerOscHandler(52, (data) => {
+        // Payload format: <selection>;<base64-data>
+        // - selection: c=clipboard, p=primary, q,s=others. Treat all as clipboard.
+        // - data == '?'  → read request; refuse (don't echo the user's clipboard).
+        const sep = data.indexOf(';')
+        if (sep < 0) return true
+        const payload = data.slice(sep + 1)
+        if (payload === '?' || payload === '') return true
+        try {
+          const text = atob(payload)
+          if (text) navigator.clipboard.writeText(text).catch(() => {})
+        } catch {}
+        return true   // handled; don't let xterm pass to default
+      })
+    } catch {}
+
     // Mobile: fix touch scrolling — xterm.js sets inline touch-action:none on
     // .xterm-screen which blocks all touch gestures. Override it and add manual
     // touch scroll handling for the viewport.
-    if (mobile) {
+    // SKIPPED when skipTouchScroll is set: this pane is a transient placeholder
+    // that a block renderer will replace once its JS lazily loads. Attaching a
+    // non-passive touchmove with preventDefault here would let iOS "poison" the
+    // gesture — once preventDefault fires, iOS commits the current touch to a
+    // non-scroll gesture even after the listener is removed and the block
+    // renderer takes over. By not attaching it, the placeholder terminal can't
+    // be touch-scrolled (xterm's own touch-action:none blocks it), but that's a
+    // 1-3 s loading window, far better than a permanently poisoned gesture.
+    if (mobile && !this._skipTouchScroll) {
       this._initTouchScroll(container)
+    } else if (mobile && this._skipTouchScroll) {
+      const screen = container.querySelector('.xterm-screen')
+      if (screen) screen.style.touchAction = 'pan-y'
+      const viewport = container.querySelector('.xterm-viewport')
+      if (viewport) {
+        viewport.style.touchAction = 'pan-y'
+        viewport.style.overscrollBehavior = 'contain'
+      }
     }
 
     // Initial fit
@@ -181,9 +278,10 @@ export class TerminalPane {
       this._send({ type: 'input', data })
     })
 
-    // Paste handler — Ctrl+V / Ctrl+Shift+V
+    // Paste / copy handlers.
     this._keyDisposable = this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
+      // Ctrl+V / Cmd+V — paste from system clipboard into the PTY.
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
         navigator.clipboard
           .readText()
@@ -192,6 +290,25 @@ export class TerminalPane {
           })
           .catch(() => {})
         return false
+      }
+      // Copy semantics:
+      //   Ctrl+Shift+C / Cmd+Shift+C → ALWAYS copy current selection, never
+      //   forward to the PTY. The standard terminal convention.
+      //   Ctrl+C / Cmd+C with an active selection → copy the selection and
+      //   suppress \x03 so the running program isn't interrupted.
+      //   Ctrl+C / Cmd+C with no selection → fall through (xterm sends \x03).
+      const isCopyChord =
+        (e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')
+      if (isCopyChord) {
+        const wantsExplicitCopy = e.shiftKey
+        const hasSelection = this.term.hasSelection && this.term.hasSelection()
+        if (wantsExplicitCopy || hasSelection) {
+          const sel = this.term.getSelection ? this.term.getSelection() : ''
+          if (sel) {
+            try { navigator.clipboard.writeText(sel) } catch {}
+          }
+          return false
+        }
       }
       return true
     })
@@ -225,49 +342,54 @@ export class TerminalPane {
     let touchActive = false
     let accumDy = 0
 
-    container.addEventListener(
-      'touchstart',
-      (e) => {
-        if (e.touches.length !== 1) return
-        touchStartY = e.touches[0].clientY
-        touchActive = true
-        accumDy = 0
-      },
-      { passive: true }
-    )
+    this._touchStartHandler = (e) => {
+      if (e.touches.length !== 1) return
+      touchStartY = e.touches[0].clientY
+      touchActive = true
+      accumDy = 0
+    }
 
     // MUST be non-passive so we can preventDefault and stop page scroll
-    container.addEventListener(
-      'touchmove',
-      (e) => {
-        if (!touchActive || e.touches.length !== 1) return
+    this._touchMoveHandler = (e) => {
+      if (!touchActive || e.touches.length !== 1) return
 
-        // Always prevent default to stop iOS page scroll
-        e.preventDefault()
+      // Always prevent default to stop iOS page scroll
+      e.preventDefault()
 
-        const dy = touchStartY - e.touches[0].clientY
-        touchStartY = e.touches[0].clientY
+      const dy = touchStartY - e.touches[0].clientY
+      touchStartY = e.touches[0].clientY
 
-        // Accumulate sub-line pixel deltas for smooth scrolling
-        accumDy += dy
-        const cellHeight = container.clientHeight / (this.term.rows || 24) || 17
-        const lines = Math.trunc(accumDy / cellHeight)
-        if (lines !== 0) {
-          this.term.scrollLines(lines)
-          accumDy -= lines * cellHeight
-        }
-      },
-      { passive: false }
-    )
+      // Accumulate sub-line pixel deltas for smooth scrolling
+      accumDy += dy
+      const cellHeight = container.clientHeight / (this.term.rows || 24) || 17
+      const lines = Math.trunc(accumDy / cellHeight)
+      if (lines !== 0) {
+        this.term.scrollLines(lines)
+        accumDy -= lines * cellHeight
+      }
+    }
 
-    container.addEventListener(
-      'touchend',
-      () => {
-        touchActive = false
-        accumDy = 0
-      },
-      { passive: true }
-    )
+    this._touchEndHandler = () => {
+      touchActive = false
+      accumDy = 0
+    }
+
+    this._touchContainer = container
+    container.addEventListener('touchstart', this._touchStartHandler, { passive: true })
+    container.addEventListener('touchmove', this._touchMoveHandler, { passive: false })
+    container.addEventListener('touchend', this._touchEndHandler, { passive: true })
+  }
+
+  /** Retroactively enable touch scroll on a pane that was created with
+   *  skipTouchScroll. Used when a block renderer fails to lazy-load and the
+   *  TerminalPane stays as the permanent pane — without this the terminal
+   *  can't be touch-scrolled on mobile. No-op if already initialized or not
+   *  mobile. */
+  initTouchScroll() {
+    if (this._touchContainer) return
+    if (!window.matchMedia('(max-width: 768px)').matches) return
+    this._skipTouchScroll = false
+    this._initTouchScroll(this.container)
   }
 
   _connect() {
@@ -468,12 +590,27 @@ export class TerminalPane {
   }
 
   dispose() {
+    // Remove touch scroll handlers FIRST so they can't leak onto the
+    // container when a block renderer replaces this pane. Must run
+    // before any potentially-throwing call below — if _keyDisposable
+    // (void from attachCustomKeyEventHandler) or term.dispose() throws,
+    // these listeners would otherwise stay attached and block native
+    // scroll on the block renderer that takes over the same element.
+    if (this._touchContainer) {
+      this._touchContainer.removeEventListener('touchstart', this._touchStartHandler)
+      this._touchContainer.removeEventListener('touchmove', this._touchMoveHandler)
+      this._touchContainer.removeEventListener('touchend', this._touchEndHandler)
+      this._touchContainer = null
+    }
     this._stopPing()
     clearTimeout(this._reconnectTimer)
     clearTimeout(this._resizeTimer)
     this._resizeObserver.disconnect()
     this._dataDisposable.dispose()
-    this._keyDisposable.dispose()
+    // attachCustomKeyEventHandler returns void (not IDisposable), so
+    // _keyDisposable is undefined — use optional chaining to avoid a
+    // throw that would abort the rest of dispose().
+    this._keyDisposable?.dispose()
     if (this._ws) {
       this._ws.onclose = null
       this._ws.close()

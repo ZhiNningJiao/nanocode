@@ -11,7 +11,15 @@ import {
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 
-const OUTPUT_FLUSH_MS = 12
+// 12 ms was tight enough that on a busy host the worker's event loop
+// spent most of its budget on flush ticks (one JSON.stringify +
+// ws.send() per active client per 12 ms = ~83 Hz). A noisy agent (e.g.
+// codex's TUI redraws) compounded this to where new connections
+// couldn't be accept()ed. 50 ms is still well under perception
+// threshold (~20 Hz visual updates) and gives back ~75% of the
+// per-flush CPU budget. PTY scrollback continues to be batched at
+// SCROLLBACK_FLUSH_MS for disk persistence.
+const OUTPUT_FLUSH_MS = 50
 const SCROLLBACK_SIZE = 100 * 1024 // 100KB
 const SCROLLBACK_FLUSH_MS = 5000
 
@@ -252,8 +260,15 @@ class Session {
     if (history) {
       ws.send(JSON.stringify({ type: 'history', data: history }))
     }
+    const hadClients = this._clients.size > 0
     this._clients.add(ws)
-    if (this._proc && !this._exited) {
+    // Track the primary (first-attached) client. Only the primary may
+    // resize the PTY. A second client (e.g. wake-secretary 80x24) must
+    // NOT shrink the terminal the browser is already using.
+    if (!this._primaryClient || !this._clients.has(this._primaryClient)) {
+      this._primaryClient = ws
+    }
+    if (!hadClients && this._proc && !this._exited) {
       try {
         this._proc.resize(Math.max(1, cols), Math.max(1, rows))
       } catch {
@@ -273,7 +288,10 @@ class Session {
           if (this._proc) this._proc.write(msg.data)
           break
         case 'resize':
-          if (this._proc && !this._exited) {
+          // Only honour resize from the primary client to prevent a
+          // short-lived injector (wake-secretary) from clobbering the
+          // browser's terminal dimensions.
+          if (ws === this._primaryClient && this._proc && !this._exited) {
             const c = Math.max(1, msg.cols || 80)
             const r = Math.max(1, msg.rows || 24)
             try {
@@ -315,6 +333,25 @@ class Session {
    */
   detach(ws) {
     this._clients.delete(ws)
+    if (this._primaryClient === ws) {
+      this._primaryClient = this._clients.size > 0
+        ? this._clients.values().next().value
+        : null
+    }
+  }
+
+  /**
+   * Write raw input to the PTY — the server-side equivalent of the WS
+   * 'input' message (see attach()'s onMessage handler). Used by
+   * POST /api/sessions/:id/inject (localhost-only) so an external watchdog
+   * can inject a keystroke/message into a bash tab. No-op once the process
+   * has exited.
+   * @param {string} data
+   */
+  write(data) {
+    if (this._proc && !this._exited && typeof data === 'string') {
+      this._proc.write(data)
+    }
   }
 
   /**
@@ -439,6 +476,16 @@ export function listProjectSessions(projectId) {
     if (key.startsWith(prefix)) ids.push(key.slice(prefix.length))
   }
   return ids
+}
+
+/**
+ * List all active bash PTY session keys (across every project). Used by
+ * GET /api/sessions (localhost-only) so an external watchdog can enumerate
+ * live sessions for the inject workflow.
+ * @returns {string[]}
+ */
+export function listAllSessionKeys() {
+  return Array.from(sessions.keys())
 }
 
 /**

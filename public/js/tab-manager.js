@@ -10,9 +10,27 @@
  */
 
 import { TerminalPane } from './terminal-pane.js'
-import { ClaudeBlockRenderer } from './claude-block-renderer.js'
-import { CodexBlockRenderer } from './codex-block-renderer.js'
 import { fetchTabs, createTab, deleteTab, patchTab } from './api.js'
+
+// Block renderers (claude-block-renderer.js ~100 KB, codex-block-renderer.js
+// ~59 KB raw — ~41 KB gz combined) are loaded LAZILY. Claude/codex tabs default
+// to the terminal renderer so we don't ship these on cold start; fable5/opencode
+// tabs default to block and lazy-load on first open. Cached once per module
+// after first load. (port of upstream d952583, adapted for fable5/opencode)
+let _claudeBlockPromise = null
+let _codexBlockPromise = null
+function loadClaudeBlock() {
+  if (!_claudeBlockPromise) {
+    _claudeBlockPromise = import('./claude-block-renderer.js').then((m) => m.ClaudeBlockRenderer)
+  }
+  return _claudeBlockPromise
+}
+function loadCodexBlock() {
+  if (!_codexBlockPromise) {
+    _codexBlockPromise = import('./codex-block-renderer.js').then((m) => m.CodexBlockRenderer)
+  }
+  return _codexBlockPromise
+}
 
 const ACTIVE_KEY_PREFIX = 'activeTab:'
 
@@ -98,6 +116,14 @@ export class TabManager {
       const tab = await createTab(this.projectId, { type, ...extraOpts })
       this._pendingActiveId = tab.id
       // The WS broadcast that follows will add the tab + setActive.
+      // But the server broadcasts BEFORE the POST response returns, so the
+      // broadcast may have already arrived and added the tab without activating
+      // it (because _pendingActiveId was still null). If the tab is already in
+      // this.tabs, activate it now; otherwise the next broadcast will.
+      if (this.tabs.some((t) => t.id === tab.id)) {
+        this._pendingActiveId = null
+        this.setActive(tab.id)
+      }
       return tab.id
     } catch (err) {
       console.error('newTab failed', err)
@@ -319,7 +345,17 @@ export class TabManager {
       // most-recently-active claude tab (by jsonl mtime) for cross-port resume.
       const remembered = loadActiveId(this.projectId)
       if (remembered && serverById.has(remembered)) {
-        this.setActive(remembered)
+        // Only honour the remembered tab when it is itself a claude tab — i.e.
+        // the user was on a conversation. If the remembered tab is a bash/other
+        // tab, opening the project should auto-replay the latest claude
+        // conversation in the directory (the "点进目录自动回放该目录最近一次对话"
+        // requirement) rather than land on a bare terminal.
+        const rememberedTab = serverById.get(remembered)
+        if (rememberedTab && rememberedTab.type === 'claude') {
+          this.setActive(remembered)
+        } else {
+          this._autoSelectMostRecentClaudeTab(serverById)
+        }
       } else {
         // No remembered tab for this device: auto-select the most recently active
         // claude tab by querying the server (jsonl mtime). Falls back to tabs[0].
@@ -367,8 +403,15 @@ export class TabManager {
       },
     }
 
-    // Claude tabs use a DOM block renderer by default (rich text, mobile-friendly).
-    // If the global renderMode setting is 'terminal', use raw PTY instead.
+    // Claude tabs default to the raw PTY (xterm) renderer: the block
+    // renderer requires endpoints (/api/projects/:id/tabs/:tabId/history,
+    // .../queue) that aren't always reachable — e.g. on a worker that
+    // predates the v1.3.0 endpoint surface, or during a hot-deploy where
+    // the running worker hasn't been restarted yet, the block renderer
+    // can't load existing tab state and the user sees a blank pane
+    // (symptom: "existing terminals not loading"); on 9475/9476 dual
+    // active this matters. Opt in via Settings → renderMode = 'block'.
+    // (port of upstream 14f9d03 + e57a1d5 state.js)
     // Codex tabs: separate codexRenderMode setting, defaults to 'terminal' (xterm raw).
     // Set codexRenderMode to 'block' in Settings to opt into CodexBlockRenderer (experimental).
     // 需求11-C: Fable5/opencode tabs use ClaudeBlockRenderer (Block mode, default)
@@ -383,16 +426,47 @@ export class TabManager {
       (type === 'fable5' && fable5RenderMode !== 'terminal') ||
       (type === 'opencode' && opencodeRenderMode !== 'terminal')
     const useCodexRenderer = type === 'codex' && codexRenderMode === 'block'
-    let pane
-    if (useClaudeRenderer) {
-      pane = new ClaudeBlockRenderer(paneEl, { ...paneOpts, tabType: type })
-    } else if (useCodexRenderer) {
-      pane = new CodexBlockRenderer(paneEl, paneOpts)
-    } else {
-      pane = new TerminalPane(paneEl, paneOpts)
-    }
-
+    // Synchronous default: PTY renderer. Block renderers (~100 KB + ~59 KB
+    // raw, ~41 KB gz combined) load lazily via dynamic import() and swap in
+    // once the module arrives. While the JS streams in, the placeholder
+    // TerminalPane keeps the WS attached so no terminal state is lost; it is
+    // dispose()'d cleanly before the block renderer installs on the same
+    // element. Cold-load delta on the default terminal-mode path: ~41 KB gz
+    // not shipped. (port of upstream d952583)
+    //
+    // skipTouchScroll: when a block renderer will replace this pane, do NOT
+    // attach the non-passive touchmove+preventDefault listener. On real iOS,
+    // once preventDefault fires inside a touchmove, the OS commits the entire
+    // gesture to a non-scroll intent — even after dispose() removes the
+    // listener and the block renderer takes over, the in-flight touch still
+    // can't scroll (gesture poisoning). CDP/Playwright can't reproduce this
+    // because Input.dispatchTouchEvent lacks iOS's gesture-commitment
+    // semantics. Skipping the listener for transient placeholder panes is the
+    // real-device root-cause fix.
+    const willSwapToBlock = useClaudeRenderer || useCodexRenderer
+    let pane = new TerminalPane(paneEl, { ...paneOpts, skipTouchScroll: willSwapToBlock })
     this.tabs.push({ id, label, type, pane, paneEl, persona: opts.persona || '' })
+
+    if (willSwapToBlock) {
+      const loader = useClaudeRenderer ? loadClaudeBlock() : loadCodexBlock()
+      loader.then((Cls) => {
+        const tab = this.tabs.find((t) => t.id === id)
+        if (!tab) return
+        try { tab.pane.dispose() } catch {}
+        paneEl.innerHTML = ''
+        const blockOpts = useClaudeRenderer ? { ...paneOpts, tabType: type } : paneOpts
+        tab.pane = new Cls(paneEl, blockOpts)
+      }).catch((err) => {
+        console.error('[tab-manager] failed to load block renderer:', err)
+        // Block renderer failed to load — the TerminalPane stays as the
+        // permanent pane. Retroactively enable touch scroll so the terminal
+        // is still usable on mobile (it was skipped at creation time).
+        const tab = this.tabs.find((t) => t.id === id)
+        if (tab?.pane?.initTouchScroll) {
+          try { tab.pane.initTouchScroll() } catch {}
+        }
+      })
+    }
     // Track grew; keep the visible position pinned to the active tab.
     this._syncTrackPosition({ noAnim: true })
   }
@@ -695,14 +769,20 @@ export class TabManager {
     })
 
     // Load recent conversations. 需求5.3: remember the last chosen source
-    // (project/home/all) so cross-team sessions can surface without home
-    // drowning the size-sorted list.
-    this._pickerSource = localStorage.getItem('claudeResumeSource') || 'project'
-    this._renderPickerBody(body)
+    // (project/home/all). Default is 'all' so the first screen surfaces the
+    // most-recent (mtime-desc) conversations across project + home — matching
+    // the backend default (scanRecentConversationsMulti source='all') and the
+    // 需求3 acceptance ("列表首屏必须出现最近 1 小时内活跃的会话"). A project
+    // with no recent claude sessions would otherwise show only stale entries.
+    // r8 anti-fake-pass: a STALE persisted 'project' choice (e.g. the user
+    // clicked "This project" in a prior session) would still hide recent
+    // conversations after a hot-update — see _renderPickerBody auto-fallback.
+    this._pickerSource = localStorage.getItem('claudeResumeSource') || 'all'
+    this._renderPickerBody(body, true)
   }
 
-  async _renderPickerBody(body) {
-    const source = this._pickerSource || 'project'
+  async _renderPickerBody(body, isInitial = false) {
+    const source = this._pickerSource || 'all'
     body.innerHTML = ''
 
     // 需求5.3: source switch — This project / Home / All
@@ -745,6 +825,24 @@ export class TabManager {
       console.warn('[claude-resume-picker] failed to load conversations', err)
     }
 
+    // 需求3 robustness (anti-fake-pass r8): a stale persisted 'project' choice
+    // must not hide recent conversations after a hot-update. On the INITIAL
+    // picker open, if source='project' and the project has no recently-active
+    // session (top entry older than 1h), auto-fallback to 'all' so the master's
+    // hard requirement — "首屏出现最近 1h 活跃会话" — holds regardless of the
+    // browser's localStorage state. Only 'project' auto-falls back (it is the
+    // scope most likely to have no recent sessions; 'home'/'all' naturally
+    // surface recent home/secretary sessions). Explicit "This project" clicks
+    // pass isInitial=false so a deliberate choice is still respected. The
+    // re-render uses source='all' (≠ 'project') + isInitial=false → no recursion.
+    if (isInitial && source === 'project' && conversations.length
+        && Date.now() - new Date(conversations[0].mtime).getTime() > 60 * 60 * 1000) {
+      this._pickerSource = 'all'
+      localStorage.setItem('claudeResumeSource', 'all')
+      this._renderPickerBody(body)
+      return
+    }
+
     loading.remove()
     if (!conversations.length) {
       const empty = document.createElement('div')
@@ -774,7 +872,10 @@ export class TabManager {
       if (c.isHome) badges.push('home')
       else if (c.cwd) badges.push(c.cwd)
       const badgeText = badges.length ? ` · ${badges.join(' / ')}` : ''
-      meta.textContent = `${c.messageCount} msgs · ${sizeKb} · ${c.relTime}${badgeText}`
+      // 需求3 紧急修正: relTime FIRST so the master can verify recency
+      // ("11m ago") at a glance — the sort is now mtime-desc, so the top of the
+      // list must visibly be the freshest conversation.
+      meta.textContent = `${c.relTime} · ${c.messageCount} msgs · ${sizeKb}${badgeText}`
       info.appendChild(summary)
       info.appendChild(meta)
       row.appendChild(info)

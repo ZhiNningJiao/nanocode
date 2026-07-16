@@ -77,6 +77,7 @@ global.document = {
   dispatchEvent: () => {},
   querySelectorAll: () => [],
 }
+global.CustomEvent = class CustomEvent { constructor(type, options = {}) { this.type = type; this.detail = options.detail } }
 global.NodeFilter = { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 }
 global.requestAnimationFrame = (fn) => { fn(); return 0 }
 global.location = { protocol: 'http:', host: 'localhost:3001' }
