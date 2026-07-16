@@ -123,6 +123,14 @@ export class TerminalPane {
    *   onStatusChange?: (connected: boolean) => void,
    *   wsPath?: string,            // override WS endpoint (default '/ws/terminal')
    *   attachExtra?: object,       // extra fields merged into the 'attach' message
+   *   skipTouchScroll?: boolean,  // true when this pane is a transient placeholder
+   *                               // that a block renderer will replace — skips
+   *                               // attaching the non-passive touchmove listener
+   *                               // so iOS never "poisons" the gesture (once
+   *                               // preventDefault fires, iOS commits the current
+   *                               // touch to a non-scroll gesture even after the
+   *                               // listener is removed). Call initTouchScroll()
+   *                               // later if the block renderer fails to load.
    * }} opts
    */
   constructor(container, opts = {}) {
@@ -135,6 +143,7 @@ export class TerminalPane {
     // original project-tab behaviour so existing callers are unaffected.
     this._wsPath = opts.wsPath || WS_PATH
     this._attachExtra = opts.attachExtra || null
+    this._skipTouchScroll = opts.skipTouchScroll || false
 
     this._ws = null
     this._exited = false
@@ -218,7 +227,15 @@ export class TerminalPane {
     // Mobile: fix touch scrolling — xterm.js sets inline touch-action:none on
     // .xterm-screen which blocks all touch gestures. Override it and add manual
     // touch scroll handling for the viewport.
-    if (mobile) {
+    // SKIPPED when skipTouchScroll is set: this pane is a transient placeholder
+    // that a block renderer will replace once its JS lazily loads. Attaching a
+    // non-passive touchmove with preventDefault here would let iOS "poison" the
+    // gesture — once preventDefault fires, iOS commits the current touch to a
+    // non-scroll gesture even after the listener is removed and the block
+    // renderer takes over. By not attaching it, the placeholder terminal can't
+    // be touch-scrolled (xterm's own touch-action:none blocks it), but that's a
+    // 1-3 s loading window, far better than a permanently poisoned gesture.
+    if (mobile && !this._skipTouchScroll) {
       this._initTouchScroll(container)
     }
 
@@ -353,6 +370,18 @@ export class TerminalPane {
     container.addEventListener('touchstart', this._touchStartHandler, { passive: true })
     container.addEventListener('touchmove', this._touchMoveHandler, { passive: false })
     container.addEventListener('touchend', this._touchEndHandler, { passive: true })
+  }
+
+  /** Retroactively enable touch scroll on a pane that was created with
+   *  skipTouchScroll. Used when a block renderer fails to lazy-load and the
+   *  TerminalPane stays as the permanent pane — without this the terminal
+   *  can't be touch-scrolled on mobile. No-op if already initialized or not
+   *  mobile. */
+  initTouchScroll() {
+    if (this._touchContainer) return
+    if (!window.matchMedia('(max-width: 768px)').matches) return
+    this._skipTouchScroll = false
+    this._initTouchScroll(this.container)
   }
 
   _connect() {
