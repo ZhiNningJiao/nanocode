@@ -878,6 +878,25 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     const cs = claudeSessions.get(sessionKey)
     if (!cs) return { ok: false, error: 'session not found' }
     if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'empty text' }
+    // ── Session singleton lock: a read-only server must not spawn a consumer ──
+    // The WS 'claude-input' path blocks read-only input (see attachClaudeSession),
+    // but the HTTP inject path (POST /api/sessions/:id/inject, used by the crontab
+    // watchdog / secretary-wake) is a SEPARATE entry point. Without this guard a
+    // server that lost the lock would still spawn a second Claude consumer via
+    // inject — exactly the "two secretaries" conflict the lock is meant to stop.
+    if (cs.readOnly) {
+      const holderPort = cs.lockHolder?.port
+      console.warn(
+        `[claude:lock] ${sessionKey}: inject blocked — session ${cs.claudeSessionId} ` +
+        `is hosted by :${holderPort} (read-only mode).`
+      )
+      return {
+        ok: false,
+        error: `read-only: session hosted by :${holderPort}`,
+        readOnly: true,
+        lockHolderPort: holderPort,
+      }
+    }
     const userEvent = {
       type: 'user',
       uuid: randomUUID(),

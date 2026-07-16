@@ -163,11 +163,11 @@ function makeServer(port, sharedHome, projectId, tabId, claudeSessionId) {
     claudeSessionId,
   })
   const { factory, state } = makeMockStreamingQuery()
-  const { handleTerminalWs } = createTerminalRoutes(store, {
+  const { router, handleTerminalWs } = createTerminalRoutes(store, {
     port,
     testQueryImpl: factory,
   })
-  return { store, project, tab, handleTerminalWs, state, port }
+  return { store, project, tab, handleTerminalWs, router, state, port }
 }
 
 function attachClaude(handleTerminalWs, projectId, tabId) {
@@ -183,6 +183,33 @@ function attachClaude(handleTerminalWs, projectId, tabId) {
     rows: 40,
   })
   return ws
+}
+
+// Invoke an Express router route in-process (no HTTP server). Mirrors the
+// invokeRoute helper in session-inject.test.js so we can exercise the
+// POST /api/sessions/:id/inject endpoint directly.
+function invokeRoute(router, method, url, { body, remoteAddress = '127.0.0.1' } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = {
+      method,
+      url,
+      body: body || {},
+      query: {},
+      headers: {},
+      socket: { remoteAddress },
+    }
+    const res = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this },
+      json(payload) { resolve({ statusCode: this.statusCode, payload }) },
+      send(payload) { resolve({ statusCode: this.statusCode, payload }) },
+      end(payload) { resolve({ statusCode: this.statusCode, payload }) },
+    }
+    router.handle(req, res, (err) => {
+      if (err) reject(err)
+      else resolve({ statusCode: res.statusCode, payload: undefined })
+    })
+  })
 }
 
 describe('session singleton lock — dual-server', () => {
@@ -394,6 +421,70 @@ describe('session singleton lock — dual-server', () => {
     assert.ok(existsSync(lockB), 'session B lock file exists')
     assert.equal(JSON.parse(readFileSync(lockA, 'utf8')).port, 9477)
     assert.equal(JSON.parse(readFileSync(lockB, 'utf8')).port, 9478)
+
+    serverA.store.close()
+    serverB.store.close()
+    wsA.close()
+    wsB.close()
+  })
+
+  it('read-only server blocks the inject API (no consumer spawned); host still wakes', async () => {
+    // Regression guard for the inject-bypass bug: the HTTP inject path
+    // (POST /api/sessions/:id/inject, used by the crontab watchdog /
+    // secretary-wake) is a SEPARATE entry point from the WS 'claude-input'
+    // path. Without the readOnly guard in injectClaudeMessage, a server that
+    // lost the lock would still spawn a second Claude consumer via inject —
+    // the exact "two secretaries" conflict the lock is meant to prevent.
+    const sharedHome = makeTempDir('nanocode-dualsrv-inject-')
+    const projectId = 'test-proj-inject'
+    const tabId = 'test-tab-inject'
+    const claudeSessionId = '93cead89-inject-session'
+
+    const serverA = makeServer(9477, sharedHome, projectId, tabId, claudeSessionId)
+    const serverB = makeServer(9478, sharedHome, projectId, tabId, claudeSessionId)
+
+    // Server A → host.
+    const wsA = attachClaude(serverA.handleTerminalWs, projectId, tabId)
+    await waitUntil(() => wsA.sent.find((m) => m.type === 'busy-state'), 3000, 'A busy-state')
+
+    // Server B → read-only.
+    const wsB = attachClaude(serverB.handleTerminalWs, projectId, tabId)
+    await waitUntil(
+      () => wsB.sent.find((m) => m.event?._readonly === true),
+      3000, 'B read-only'
+    )
+
+    const sessionKey = `${projectId}:claude:${tabId}`
+
+    // ── Read-only server (B): inject must be BLOCKED, no consumer spawned ──
+    const turnsBeforeB = serverB.state.turns
+    const resB = await invokeRoute(serverB.router, 'POST',
+      `/api/sessions/${sessionKey}/inject`,
+      { body: { text: 'wake from read-only server', sendNow: false } }
+    )
+    assert.equal(resB.statusCode, 423, 'read-only inject must return 423 Locked')
+    assert.equal(resB.payload.ok, false, 'read-only inject must report ok:false')
+    assert.equal(resB.payload.readOnly, true, 'read-only inject must set readOnly:true')
+    assert.equal(resB.payload.lockHolderPort, 9477,
+      'read-only inject must identify the host port 9477')
+    await delay(150)
+    assert.equal(serverB.state.turns, turnsBeforeB,
+      'read-only server must NOT spawn a consumer via inject (turns unchanged)')
+
+    // ── Host server (A): inject must STILL WORK (legitimate watchdog wake) ──
+    const turnsBeforeA = serverA.state.turns
+    const resA = await invokeRoute(serverA.router, 'POST',
+      `/api/sessions/${sessionKey}/inject`,
+      { body: { text: 'wake the host secretary COMPLETE', sendNow: false } }
+    )
+    assert.equal(resA.statusCode, 200, 'host inject must return 200')
+    assert.equal(resA.payload.ok, true, 'host inject must report ok:true')
+    await waitUntil(
+      () => serverA.state.turns > turnsBeforeA,
+      3000, 'host consumer spawned via inject'
+    )
+    assert.ok(serverA.state.turns > turnsBeforeA,
+      'host server must still spawn a consumer via inject (wake path intact)')
 
     serverA.store.close()
     serverB.store.close()

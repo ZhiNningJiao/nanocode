@@ -230,6 +230,17 @@ export function createTerminalRoutes(store, opts = {}) {
       sendNow: sendNow === true,
     })
     if (result.ok) return res.json(result)
+    // Read-only server (lost the session singleton lock): the session is alive
+    // but hosted by another server. Tell the caller clearly so the watchdog can
+    // route the wake to the host instead of mistaking this for a missing session.
+    if (result.readOnly) {
+      return res.status(423).json({
+        ok: false,
+        error: result.error,
+        readOnly: true,
+        lockHolderPort: result.lockHolderPort,
+      })
+    }
     // Fall through to bash PTY session: write raw bytes (equivalent to WS
     // 'input') if such a session exists.
     if (result.error === 'session not found') {
