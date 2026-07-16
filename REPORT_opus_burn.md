@@ -2,11 +2,67 @@
 
 **Date**: 2026-07-16
 **Branch**: `zhining/codex-render-polish` (nanocode) + `zhining/lens-external-army` (akari)
-**Commits**: Rounds 1-3 (prior) + Round 4 (this session)
+**Commits**: Rounds 1-4 (prior) + Round 5 (this session)
 
 ---
 
-## Round 4 (this session)
+## Round 5 (this session)
+
+### Line 1: Codex 渲染完善
+
+**Commit** `04540b6` (pushed to fork/main) — 251 insertions:
+
+1. **Smart auto-scroll** — mirrors Claude tab: pauses auto-scroll when user scrolls up to read; resumes on scroll-to-bottom button click or new user input. Tracks `_userScrolledUp` state.
+
+2. **Usage/token display** — renders end-of-turn token counts (input/output/cached/reasoning) and cost as a subtle bar below each turn separator. Handles both SDK (`cached_input_tokens`) and Claude (`cache_read_input_tokens`) field names.
+
+3. **Reasoning blocks** — collapsible thinking summaries. Header shows 80-char preview; expand for full text. Auto-folds by default.
+
+4. **MCP tool call blocks** — structured blocks for Model Context Protocol tool invocations. Shows tool name, server name, arguments (pretty-printed JSON), and running/done/error status. Auto-folds on success.
+
+5. **Web search blocks** — visual indicator when Codex performs web searches (query displayed).
+
+6. **turn.started handling** — sets thinking state immediately on new turn.
+
+7. **turn-complete notification** — dispatches `nanocode:turn-complete` CustomEvent for the alert system (matching Claude tab behavior).
+
+8. **USER_MANUAL.md** — updated with all new codex features (reasoning blocks, MCP, web search, usage display, smart scroll, stats bar, notifications).
+
+Tests: 653/0 all pass. Smoke: 9477 HTTP 200.
+
+### Line 2: Nanocode 打磨
+
+USER_MANUAL.md comprehensive update covering Round 5 features. Upstream cherry-picks evaluated (3 candidates: URL toolbar, OSC 52/8, v1.3.0 stabilize) but deferred — too divergent for safe cherry-pick during burn sprint.
+
+### Line 3: Akari 打磨
+
+**Commit** `6046c281f` on `zhining/lens-external-army` — pre-commit 17/17 gates pass:
+
+1. **Flag indicator** — external army rows now show `flag` field from `army_status.json`. Flagged (completed) workers display with green `⚑ done` status, green tint background, and green tag text.
+
+2. **Summary counts** — band header now shows stalled/flagged counts (e.g. "5 workers · 1 stalled · 2 flagged").
+
+3. **CSS** — new `.astat.flag`, `.army-row.flagged` styles.
+
+Build: `tsc --noEmit` clean.
+
+### Smoke Test
+
+- PORT=9477: HTTP 200, codex-block-renderer with all Round 5 features served correctly
+- 9475/9476/9481/9482 untouched
+
+### Collision Report
+
+| Worker | Zone | Touched? |
+|--------|------|----------|
+| mobile_scroll | nanocode touch | No |
+| session_singleton | nanocode session | No |
+| akari_fleet2 | 9481/9482 | No (local commits only) |
+| quick3stage | dcc | No |
+
+---
+
+## Round 4 (prior session)
 
 ### Line 1: Codex 渲染完善
 
