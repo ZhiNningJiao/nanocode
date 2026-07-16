@@ -87,14 +87,16 @@ When the Codex SDK driver is active, codex tabs use **structured event rendering
 - **Agent messages**: Rendered as markdown with code blocks, syntax highlighting, and **copy buttons** on each code fence
 - **Command execution**: Foldable blocks showing the command, live "running..." status, exit code (green checkmark or red X), and **HH:MM:SS timestamps**. Successful commands (exit 0) **auto-fold** to save screen space
 - **File changes**: Diff blocks with **LCS-based diffing** (same quality as Claude tab) showing added/removed/unchanged lines with **line numbers** and context collapse
-- **Reasoning blocks**: Collapsible thinking summaries -- shows a preview when folded, full text when expanded
+- **Reasoning blocks**: Collapsible thinking summaries with markdown rendering, elapsed time badge, and first-sentence preview when folded
 - **MCP tool calls**: Blocks for external tool invocations via Model Context Protocol, showing tool name, server, arguments, and success/error status
 - **Web search**: Visual indicator when Codex performs web searches
 - **Usage/token display**: End-of-turn token usage (input, output, cached, reasoning tokens) shown below each turn separator
 - **Thinking indicator**: Animated dot with elapsed timer showing how long Codex has been processing
 - **Turn separators**: Visual dividers between conversation turns with a notification event for the alert system
 - **Smart auto-scroll**: Auto-scrolling pauses when you scroll up to read earlier output, and resumes when you click the scroll-to-bottom button or send new input
-- **Fold states**: Click any block header to cycle between full/header/line views (persisted in localStorage)
+- **Copy output buttons**: Every command block, response block, and sync-output block has a "Copy" button in the header for one-click clipboard copy
+- **Fold states**: Click any block header to cycle between full/header/line views (persisted in localStorage). **Ctrl+Shift+F** toggles all blocks open/closed at once
+- **PTY text markdown**: Even in PTY mode (non-SDK), text output is rendered as markdown with syntax highlighting and copy buttons
 - **Session stats bar**: Live counters for total blocks, commands, file changes, and turns
 
 ---

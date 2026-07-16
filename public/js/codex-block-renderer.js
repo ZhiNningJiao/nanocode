@@ -662,6 +662,18 @@ export class CodexBlockRenderer {
     // P2: Welcome screen dedup — track content fingerprints already rendered
     this._renderedContentHashes = new Set()
 
+    // Keyboard shortcuts: Ctrl+Shift+F = toggle fold all blocks
+    this._foldAllHandler = (e) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'F') {
+        e.preventDefault()
+        const blocks = this._scroll.querySelectorAll('[data-fold]')
+        const anyOpen = [...blocks].some(b => b.getAttribute('data-fold') === 'full')
+        const newFold = anyOpen ? 'header' : 'full'
+        blocks.forEach(b => b.setAttribute('data-fold', newFold))
+      }
+    }
+    document.addEventListener('keydown', this._foldAllHandler)
+
     this._connect()
   }
 
@@ -710,6 +722,10 @@ export class CodexBlockRenderer {
   dispose() {
     clearTimeout(this._reconnectTimer)
     this._stopPing()
+    if (this._foldAllHandler) {
+      document.removeEventListener('keydown', this._foldAllHandler)
+      this._foldAllHandler = null
+    }
     if (this._ws) {
       this._ws.onclose = null
       this._ws.close()
@@ -1111,12 +1127,29 @@ export class CodexBlockRenderer {
       `<span class="cbx-altscreen-icon">${iconText}</span>` +
       `<span class="cbx-altscreen-label">${labelText}</span>` +
       (isWelcome ? '' : `<span class="cbx-altscreen-done">✓ done</span>`) +
+      (isWelcome ? '' : `<button class="cbx-copy-output-btn" type="button" title="Copy output" aria-label="Copy output">Copy</button>`) +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
       `</button>` +
       `</div>` +
       `<div class="cbx-altscreen-body cbx-sync-body"></div>` +
       `</div>`
+
+    // Copy output button for non-welcome blocks
+    if (!isWelcome) {
+      const copyBtn = article.querySelector('.cbx-copy-output-btn')
+      if (copyBtn) {
+        copyBtn.addEventListener('click', (e) => {
+          e.stopPropagation()
+          const body = article.querySelector('.cbx-sync-body')
+          const text = body ? body.textContent : ''
+          navigator.clipboard.writeText(text).then(() => {
+            copyBtn.textContent = 'Copied!'
+            setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
+          }).catch(() => {})
+        })
+      }
+    }
 
     // P3: Render each line as a separate div for proper line breaks
     const bodyEl = article.querySelector('.cbx-sync-body')
@@ -1330,6 +1363,7 @@ export class CodexBlockRenderer {
       `<span class="cbx-altscreen-icon">◈</span>` +
       `<span class="cbx-altscreen-label">Codex Response</span>` +
       `<span class="cbx-altscreen-done">✓ done</span>` +
+      `<button class="cbx-copy-output-btn" type="button" title="Copy output" aria-label="Copy output">Copy</button>` +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
       `</button>` +
@@ -1339,6 +1373,18 @@ export class CodexBlockRenderer {
 
     // Set text content safely (no HTML injection)
     article.querySelector('.cbx-altscreen-body').textContent = text
+
+    // Copy output button handler
+    const copyBtn = article.querySelector('.cbx-copy-output-btn')
+    if (copyBtn) {
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        navigator.clipboard.writeText(text).then(() => {
+          copyBtn.textContent = 'Copied!'
+          setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
+        }).catch(() => {})
+      })
+    }
 
     // Click/touch header to toggle fold: full ↔ header
     const header = article.querySelector('.cbx-altscreen-header')
@@ -1489,12 +1535,27 @@ export class CodexBlockRenderer {
       `<span class="cbx-bash-cmd-text">${cmdHtml}</span>` +
       `<span class="cbx-bash-ts">${ts}</span>` +
       `<span class="cbx-bash-status cbx-bash-running">running…</span>` +
+      `<button class="cbx-copy-output-btn" type="button" title="Copy output" aria-label="Copy output">Copy</button>` +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
       `</button>` +
       `</div>` +
       `<pre class="cbx-bash-output cbx-bash-body"></pre>` +
       `</div>`
+
+    // Copy output button handler
+    const copyBtn = article.querySelector('.cbx-copy-output-btn')
+    if (copyBtn) {
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const output = article.querySelector('.cbx-bash-output')
+        const text = output ? output.textContent : ''
+        navigator.clipboard.writeText(text).then(() => {
+          copyBtn.textContent = 'Copied!'
+          setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
+        }).catch(() => {})
+      })
+    }
 
     // Click/touch header to toggle fold: full ↔ header
     const header = article.querySelector('.cbx-bash-header')
@@ -1749,21 +1810,37 @@ export class CodexBlockRenderer {
 
     // Check if last block is a text block we can append to
     const last = this._scroll.lastElementChild
-    if (last && last.classList.contains('cbx-block-text')) {
-      const pre = last.querySelector('.cbx-text-pre')
-      if (pre) {
-        pre.textContent += '\n' + line
-        this._scrollBottom()
-        return
+    if (last && last.classList.contains('cbx-block-text') && !last.classList.contains('cbx-live')) {
+      // Accumulate raw text and re-render as markdown
+      last._rawText = (last._rawText || '') + '\n' + line
+      const div = last.querySelector('.cbx-text-md') || last.querySelector('.cbx-text-pre')
+      if (div) {
+        const html = _renderCbxMarkdown(last._rawText, { streaming: true })
+        if (html && div.classList.contains('cbx-text-md')) {
+          div.innerHTML = html
+          _highlightCodeBlocks(div)
+        } else if (div.classList.contains('cbx-text-pre')) {
+          div.textContent += '\n' + line
+        }
       }
+      this._scrollBottom()
+      return
     }
 
-    // Create new text block
+    // Create new text block with markdown rendering
     const article = this._makeBlock('cbx-block-text')
-    const pre = document.createElement('pre')
-    pre.className = 'cbx-text-pre'
-    pre.textContent = line
-    article.appendChild(pre)
+    article._rawText = line
+    const div = document.createElement('div')
+    div.className = 'cbx-text-md'
+    const html = _renderCbxMarkdown(line, { streaming: true })
+    if (html) {
+      div.innerHTML = html
+      _highlightCodeBlocks(div)
+      _attachCopyHandlers(div)
+    } else {
+      div.textContent = line
+    }
+    article.appendChild(div)
     this._scroll.appendChild(article)
     this._scrollBottom()
   }
@@ -2106,20 +2183,33 @@ export class CodexBlockRenderer {
   _addReasoningBlock(text) {
     const article = this._makeBlock('cbx-block-reasoning')
     article.setAttribute('data-fold', 'header')
-    const preview = text.length > 80 ? text.slice(0, 80) + '\u2026' : text
+    // Extract first sentence or 120 chars for preview
+    const firstSentence = text.match(/^[^.!?\n]+[.!?]?/)?.[0] || ''
+    const preview = firstSentence.length > 120 ? firstSentence.slice(0, 120) + '\u2026' : firstSentence
+    const elapsed = this._thinkingStartTime ? `${(((Date.now() - this._thinkingStartTime) / 1000) | 0)}s` : ''
     article.innerHTML =
       `<div class="cbx-reasoning-card">` +
       `<div class="cbx-reasoning-header">` +
       `<span class="cbx-reasoning-icon">\uD83D\uDCA1</span>` +
       `<span class="cbx-reasoning-label">Thinking</span>` +
+      (elapsed ? `<span class="cbx-thinking-elapsed">${elapsed}</span>` : '') +
       `<span class="cbx-reasoning-preview">${escHtml(preview)}</span>` +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
       `</button>` +
       `</div>` +
-      `<pre class="cbx-reasoning-body"></pre>` +
+      `<div class="cbx-reasoning-body"></div>` +
       `</div>`
-    article.querySelector('.cbx-reasoning-body').textContent = text
+    // Render body as markdown for better readability
+    const bodyEl = article.querySelector('.cbx-reasoning-body')
+    const html = _renderCbxMarkdown(text)
+    if (html) {
+      bodyEl.innerHTML = html
+      _highlightCodeBlocks(bodyEl)
+      _attachCopyHandlers(bodyEl)
+    } else {
+      bodyEl.textContent = text
+    }
     const header = article.querySelector('.cbx-reasoning-header')
     _attachFoldToggle(header, article)
     this._scroll.appendChild(article)
