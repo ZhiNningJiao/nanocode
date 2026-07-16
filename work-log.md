@@ -1623,3 +1623,27 @@ commit 03beb00
   - 未推 commit 计数：接班 1 未推（R66）；本轮提交 R67 后 = 2 个未推，低于 WORKER_CORE §6「3+ 未推 commit → push」阈值 → 本轮 commit 后不 push（2 未推低于阈值），不开 PR，不动 9475，无功能改动故不部署 9476
   - 过程产物：run_nano_maint.log gitignored（*.log），_fe_check.mjs 用后即删，不入库
   - 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；提交 work-log 记账，2 未推低于阈值不 push，无部署
+
+## 2026-07-16 19:55 [nano_maint R68 — 秘书批复落地：fork/main 4 提交并入 integ-0716，npm test 653/0，冒烟 9477 通过，rsync 部署 9476，live LIVE==DISK+R9 sigs，9475 不动，push fork/main]
+  - 任务来源：任务书【秘书批复 19:5x — fork 同步问题】「把 fork/main 的 4 个新 commit merge 进 integ-0716 分支（解冲突以功能并集为准），npm test 0 fail 后直接推 fork/main。推完在状态板记一行，9476 runtime 已是 rsync 部署不用重部（除非本次 merge 带来行为变化，那就冒烟后再 rsync）」
+  - 入口复读：HANDOFF_opus_officer.md（officer 收线，178 FLAG 验过 / 0 待办）+ HANDOFF_opus_burn.md（opus_burn R4-R9 codex-block-renderer 全套在 fork/main，653/0，"wrap up for GLM maintenance"）均读
+  - 分叉分析（`git fetch fork` 后）：merge-base = 3ffec41；fork/main 领先 4 = 570c744(R8 feat) / d3da9db(R9 feat) / e68ed60(R9 docs) / 5945c5a(handoff docs)；HEAD 领先 67 全为 docs(work-log) 巡检提交
+  - 冲突预判：4 提交仅触 `public/js/codex-block-renderer.js`(+150) / `public/js/akari-panel.js`(+29) / `public/style.css`(+82) / `docs/USER_MANUAL.md`(+12) / `REPORT_opus_burn.md` / `HANDOFF_opus_burn.md`(新)；HEAD 67 提交仅触 `work-log.md` → **文件零交集** → 功能并集 = 干净合并
+  - 合并：`git merge fork/main --no-edit` → **ort 策略自动合并，0 冲突**，merge 提交 `cd99061` "Merge remote-tracking branch 'fork/main' into zhining/nano-9476-integ-0716"
+  - npm test（`tee -a run_nano_maint.log`）：`# tests 653 # pass 653 # fail 0`，exit 0
+  - 推 fork/main：`git push fork zhining/nano-9476-integ-0716:main` → `5945c5a..cd99061`（merge + 67 work-log 提交全量上 fork/main）
+  - 行为变化判定 → 走例外（冒烟后 rsync）：4 提交带 public/ 前端改动（R8 连接恢复/命令计时/akari poll + R9 图片渲染/块导航/键盘可访问性/MCP markdown），**非纯 docs** → 按批复「带来行为变化 → 冒烟后再 rsync」执行；无 server/terminal/scripts 改动（纯前端静态 + docs）
+  - 冒烟（9477 临时实例，`tee -a run_nano_maint.log`）：`node --check` codex-block-renderer.js + akari-panel.js 均 OK；`PORT=9477 timeout 15 node server/index.js` 干净启动（"Nanocode running on http://0.0.0.0:9477"，0 error）；端点 `/` `/js/codex-block-renderer.js` `/js/akari-panel.js` `/style.css` 全 200；R9 sigs（renderImage|blockNavigation|Alt+Arrow|reasoning）= 19 命中，R8 akari sigs（poll|reconnect|connection）= 22 命中 → 新代码可起可服务
+  - rsync 部署 9476 runtime（`~/.nanocode-9476-runtime`，.git 软链不动、HEAD 不动，按 nano_9476_restore 既有 rsync 法）：
+    - 干跑 `rsync -ani --delete`：public/ 仅 3 文件改（style.css / js/akari-panel.js / js/codex-block-renderer.js），docs/ 仅 USER_MANUAL.md 改，**0 删除**（新 HEAD 严格超集，R8/R9 全为增量/改旧文件、无删文件）
+    - 实跑 `rsync -av --delete --exclude='data/' public/ → runtime/public/` + `rsync -av --delete docs/ → runtime/docs/`：runtime 4 文件更新，data/ 不碰
+  - 不重启 9476（纯静态文件，无 server/ 改动 → 下次请求即出新文件，无需 systemctl restart，避免不必要中断）；9476 进程 PID 243001 沿用
+  - live 9476 验收：
+    - runtime 磁盘 4 文件 md5 == worktree 源 4 文件（全 MATCH）
+    - live curl md5 == runtime 磁盘 md5：`/js/codex-block-renderer.js` `/js/akari-panel.js` `/style.css` 全 **LIVE==DISK**（9476 真在跑新 R8/R9 代码）
+    - R9 sigs on live 9476（renderImage|blockNavigation|Alt+Arrow）= 3 命中
+    - 端点 `/` `/api/akari/state` `/api/historian/briefing` 全 200
+    - 前端报错（Playwright headless 加载 live 9476，networkidle+2.5s，_fe_check.mjs 用后即删）：title="Nanocode"，console error/warning = 0，pageerror = 0，failed request = 0
+  - 9475 红线：未触碰。PID 304142 仍 LISTEN 9475，起于 Wed Jul 15 18:13:52（今日未重启）；9476 runtime .git 软链指向 nanocode 主仓 .git，rsync 只拷源码不动 .git/HEAD → 9475/9477 共享 HEAD 不受影响
+  - 过程产物：run_nano_maint.log gitignored（*.log）；_fe_check.mjs 用后即删不入库；不开 PR；不动 9475
+  - 状态板记账（本行）：fork/main 已推至 cd99061（含 merge），9476 已 rsync R8/R9 新前端并 live 验收，9475 不动
