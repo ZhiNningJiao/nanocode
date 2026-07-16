@@ -106,6 +106,10 @@ When the Codex SDK driver is active, codex tabs use **structured event rendering
 - **Rate-limit indicator**: Displays a countdown when the model is rate-limited
 - **Connection loss recovery**: Connection-lost messages update in-place instead of flooding the output with multiple banners. Shows reconnect attempt count and auto-clears on successful reconnect
 - **File change preview**: New files show up to 200 lines (up from 50) for better visibility into created content
+- **Image rendering**: Inline images from tool results (base64 or URL) are rendered directly in blocks. Supports MCP tool outputs and command execution results that include screenshots or diagrams
+- **Block navigation** (Alt+Up/Down): Jump between blocks with keyboard shortcuts. The target block is briefly highlighted and its header receives focus for keyboard-first UX
+- **Keyboard-accessible fold headers**: All fold headers are focusable (Tab key), operable via Enter/Space, and have proper `aria-expanded` and `role="button"` attributes for screen readers
+- **MCP result markdown**: MCP tool results are now rendered as markdown with syntax highlighting and copy buttons instead of plain JSON
 
 ---
 
@@ -379,6 +383,8 @@ Active sessions (PTY processes) survive the server restart; WebSocket reconnects
 - **Ctrl+Shift+`** (backtick): Toggle right panel open/close
 - **Ctrl+G**: Open search overlay in codex block renderer (search through blocks)
 - **Ctrl+Shift+F**: Toggle fold all blocks open/closed (codex block renderer)
+- **Alt+Up/Down**: Navigate between blocks in codex block renderer (jumps to prev/next block)
+- **Enter/Space on fold headers**: Toggle fold state (keyboard-only navigation)
 - **Ctrl+C** (in codex tab): Sends interrupt via POST API to properly stop the agent
 - Click a tab name in the tab bar to switch sessions
 - Right-click a tab for context menu (close, rename, etc.)
