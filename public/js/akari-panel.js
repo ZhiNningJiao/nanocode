@@ -29,6 +29,8 @@ let pollInFlight = false
 let lensUrl = ''
 let serverUrl = ''
 let lastState = null
+let lastPollTime = 0
+let pollAgeTimer = null
 
 export async function renderAkariPane(pane) {
   if (!pane) return
@@ -50,8 +52,10 @@ export async function renderAkariPane(pane) {
 export function resetAkariLoadState() {
   activePane = null
   stopPolling()
+  if (pollAgeTimer) { clearInterval(pollAgeTimer); pollAgeTimer = null }
   pollInFlight = false
   lastState = null
+  lastPollTime = 0
 }
 
 function startPolling() {
@@ -66,17 +70,19 @@ function stopPolling() {
 async function pollOnce() {
   if (pollInFlight) return
   pollInFlight = true
+  // Animate refresh button during poll
+  const refreshBtn = activePane?.querySelector('.svc-btn')
+  if (refreshBtn) refreshBtn.classList.add('svc-btn-spin')
   try {
     const r = await fetch('/api/akari/state')
     lastState = await r.json()
+    lastPollTime = Date.now()
     if (activePane) renderState(lastState)
   } catch {
-    // Network error talking to the nanocode server itself (not akari): render a
-    // calm degraded state rather than spamming. The proxy already swallows akari
-    // errors into reachable:false, so this is only for nanocode-server hiccups.
     if (activePane && lastState) renderState(lastState)
   } finally {
     pollInFlight = false
+    if (refreshBtn) refreshBtn.classList.remove('svc-btn-spin')
   }
 }
 
@@ -152,9 +158,22 @@ function renderState(state) {
   const meta = activePane?.querySelector('#akari-meta')
   if (meta) {
     const when = state.fetchedAt ? state.fetchedAt.slice(11, 16) : ''
+    const pollAge = lastPollTime ? `polled ${Math.round((Date.now() - lastPollTime) / 1000)}s ago` : ''
     meta.textContent = reachable
-      ? `${state.serverUrl || serverUrl} · ${when}`
-      : `${state.serverUrl || serverUrl} · unreachable${when ? ' · ' + when : ''}`
+      ? `${state.serverUrl || serverUrl} · ${when}${pollAge ? ' · ' + pollAge : ''}`
+      : `${state.serverUrl || serverUrl} · unreachable${when ? ' · ' + when : ''}${pollAge ? ' · ' + pollAge : ''}`
+    // Update poll age every second
+    if (pollAgeTimer) clearInterval(pollAgeTimer)
+    pollAgeTimer = setInterval(() => {
+      if (!activePane || !lastPollTime) return
+      const m = activePane.querySelector('#akari-meta')
+      if (!m) return
+      const age = Math.round((Date.now() - lastPollTime) / 1000)
+      const base = reachable
+        ? `${state.serverUrl || serverUrl} · ${when}`
+        : `${state.serverUrl || serverUrl} · unreachable${when ? ' · ' + when : ''}`
+      m.textContent = `${base} · polled ${age}s ago`
+    }, 5000)
   }
 
   if (!reachable) {
