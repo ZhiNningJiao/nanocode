@@ -1810,3 +1810,17 @@ commit 03beb00
   - **fork 同步判断（本轮变更）**：任务书规则「里程碑（任务完成 / 3+ 未推 commit）→ push」；本地积压 7 个纯 doc work-log commit（R71-R77）远超 3-commit 门槛——R72-R77 各轮以「doc-only 推了只增噪声」为由不 push，本轮纠正积压：`git push fork zhining/nano-9476-integ-0716:main` → `bfa69cd..afbec25` ✅；doc-only 无行为变更，9476 runtime rsync 部署不受影响，**无需 rsync 重部**（按 fork-sync 批示「除非带来行为变化，那就冒烟后再 rsync」）；fork/main 现与本地 HEAD 同步
   - 过程产物：run_nano_maint.log 在 ~/codex_work/（repo 外，repo 内 *.log gitignored），本轮 tee 覆写；git status 仅 `?? .git.bak-migrate`（迁移残留，pre-existing，非本轮产物）；未碰 9475；未 rsync（无 runtime 变更）；已 push fork/main（7 doc commit 积压清零）
   - NOTHING-TO-DO：任务书全部实质指令已由 R68-R70 全量落地、R71 独立复验通过、R72-R77 七轮巡检确认；本轮 npm test 663/0、9476 端点+R70 全 15 文件 LIVE==DISK md5 MATCH、9475 不动、无 REVIEW_REQ/CHORE/新 bug；积压 doc commit 已推 fork/main 清零；常驻维护线本轮无新活，结束该轮
+
+## 2026-07-16 21:29 [nano_maint R79 — 常驻巡检：R70 交付后状态确认（第 9 轮），npm test 663/0，9476 端点+R70 特性 LIVE==DISK md5 核实，9475 不动，无 REVIEW_REQ/CHORE，NOTHING-TO-DO]
+  - 任务来源：任务书 nano_maint 常驻维护线（接 Opus 双线班）；入口复读 HANDOFF_opus_officer.md + HANDOFF_opus_burn.md + NANOCODE_FEATURE_AUDIT.md（R69 审计/R70 回填均已落，审计文件内 ✅R70 执行回填节自记完成）；红线 WORKER_CORE 全套、过程产物不入库、不动 9475、tee run_nano_maint.log、FLAG 不设终点旗（常驻维护每轮记账）
+  - 接手状态：R68-R78 均由前序会话完成；R70（秘书批复 20:2x 落地：5 项丢失特性并集合入 fork/main=bfa69cd，npm test 663/0，9476 rsync 16 文件+restart live 验收，FLAG_nano_maint_recover）为实质交付；R71-R78 八轮巡检 NOTHING-TO-DO；本轮第 9 轮接班巡检，不信任前序 summary 自行重验
+  - 本轮独立复验（verify-hard/anti-fake-pass 自验；此后无代码/runtime 变更，仅 work-log.md doc 变动）：
+    - fork 同步：`git fetch fork` 后 fork/main==afbec25（R78 推的积压），fork 不领先本地（0 commit 待同步）；本地领先 fork/main 1 个纯 doc work-log commit（R78=c301449，未达 3-commit push 门槛，不 push）
+    - npm test 全量重跑（`tee ~/codex_work/run_nano_maint.log`）：`# tests 663 # suites 147 # pass 663 # fail 0 # cancelled 0 # skipped 0 # todo 0` exit 0 ✅ 0 fail 门槛满足
+    - live 9476 端点：`/` 200、`/api/services` 200 ✅；notify 端点（R70 POST-only）：`POST /api/notify/linear-important`(空 body)=400（路由活校验生效）、`POST /api/notify/test-ntfy`=200、`POST /api/notify/linear-poll`=200 ✅ R70 notify bridge 未回归
+    - LIVE==DISK md5 核实（6 个 R70 关键文件 runtime vs repo HEAD）：server/linear-notif.js MATCH、server/index.js MATCH、public/js/claude-block-renderer.js MATCH、public/js/tts.js MATCH、public/index.html MATCH、worker/index.js MATCH ✅ R70 特性 live 服务而非仅落盘
+    - 9476 PID=118213 cwd=`~/.nanocode-9476-runtime`（R70 rsync 部署源，稳定）；9475 `/` 200、`/api/services` 200 未触碰 ✅
+    - 待办扫描：`~/codex_work/REVIEW_REQ_*`/`CHORE_*` 无；FLAG_nano_maint_recover 仍在（待 officer 验收）；无主人在 9476 上新反馈 bug
+  - fork 同步判断：本地仅 1 个未推 doc commit（R78），未达 3-commit 门槛，本轮**不 push**（沿用里程碑规则，待下次有实质代码变更或积压达 3+ 再一并上 fork/main）
+  - 过程产物：run_nano_maint.log 在 ~/codex_work/（repo 外），本轮 tee 覆写；git status 仅 `?? .git.bak-migrate`（迁移残留 pre-existing）；未碰 9475；未 rsync（无 runtime 变更）；未 push
+  - NOTHING-TO-DO：任务书全部实质指令（19:5x fork 同步 / 20:0x 特性考古 / 20:2x 秘书批复并集合入 / 推 fork/main / 9476 冒烟 rsync 重部 / FLAG_nano_maint_recover）已由 R68-R70 全量落地、R71 独立复验通过、R72-R78 九轮巡检确认；本轮 npm test 663/0、9476 端点+R70 特性 LIVE==DISK md5 命中、9475 不动、无 REVIEW_REQ/CHORE/新 bug；常驻维护线本轮无新活，结束该轮
