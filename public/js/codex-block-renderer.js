@@ -288,6 +288,58 @@ function linkifyText(text) {
   })
 }
 
+// ── Markdown rendering (mirrors claude-block-renderer) ──────────────────────
+// Guards unclosed ``` fences during streaming to prevent layout chaos.
+function _guardUnclosedFences(text) {
+  if (!text) return { safe: text, truncated: false }
+  const lines = text.split('\n')
+  let fenceOpen = false
+  let lastFenceStart = -1
+  let charOffset = 0
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (/^```/.test(line)) {
+      if (!fenceOpen) { fenceOpen = true; lastFenceStart = charOffset }
+      else { fenceOpen = false; lastFenceStart = -1 }
+    }
+    charOffset += line.length + 1
+  }
+  if (fenceOpen && lastFenceStart > 0) {
+    return { safe: text.slice(0, lastFenceStart).trimEnd(), truncated: true }
+  }
+  return { safe: text, truncated: false }
+}
+
+const XML_STRIP_TAGS = ['local-command-caveat', 'antml:function_calls', 'antml:invoke', 'antml:parameter', 'system-reminder']
+function _stripXmlCaveats(text) {
+  if (!text || !/</.test(text)) return text
+  let out = text
+  for (const tag of XML_STRIP_TAGS) {
+    out = out.replace(new RegExp(`<${tag}(?:\\s[^>]*)?>.*?<\\/${tag}>`, 'gsi'), '')
+    out = out.replace(new RegExp(`<${tag}(?:\\s[^>]*)?\\/?>`, 'gi'), '')
+  }
+  return out.trim()
+}
+
+function _renderCbxMarkdown(text, { streaming = false } = {}) {
+  if (!text) return ''
+  text = _stripXmlCaveats(text)
+  if (!text) return ''
+  let renderText = text
+  if (streaming) {
+    const { safe } = _guardUnclosedFences(text)
+    renderText = safe || text
+  }
+  try {
+    if (window.marked && window.DOMPurify) {
+      let html = window.DOMPurify.sanitize(window.marked.parse(renderText))
+      html = html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ')
+      return html
+    }
+  } catch { /* fall through */ }
+  return `<pre class="cbx-text-pre">${escHtml(renderText)}</pre>`
+}
+
 // ── Pattern detection ─────────────────────────────────────────────────────────
 // Codex outputs several distinct line patterns.
 
@@ -453,6 +505,8 @@ export class CodexBlockRenderer {
     this._liveAgentBlock = null
     this._liveAgentItemId = null
     this._liveAgentText = ''
+    this._liveAgentRenderTimer = null  // throttle markdown re-render during streaming
+    this._thinkingBlockEl = null       // SDK thinking indicator block
 
     // SDK mode: when codex-event messages arrive, we render from structured
     // events instead of PTY text. The driver also sends formatted PTY text
@@ -1445,7 +1499,7 @@ export class CodexBlockRenderer {
   }
 
   /** Render a file change block from SDK file_change events. */
-  _addFileChangeBlock(kind, filePath) {
+  _addFileChangeBlock(kind, filePath, change = null) {
     const icon = kind === 'create' ? '+' : kind === 'delete' ? '−' : '✏'
     const kindLabel = kind === 'create' ? 'created' : kind === 'delete' ? 'deleted' : 'modified'
     const shortPath = filePath
@@ -1453,14 +1507,63 @@ export class CodexBlockRenderer {
       .replace(/^\/home\/[^/]+\//, '~/')
 
     const article = this._makeBlock('cbx-block-filechange')
+    const foldLevel = getFoldLevel()
+    article.setAttribute('data-fold', foldLevel)
+
+    let diffHtml = ''
+    if (change && (change.old_content != null || change.new_content != null)) {
+      diffHtml = this._buildSimpleDiff(change.old_content || '', change.new_content || '', kind)
+    }
+
     article.innerHTML =
       `<div class="cbx-filechange-card">` +
+      `<div class="cbx-filechange-header">` +
       `<span class="cbx-filechange-icon cbx-filechange-${kind}">${icon}</span>` +
       `<span class="cbx-filechange-path">${escHtml(shortPath)}</span>` +
       `<span class="cbx-filechange-kind">${kindLabel}</span>` +
+      (diffHtml ? `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>` : '') +
+      `</div>` +
+      (diffHtml ? `<div class="cbx-filechange-diff">${diffHtml}</div>` : '') +
       `</div>`
+
+    if (diffHtml) {
+      const header = article.querySelector('.cbx-filechange-header')
+      _attachFoldToggle(header, article)
+    }
+
     this._scroll.appendChild(article)
     this._scrollBottom()
+  }
+
+  _buildSimpleDiff(oldContent, newContent, kind) {
+    if (kind === 'create') {
+      const lines = newContent.split('\n').slice(0, 50)
+      return lines.map(l => `<div class="cbx-diff-line cbx-diff-added"><span class="cbx-diff-gutter">+</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
+        + (newContent.split('\n').length > 50 ? `<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… ${newContent.split('\n').length - 50} more lines</span></div>` : '')
+    }
+    if (kind === 'delete') {
+      const lines = oldContent.split('\n').slice(0, 50)
+      return lines.map(l => `<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
+    }
+    // Modified: simple line-by-line comparison
+    const oldLines = oldContent.split('\n')
+    const newLines = newContent.split('\n')
+    const result = []
+    const maxLines = Math.min(Math.max(oldLines.length, newLines.length), 100)
+    for (let i = 0; i < maxLines; i++) {
+      const o = i < oldLines.length ? oldLines[i] : undefined
+      const n = i < newLines.length ? newLines[i] : undefined
+      if (o === n) {
+        result.push(`<div class="cbx-diff-line cbx-diff-equal"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">${escHtml(o)}</span></div>`)
+      } else {
+        if (o !== undefined) result.push(`<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(o)}</span></div>`)
+        if (n !== undefined) result.push(`<div class="cbx-diff-line cbx-diff-added"><span class="cbx-diff-gutter">+</span><span class="cbx-diff-text">${escHtml(n)}</span></div>`)
+      }
+    }
+    if (Math.max(oldLines.length, newLines.length) > 100) {
+      result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… truncated</span></div>`)
+    }
+    return result.join('')
   }
 
   /** Render a visual turn separator. */
@@ -1582,12 +1685,14 @@ export class CodexBlockRenderer {
       case 'turn.completed':
         this._finalizeCurrentBlock()
         this._finalizeAgentMessage()
+        this._removeThinkingBlock()
         this._setThinking(false)
         this._addTurnSeparator()
         break
       case 'turn.failed':
         this._finalizeCurrentBlock()
         this._finalizeAgentMessage()
+        this._removeThinkingBlock()
         this._setThinking(false)
         this._addSystemBlock(`[Error: ${event.error?.message || 'Codex turn failed'}]`)
         this._addTurnSeparator()
@@ -1607,6 +1712,7 @@ export class CodexBlockRenderer {
     if (item.type === 'command_execution' && item.command) {
       this._finalizeCurrentBlock()
       this._finalizeAgentMessage()
+      this._removeThinkingBlock()
       this._startBashBlock(item.command)
       // Track by item ID for completion matching
       if (item.id) this._sdkCommandBlocks.set(item.id, this._currentBashBlock)
@@ -1618,13 +1724,14 @@ export class CodexBlockRenderer {
       this._finalizeAgentMessage()
       const changes = item.changes || []
       for (const c of changes) {
-        this._addFileChangeBlock(c.kind || 'update', c.path || '')
+        this._addFileChangeBlock(c.kind || 'update', c.path || '', c)
       }
     }
 
     if (item.type === 'agent_message') {
       // Text will stream via codex-stream-text deltas
       this._setThinking(true)
+      this._showThinkingBlock()
     }
   }
 
@@ -1668,7 +1775,7 @@ export class CodexBlockRenderer {
     if (item.type === 'file_change') {
       const changes = item.changes || []
       for (const c of changes) {
-        this._addFileChangeBlock(c.kind || 'update', c.path || '')
+        this._addFileChangeBlock(c.kind || 'update', c.path || '', c)
       }
       return
     }
@@ -1685,23 +1792,40 @@ export class CodexBlockRenderer {
       this._finalizeAgentMessage(this._liveAgentItemId)
     }
 
+    // Remove thinking indicator once text starts streaming
+    this._removeThinkingBlock()
+
     this._liveAgentItemId = itemId
     this._liveAgentText += delta
 
     if (!this._liveAgentBlock) {
       const article = this._makeBlock('cbx-block-text cbx-live')
-      const pre = document.createElement('pre')
-      pre.className = 'cbx-text-pre'
-      article.appendChild(pre)
+      const div = document.createElement('div')
+      div.className = 'cbx-text-md'
+      article.appendChild(div)
       this._scroll.appendChild(article)
       this._liveAgentBlock = article
     }
 
-    const pre = this._liveAgentBlock.querySelector('.cbx-text-pre')
-    if (pre) {
-      pre.textContent = this._liveAgentText
+    // Throttle markdown re-rendering to every 150ms during streaming
+    if (!this._liveAgentRenderTimer) {
+      this._liveAgentRenderTimer = setTimeout(() => {
+        this._liveAgentRenderTimer = null
+        this._renderLiveAgentMarkdown(true)
+      }, 150)
     }
     this._scrollBottom()
+  }
+
+  _renderLiveAgentMarkdown(streaming) {
+    if (!this._liveAgentBlock) return
+    const div = this._liveAgentBlock.querySelector('.cbx-text-md')
+    if (!div) return
+    try {
+      div.innerHTML = _renderCbxMarkdown(this._liveAgentText, { streaming })
+    } catch {
+      div.textContent = this._liveAgentText
+    }
   }
 
   _finalizeAgentMessage(itemId = null) {
@@ -1711,10 +1835,34 @@ export class CodexBlockRenderer {
       this._liveAgentText = ''
       return
     }
+    // Clear any pending render timer and do a final render
+    if (this._liveAgentRenderTimer) {
+      clearTimeout(this._liveAgentRenderTimer)
+      this._liveAgentRenderTimer = null
+    }
+    this._renderLiveAgentMarkdown(false)
     this._liveAgentBlock.classList.remove('cbx-live')
     this._liveAgentBlock = null
     this._liveAgentItemId = null
     this._liveAgentText = ''
+  }
+
+  _showThinkingBlock() {
+    if (this._thinkingBlockEl) return
+    const el = document.createElement('div')
+    el.className = 'cbx-thinking-block'
+    el.innerHTML =
+      `<span class="cbx-thinking-dot"></span>` +
+      `<span class="cbx-thinking-label">Thinking…</span>`
+    this._scroll.appendChild(el)
+    this._thinkingBlockEl = el
+    this._scrollBottom()
+  }
+
+  _removeThinkingBlock() {
+    if (!this._thinkingBlockEl) return
+    this._thinkingBlockEl.remove()
+    this._thinkingBlockEl = null
   }
 
   _scrollBottom() {
