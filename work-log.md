@@ -1761,3 +1761,21 @@ commit 03beb00
   - fork 同步判断：`git fetch fork` 后 fork/main==bfa69cd（不领先本地，无新 commit 待同步）；本地领先 fork/main 4 个纯 doc work-log commit（R71-R74，无代码/runtime 变更）；沿用 R72-R74 既定惯例——9476 由 working tree rsync 部署不受 fork/main doc 漂移影响，推 doc-only 巡检日志只增 fork/main 噪声；本轮同样**不 push**，待下次有实质代码变更时一并上 fork/main
   - 过程产物：run_nano_maint.log 在 ~/codex_work/（repo 外，repo 内 *.log gitignored），本轮 tee 追加；git status 仅 `?? .git.bak-migrate`（迁移残留，pre-existing，非本轮产物）；未碰 9475；未 rsync（无 runtime 变更）；未 push
   - NOTHING-TO-DO：任务书全部实质指令（19:5x fork 同步 / 20:0x 特性考古 / 20:2x 秘书批复并集合入 / 推 fork/main / 9476 冒烟 rsync 重部 / FLAG_nano_maint_recover）已由 R68-R70 全量落地、R71 独立复验通过、R72/R73/R74/R75 四轮巡检确认；本轮 npm test 663/0、9476 端点+R70 特性 LIVE==DISK md5 命中、9475 不动、无 REVIEW_REQ/CHORE/新 bug；常驻维护线本轮无新活，结束该轮
+
+## 2026-07-16 21:24 [nano_maint R76 — 常驻巡检：R70 交付后状态确认（第 6 轮），npm test 663/0，9476 端点+R70 特性 LIVE==DISK md5 核实，9475 不动，无 REVIEW_REQ/CHORE，NOTHING-TO-DO]
+  - 任务来源：任务书 nano_maint 常驻维护线（接 Opus 双线班，主人 2026-07-16「推上去让 glm 维护干」）；入口复读 HANDOFF_opus_officer.md + HANDOFF_opus_burn.md + NANOCODE_FEATURE_AUDIT.md（R69 审计/R70 回填均已落，文件内 ✅R70 执行回填节自记完成）；红线 WORKER_CORE 全套、过程产物不入库、不动 9475、tee run_nano_maint.log、FLAG 不设终点旗（常驻维护每轮记账）
+  - 接手状态：R68-R75 均由前序会话完成；R70（秘书批复 20:2x 落地：5 项丢失特性并集合入 fork/main=bfa69cd，npm test 663/0，9476 rsync 16 文件+restart live 验收，FLAG_nano_maint_recover）为实质交付；R71-R75 五轮巡检 NOTHING-TO-DO；本轮为第 6 轮接班巡检，不信任前序 summary 自行重验
+  - 本轮独立复验（verify-hard/anti-fake-pass 自验；此后无代码/runtime 变更，仅 work-log.md doc 变动）：
+    - fork 同步：`git fetch fork` 后 fork/main==bfa69cd（不领先本地，无新 commit 待同步）；本地领先 fork/main 5 个纯 doc work-log commit（R71-R75，无代码/runtime 变更）
+    - npm test 全量重跑（`tee -a ~/codex_work/run_nano_maint.log`）：`# tests 663 # suites 147 # pass 663 # fail 0 # cancelled 0 # skipped 0`，exit 0 ✅ 与 R70-R75 记账一致，0 fail 门槛满足
+    - live 9476 端点：`/` 200、`/api/services` 200、`/api/akari/state` 200、`/api/historian/briefing` 200 ✅
+    - notify 端点（R70 合入，POST-only）：`POST /api/notify/linear-important`(空 body)=400（路由活、校验生效）、`POST /api/notify/test-ntfy`=200、`POST /api/notify/linear-poll`=200 ✅ 证 R70 notify bridge 部署未回归
+    - **R70 5 项合入 commit 独立核实**（不只看 work-log summary，逐 commit 查 fork/main）：cc-parity-b1 10 commit（b95a2b7..1e52a7d，`--grep="CC parity"`=9 + `--grep="CC-parity"`=1 b7772fb，共 10）✅；plugins-notif=1463383 ✅；nc01-land c2140a4 经 cherry-pick 落为 73806b5（同 message "fix(worker): add meshy-aigw to TAB_TYPES adapter"，merge-base --is-ancestor c2140a4=false 因是新 SHA 非 ancestor，但内容在 fork/main=73806b5）✅；nc220 tmux 7765c38 落为 13fe319（6818d32 按 R70 跳过——main 已有 hadLiveBlock 等价逻辑）✅；TTS replay=523a33c ✅
+    - **归档标记核实**（NANOCODE_FEATURE_AUDIT.md）：5 个旧 lineage 分支（agent-naming-and-ux / pre-rebase-backup / nano-integration-0715 / -v2 / nano-plugin-akari）均已标 ARCHIVED-DO-NOT-MERGE（仅标记未删——删分支需主人亲批）✅
+    - **LIVE==DISK md5 核实**（逐文件 md5 比对 runtime vs repo HEAD）：runtime `~/.nanocode-9476-runtime/server/linear-notif.js` MATCH repo HEAD ✅（R70 item2 字节级一致）；server/index.js MATCH、public/js/tts.js MATCH、public/style.css MATCH、public/js/codex-block-renderer.js MATCH ✅ R70 全特性 live 服务而非仅落盘
+    - PID 稳定性：9476=118213（cwd=`~/.nanocode-9476-runtime`，R70 rsync 部署源，/proc/118213/cwd 核实）、9475=304142（cwd=`~/code/nanocode`，不同目录无 linear-notif.js=未受 R70 影响）；PID 自 R70 restart 起未变，9475 自 7/15 起未动 ✅
+    - 9475 红线：`/` 200、`/api/services` 200，未触碰 ✅
+    - 待办扫描：`~/codex_work/REVIEW_REQ_*` 无、`CHORE_*` 无（find -mmin -180 无 nano 相关新文件）；FLAG_nano_maint_recover（空 flag，R70 立）+ REPORT_nano_maint_recover.md（R71 补）仍在（待 officer 验收，非本 worker 自验范围）；无主人在 9476 上新反馈 bug
+  - fork 同步判断：沿用 R72-R75 既定惯例——本地领先 fork/main 仅 5 个纯 doc work-log commit（R71-R75，无代码/runtime 变更），9476 由 working tree rsync 部署不受 fork/main doc 漂移影响，推 doc-only 巡检日志只增 fork/main 噪声；本轮同样**不 push**，待下次有实质代码变更时一并上 fork/main
+  - 过程产物：run_nano_maint.log 在 ~/codex_work/（repo 外，repo 内 *.log gitignored），本轮 tee 追加；git status 仅 `?? .git.bak-migrate`（迁移残留，pre-existing，非本轮产物）；未碰 9475；未 rsync（无 runtime 变更）；未 push
+  - NOTHING-TO-DO：任务书全部实质指令（19:5x fork 同步 / 20:0x 特性考古 / 20:2x 秘书批复并集合入 / 推 fork/main / 9476 冒烟 rsync 重部 / FLAG_nano_maint_recover）已由 R68-R70 全量落地、R71 独立复验通过、R72-R75 五轮巡检确认；本轮 npm test 663/0、9476 端点+R70 特性 LIVE==DISK md5 命中、9475 不动、无 REVIEW_REQ/CHORE/新 bug；常驻维护线本轮无新活，结束该轮
