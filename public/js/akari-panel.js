@@ -334,11 +334,23 @@ function renderExternalArmy(agents, updatedAt) {
   title.textContent = `External Army (${agents.length})`
   wrap.appendChild(title)
 
+  // Fleet summary counts (mirrors historian pattern)
+  const running = agents.filter(a => !a.stalled && !a.flag).length
+  const stalled = agents.filter(a => a.stalled).length
+  const flagged = agents.filter(a => a.flag).length
+  const summaryGrid = document.createElement('div')
+  summaryGrid.className = 'rp-stats-grid'
+  summaryGrid.appendChild(stat('running', String(running)))
+  summaryGrid.appendChild(stat('stalled', String(stalled)))
+  summaryGrid.appendChild(stat('flagged', String(flagged)))
+  summaryGrid.appendChild(stat('total', String(agents.length)))
+  wrap.appendChild(summaryGrid)
+
   if (updatedAt) {
     const meta = document.createElement('div')
     meta.className = 'rp-hint'
     const age = Math.round((Date.now() - updatedAt) / 1000)
-    meta.textContent = `updated ${fmtSecs(age)}`
+    meta.textContent = `updated ${fmtSecs(age)} ago`
     wrap.appendChild(meta)
   }
 
