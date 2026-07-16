@@ -188,3 +188,14 @@ ALL ASSERTIONS PASSED — session singleton lock works.
 - **红线**：9475 全程 LISTENING（前后 HTTP 200，未碰），9477/9478 前后空闲，`data/nanocode.json` 备份+恢复 sha256 完全一致（`36584e47…`，无污染），真实 `~/.nanocode/session-locks/` 前后 300 条、test UUID 不在其中，temp home 已清理；`run_session_singleton_25thverify_dual.log` grep 干净（0 `^not ok`/`FAIL:`）。
 - **交付**：24th 发现的 polyfill（`6ec2dbf`）此前仅本地；本次以干净 fast-forward（无 force-push）落到 fork/main，使 fork/main `npm test` 首次真实全绿（此前 6 个 Node18 CustomEvent 预存失败）。
 - **anti-fake-pass 裁决**：REAL（file-exists PASS / provenance PASS / HTTP N/A / anim N/A）。
+
+
+## 第 28 次独立验证（2026-07-16，opencode/GLM 全新会话，不信任何 prior FLAG/REPORT）
+
+- **不信任先验**：全新会话独立重跑，`git fetch fork` 确认 fork/main HEAD `e1db062`、本地 `5410945`（8 ahead / 7 behind；7 behind 为并行 codex/opus_burn 功能 + merge，均不碰 session-singleton；8 ahead 中仅 `f93881f`/`5410945` 为 session-singleton 验证记录 + verify 脚本 self-clean）；`git merge-base --is-ancestor` 确认实现 `3c8ff14` + inject 修复 `dcc0ab3` + CustomEvent polyfill `646e5b1` **均在 fork/main**；session-singleton 代码文件（lock/controller/routes/index/tests）local 与 fork/main **零 diff**，仅 `scripts/verify-session-singleton.mjs` 差 +29/-4（self-clean，此前仅本地）。
+- **源码 provenance**：重读 `terminal/session-lock.js`（201L）+ controller 接线（import@16 / acquire@1093 / promoted@1096-1100 / readonly-banner@1129-1139 / WS 输入拦截不 spawn@1189-1203 / inject readOnly 守卫@887-899 在 dispatchClaudeTurn@909 之前 / 末客户端释放@1318-1320 / dispose@1835-1836）+ routes.js（inject@219 / 423@236-243）+ index.js（createTerminalRoutes@150）——与声称一致，全部为真。
+- **自跑测试**：`node --test server/tests/session-lock.test.js server/tests/session-lock-dual-server.test.js` → 26/26 pass 0 fail（0 TAP `^not ok`）；`npm test` 全量回归 → 653 tests / 651 pass / 0 fail / 2 skipped（`run_session_singleton_28thverify_full.log`，0 `^not ok`）。
+- **真实双服务器**：`node scripts/verify-session-singleton.mjs` 用真实 9477/9478 共享全新 temp HOME → 12/12 断言全过（test UUID `22c89422-2da8-41d5-80d1-8972bc914947`）：A 获锁 host、B 收「会话由 :9477 托管」banner、B WS 输入被拦「只读模式」不 spawn、B inject → 423 / ok:false / readOnly:true / host=:9477、A 断开锁释放、B 升级 host、锁转 :9478；stderr 确认 `hosted by :9477 (pid 152703)` → `inject blocked` → `promoted to host`。
+- **红线**：9475 全程 LISTENING（前后 HTTP 200，未碰），9477/9478 前后空闲，`data/nanocode.json` sha `63d06d51…` 前后完全一致（verify 脚本 self-clean 自动删除其创建的 singleton-test 项目，无需手动备份/恢复），真实 `~/.nanocode/session-locks/` 前后 260 条、test UUID 不在其中（temp HOME 隔离），`run_session_singleton_28thverify_dual.log` grep 干净。
+- **交付**：27th run 的 verify 脚本 self-clean 修复（`5410945`）+ 26th/27th 验证记录此前仅本地（fork/main 仅到 re-verified-24 / 第 25 次记录）；本次以干净隔离 cherry-pick（`f93881f` + `5410945`，仅 SS，不带 codex/opus_burn）落到 fork/main `e1db062` 之上 + 本 28th 记录，fast-forward 推送，完成「推 fork main」交付——fork/main 现携带 self-cleaning verify 脚本与最新验证记录。
+- **anti-fake-pass 裁决**：REAL（file-exists PASS / provenance PASS / HTTP PASS 9475 200 / anim N/A）。
