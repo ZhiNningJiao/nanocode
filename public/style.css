@@ -5853,6 +5853,7 @@ body.workspace-active .landing-overlay { display: none; }
 /* Scroll area — this is the scrollable region */
 .cbr-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--s-4) var(--s-4) var(--s-6);
@@ -5861,6 +5862,8 @@ body.workspace-active .landing-overlay { display: none; }
   gap: var(--s-3);
   /* Smooth momentum scrolling on iOS */
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
 }
 
 /* ── Article blocks ────────────────────────────────────────────── */
@@ -6447,6 +6450,36 @@ body.workspace-active .landing-overlay { display: none; }
 
 .cbr-interrupted {
   font-style: normal !important;
+}
+
+/* ── Read-only session banner (hosted by another server) ────────── */
+
+.cbr-readonly-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(120, 120, 255, 0.12);
+  border-bottom: 1px solid rgba(120, 120, 255, 0.3);
+  font-size: 12px;
+  color: #aab4ff;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+
+[data-theme="light"] .cbr-readonly-banner {
+  background: rgba(60, 60, 200, 0.08);
+  border-bottom-color: rgba(60, 60, 200, 0.25);
+  color: #444b9e;
+}
+
+.cbr-readonly-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.cbr-readonly-hint {
+  opacity: 0.7;
 }
 
 /* ── Prompt (user input echo) ───────────────────────────────────── */

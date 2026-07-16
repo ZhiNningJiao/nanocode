@@ -13,8 +13,9 @@ import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
 import { copyTranscriptToTeam, teamModelDefaults } from './team-failover.js'
 import { loadPersonalConfig } from './personal-config.js'
+import { acquireSessionLock, releaseSessionLock } from './session-lock.js'
 
-export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl }) {
+export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl, port }) {
   const IS_WIN = platform() === 'win32'
   const SHELL = IS_WIN
     ? (process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe')
@@ -1062,6 +1063,34 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       claudeSessions.set(sessionKey, cs)
     }
 
+    // ── Session singleton lock ──────────────────────────────────────────────
+    // Prevent two nanocode servers from simultaneously owning the same Claude
+    // conversation. The first to acquire the lock becomes the host; the other
+    // enters read-only follow mode (can see output, cannot send input).
+    // The lock is released when the last client on this server disconnects,
+    // so a read-only server can promote on its next attach.
+    if (!cs._lockHeld) {
+      const lockOpts = { pid: process.pid, port }
+      const result = acquireSessionLock(cs.claudeSessionId, lockOpts, home)
+      if (result.acquired) {
+        cs._lockHeld = true
+        if (cs.readOnly) {
+          cs.readOnly = false
+          cs.lockHolder = null
+          cs._justPromoted = true
+          console.log(`[claude:lock] ${sessionKey}: promoted to host for session ${cs.claudeSessionId}`)
+        }
+      } else {
+        cs.readOnly = true
+        cs.lockHolder = result.holder
+        cs._lockHeld = false
+        console.warn(
+          `[claude:lock] ${sessionKey}: session ${cs.claudeSessionId} is hosted by ` +
+          `:${result.holder?.port} (pid ${result.holder?.pid}). Read-only mode.`
+        )
+      }
+    }
+
     for (const event of cs.history) {
       if (ws.readyState === 1) {
         try { ws.send(JSON.stringify({ type: 'claude-event', event })) } catch {}
@@ -1077,7 +1106,36 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       try { ws.send(JSON.stringify({ type: 'busy-state', busy: !!cs.busy })) } catch {}
     }
 
+    // Read-only banner: if another server owns this session, tell the client.
+    if (cs.readOnly && ws.readyState === 1) {
+      const holderPort = cs.lockHolder?.port
+      const bannerEvent = {
+        type: 'system',
+        subtype: 'info',
+        text: `会话由 :${holderPort} 托管（只读模式）`,
+        _readonly: true,
+        _lockHolderPort: holderPort,
+      }
+      try { ws.send(JSON.stringify({ type: 'claude-event', event: bannerEvent })) } catch {}
+    }
+
     cs.clients.add(ws)
+
+    // If we just promoted from read-only to host, tell all clients to clear
+    // the read-only banner. (Not pushed to history — ephemeral UI state.)
+    if (cs._justPromoted) {
+      cs._justPromoted = false
+      const promoteEvent = {
+        type: 'system',
+        subtype: 'info',
+        text: '会话已恢复为可编辑模式',
+        _readonly: false,
+      }
+      const promoteMsg = JSON.stringify({ type: 'claude-event', event: promoteEvent })
+      for (const client of cs.clients) {
+        if (client.readyState === 1) try { client.send(promoteMsg) } catch {}
+      }
+    }
 
     const onMsg = (raw) => {
       let msg
@@ -1108,6 +1166,22 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         return
       }
       if (msg.type === 'claude-input' && typeof msg.text === 'string' && msg.text.trim()) {
+        // ── Read-only mode: block input when another server hosts the session ──
+        if (cs.readOnly) {
+          try { ws.send(JSON.stringify({ type: 'claude-event', event: { type: 'result', subtype: 'success' } })) } catch {}
+          try {
+            ws.send(JSON.stringify({
+              type: 'claude-event',
+              event: {
+                type: 'system',
+                subtype: 'info',
+                text: `会话由 :${cs.lockHolder?.port} 托管，无法发送消息（只读模式）`,
+                _readonly: true,
+              },
+            }))
+          } catch {}
+          return
+        }
         // ── /resume interception ─────────────────────────────────────────────
         // claude --print (non-interactive) blocks /resume with "isn't available
         // in this environment". Intercept here and route to nanocode's own
@@ -1220,6 +1294,12 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     ws.on('close', () => {
       ws.removeListener('message', onMsg)
       cs.clients.delete(ws)
+      // Release the session singleton lock when the last client disconnects,
+      // so another server can promote from read-only to host.
+      if (cs.clients.size === 0 && cs._lockHeld) {
+        releaseSessionLock(cs.claudeSessionId, { pid: process.pid, port }, home)
+        cs._lockHeld = false
+      }
     })
   }
 
@@ -1602,11 +1682,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       console.log(`[ws:attach] projectId=${projectId} tabId=${tabId} tabType=${tabType}`)
 
       if (tabType === 'claude') {
-        // Server default MUST match the client default (state.js: 'terminal').
+        // Server default MUST match the client default (state.js: 'block').
         // If they diverge, the browser opens a TerminalPane (PTY-protocol JSON
         // frames) but the server routes the WS to attachClaudeSession (stream-json
         // events) — protocol mismatch → tab looks "stuck" with both ends alive.
-        const renderMode = store.getSetting('renderMode') || 'terminal'
+        const renderMode = store.getSetting('renderMode') || 'block'
         if (renderMode === 'terminal') {
           console.log(`[ws:attach] routing claude to PTY raw (renderMode=terminal)`)
         } else {
@@ -1732,6 +1812,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   function disposeClaudeSessions() {
     for (const cs of claudeSessions.values()) {
       try { sdkDriver.teardownStreamingSession(cs) } catch {}
+      // Release the session singleton lock on shutdown.
+      if (cs._lockHeld) {
+        try { releaseSessionLock(cs.claudeSessionId, { pid: process.pid, port }, home) } catch {}
+      }
     }
     claudeSessions.clear()
   }
