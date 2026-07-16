@@ -1029,3 +1029,20 @@ commit 03beb00
   - 未推 commit 计数：本轮提交 R34 后 = 2 个未推，低于 WORKER_CORE §6「3+ 未推 commit → push」阈值 → 本轮不 push（不动 9475，无功能改动故不部署 9476）
   - 过程产物：run_nano_maint.log gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
   - 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；仅提交 work-log 记账，无 push 无部署
+
+## 2026-07-16 18:40 [nano_maint R35 — 卅五巡，两 handoff 在册，9475/9476 健康，npm test 653/0，fe 0 errors，fork push（3 未推触阈值），NOTHING-TO-DO]
+  - 接班状态：HEAD 1cf854d（R34 work-log 提交，2 未推 fork），工作树干净（仅未跟踪 .git.bak-migrate，前置遗留不动）
+  - 入口 handoff 复读：HANDOFF_opus_officer.md（officer 178 FLAG 验过 / 0 待办 / 9476 union 分支已 push fork）+ HANDOFF_opus_burn.md（opus_burn R4-R9 codex-block-renderer 全套，653/0 测过，明确 "wrap up for GLM maintenance"，待主人定夺并入 9476）均已在册，无变更
+  - 健康巡检（`tee -a run_nano_maint.log`）：
+    - 9475 = 200（未触碰，按红线不动 9475）
+    - 9476 = 200；/api/health = ok；/api/services：nanocode up / akari up（mblend·dccpipeline·regression·TTS down，非 nanocode 维护面，预期，与 R1-R34 一致）；/api/sessions = 200
+  - 资产/版本核对：运行 9476 asset 版本 = `db43176`（/api/version + /js/app.js?v=db43176，与 R15-R34 一致）；`git merge-base --is-ancestor db43176 HEAD` = YES → 运行版本是本分支祖先；`db43176..HEAD` 非 docs(work-log)/Merge 提交仅 1 个 = `9ab72a9 docs(session-singleton)`（docs-only，零功能改动，R21 已记）。无功能漂移 → 不重部署 9476
+  - 前端报错巡检（Playwright headless 加载 http://localhost:9476/，networkidle+2.5s，脚本 _fe_check.mjs 仓内起、用后即删）：
+    - title="Nanocode"，console error/warning = 0，pageerror = 0，failed request = 0
+  - npm test（`tee -a run_nano_maint.log`）：`node --test server/tests/*.test.js` → 653 pass / 0 fail / 0 cancelled / 0 skipped / 0 todo
+  - run.log 自查：`git check-ignore run_nano_maint.log` 命中（gitignored）；`^(not ok|# fail [1-9])|Traceback|FAILED|NaN` = 0 命中；无真实失败；npm test 汇总 `# fail 0` 确认
+  - 待办扫描：~/codex_work/REVIEW_REQ_* / CHORE_* = 0；FLAG_* 399 旗全为遗留空旗仍按 handoff 跳过（无 REPORT 证据）
+  - fork 状态：本分支 HEAD vs fork/zhining/nano-9476-integ-0716 = **2 ahead / 0 behind**（R33+R34 work-log 未推）；vs fork/main(5945c5a) = 33 ahead / 4 behind——opus_burn 4 提交（570c744/d3da9db/e68ed60/5945c5a）仍**未并入** 9476 运行分支，按任务书「大改先在任务书下等批」继续不动，留主人定夺
+  - 未推 commit 计数：本轮提交 R35 后 = 3 个未推，达到 WORKER_CORE §6「3+ 未推 commit → push」阈值 → 本轮 commit 后 push fork（不动 9475，无功能改动故不部署 9476）
+  - 过程产物：run_nano_maint.log gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
+  - 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；提交 work-log 记账 + push fork（3 未推触阈值），无部署
