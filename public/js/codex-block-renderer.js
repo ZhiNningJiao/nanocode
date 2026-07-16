@@ -667,7 +667,15 @@ export class CodexBlockRenderer {
     this.onStatusChange = opts.onStatusChange || (() => {})
 
     // Session stats counters
-    this._stats = { blocks: 0, commands: 0, fileChanges: 0, turns: 0 }
+    this._stats = { blocks: 0, commands: 0, fileChanges: 0, turns: 0, errors: 0 }
+
+    // File change grouping: track pending consecutive file changes to collapse
+    this._pendingFileChangeGroup = null  // { el, items: [], timer }
+
+    // Search state
+    this._searchOpen = false
+    this._searchMatches = []
+    this._searchIndex = -1
 
     this.fitAddon = { fit: () => {} }
 
@@ -792,8 +800,26 @@ export class CodexBlockRenderer {
         const newFold = anyOpen ? 'header' : 'full'
         blocks.forEach(b => b.setAttribute('data-fold', newFold))
       }
+      // Ctrl+G = open search overlay
+      if (e.ctrlKey && !e.shiftKey && e.key === 'g') {
+        e.preventDefault()
+        this._toggleSearch()
+      }
     }
     document.addEventListener('keydown', this._foldAllHandler)
+
+    // Search overlay
+    this._searchOverlay = document.createElement('div')
+    this._searchOverlay.className = 'cbx-search-overlay'
+    this._searchOverlay.style.display = 'none'
+    this._searchOverlay.innerHTML =
+      `<input class="cbx-search-input" type="text" placeholder="Search blocks\u2026 (Esc to close)" spellcheck="false" />` +
+      `<span class="cbx-search-count"></span>` +
+      `<button class="cbx-search-prev" type="button" title="Previous (Shift+Enter)" aria-label="Previous match">\u25B2</button>` +
+      `<button class="cbx-search-next" type="button" title="Next (Enter)" aria-label="Next match">\u25BC</button>` +
+      `<button class="cbx-search-close" type="button" title="Close (Esc)" aria-label="Close search">\u2715</button>`
+    container.appendChild(this._searchOverlay)
+    this._initSearchHandlers()
 
     this._connect()
   }
@@ -1743,9 +1769,13 @@ export class CodexBlockRenderer {
     const { article } = this._currentBashBlock
     const statusEl = article.querySelector('.cbx-bash-status')
 
-    const isError = /\✗|[Ee]rror|exit\s+[1-9]/.test(exitLine)
+    const isError = /\u2717|[Ee]rror|exit\s+[1-9]/.test(exitLine)
     const exitCode = exitLine.match(/\d+/)?.[0] ?? '?'
-    const isSuccess = !isError && (exitLine.includes('✓') || exitCode === '0')
+    const isSuccess = !isError && (exitLine.includes('\u2713') || exitCode === '0')
+    if (isError) {
+      this._stats.errors++
+      this._updateStatsBar()
+    }
 
     if (statusEl) {
       statusEl.classList.remove('cbx-bash-running')
@@ -1767,6 +1797,7 @@ export class CodexBlockRenderer {
   }
 
   _finalizeCurrentBlock() {
+    this._flushFileChangeGroup()
     if (!this._currentBashBlock) return
     const { article } = this._currentBashBlock
     const statusEl = article.querySelector('.cbx-bash-status')
@@ -1881,7 +1912,18 @@ export class CodexBlockRenderer {
       }
     }
 
-    this._scroll.appendChild(article)
+    // File change grouping: buffer consecutive file changes and wrap in a group
+    if (this._pendingFileChangeGroup) {
+      this._pendingFileChangeGroup.items.push(article)
+      this._scroll.appendChild(article)
+      // Reset flush timer
+      if (this._pendingFileChangeGroup.timer) clearTimeout(this._pendingFileChangeGroup.timer)
+      this._pendingFileChangeGroup.timer = setTimeout(() => this._flushFileChangeGroup(), 300)
+    } else {
+      this._scroll.appendChild(article)
+      this._pendingFileChangeGroup = { anchor: article, items: [article], timer: null }
+      this._pendingFileChangeGroup.timer = setTimeout(() => this._flushFileChangeGroup(), 300)
+    }
     this._scrollBottom()
   }
 
@@ -2086,6 +2128,10 @@ export class CodexBlockRenderer {
   _addSystemBlock(msg) {
     const isError = /\[Error|error|failed|lost/i.test(msg)
     const cls = isError ? 'cbx-block-system cbx-block-error' : 'cbx-block-system'
+    if (isError) {
+      this._stats.errors++
+      this._updateStatsBar()
+    }
     const article = this._makeBlock(cls)
     article.innerHTML = `<p class="cbx-system">${escHtml(msg)}</p>`
     this._scroll.appendChild(article)
@@ -2500,10 +2546,179 @@ export class CodexBlockRenderer {
     if (!this._statsBar) return
     const s = this._stats
     this._statsBar.innerHTML =
-      `<span class="cbx-stats-item" title="Total blocks">◈ ${s.blocks}</span>` +
+      `<span class="cbx-stats-item" title="Total blocks">\u25C8 ${s.blocks}</span>` +
       `<span class="cbx-stats-item" title="Commands">$ ${s.commands}</span>` +
-      `<span class="cbx-stats-item" title="File changes">✏ ${s.fileChanges}</span>` +
-      `<span class="cbx-stats-item" title="Turns">↻ ${s.turns}</span>`
+      `<span class="cbx-stats-item" title="File changes">\u270F ${s.fileChanges}</span>` +
+      `<span class="cbx-stats-item" title="Turns">\u21BB ${s.turns}</span>` +
+      (s.errors ? `<span class="cbx-stats-item cbx-stats-error" title="Errors — click to jump" role="button">\u26A0 ${s.errors}</span>` : '') +
+      `<button class="cbx-stats-search" type="button" title="Search blocks (Ctrl+G)" aria-label="Search blocks">\uD83D\uDD0D</button>`
+    // Wire error jump
+    const errEl = this._statsBar.querySelector('.cbx-stats-error')
+    if (errEl) {
+      errEl.addEventListener('click', () => this._jumpToLastError())
+    }
+    // Wire search button
+    const searchBtn = this._statsBar.querySelector('.cbx-stats-search')
+    if (searchBtn) {
+      searchBtn.addEventListener('click', () => this._toggleSearch())
+    }
+  }
+
+  // ── Search overlay ──────────────────────────────────────────────────────────
+
+  _initSearchHandlers() {
+    const input = this._searchOverlay.querySelector('.cbx-search-input')
+    const prevBtn = this._searchOverlay.querySelector('.cbx-search-prev')
+    const nextBtn = this._searchOverlay.querySelector('.cbx-search-next')
+    const closeBtn = this._searchOverlay.querySelector('.cbx-search-close')
+    let debounceTimer = null
+
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => this._performSearch(input.value), 200)
+    })
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        e.shiftKey ? this._searchPrev() : this._searchNext()
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        this._toggleSearch(false)
+      }
+    })
+    prevBtn.addEventListener('click', () => this._searchPrev())
+    nextBtn.addEventListener('click', () => this._searchNext())
+    closeBtn.addEventListener('click', () => this._toggleSearch(false))
+  }
+
+  _toggleSearch(forceOpen) {
+    const open = forceOpen != null ? forceOpen : !this._searchOpen
+    this._searchOpen = open
+    this._searchOverlay.style.display = open ? 'flex' : 'none'
+    if (open) {
+      const input = this._searchOverlay.querySelector('.cbx-search-input')
+      input.focus()
+      input.select()
+    } else {
+      this._clearSearchHighlights()
+    }
+  }
+
+  _performSearch(query) {
+    this._clearSearchHighlights()
+    this._searchMatches = []
+    this._searchIndex = -1
+    const countEl = this._searchOverlay.querySelector('.cbx-search-count')
+
+    if (!query || query.length < 2) {
+      countEl.textContent = ''
+      return
+    }
+
+    const lowerQ = query.toLowerCase()
+    const blocks = this._scroll.querySelectorAll('.cbx-block')
+    blocks.forEach((block) => {
+      const text = block.textContent || ''
+      if (text.toLowerCase().includes(lowerQ)) {
+        this._searchMatches.push(block)
+        block.classList.add('cbx-search-match')
+      }
+    })
+
+    if (this._searchMatches.length) {
+      this._searchIndex = 0
+      this._highlightCurrentMatch()
+      countEl.textContent = `1/${this._searchMatches.length}`
+    } else {
+      countEl.textContent = '0 results'
+    }
+  }
+
+  _searchNext() {
+    if (!this._searchMatches.length) return
+    this._searchIndex = (this._searchIndex + 1) % this._searchMatches.length
+    this._highlightCurrentMatch()
+  }
+
+  _searchPrev() {
+    if (!this._searchMatches.length) return
+    this._searchIndex = (this._searchIndex - 1 + this._searchMatches.length) % this._searchMatches.length
+    this._highlightCurrentMatch()
+  }
+
+  _highlightCurrentMatch() {
+    this._searchMatches.forEach(b => b.classList.remove('cbx-search-current'))
+    const el = this._searchMatches[this._searchIndex]
+    if (!el) return
+    el.classList.add('cbx-search-current')
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const countEl = this._searchOverlay.querySelector('.cbx-search-count')
+    countEl.textContent = `${this._searchIndex + 1}/${this._searchMatches.length}`
+  }
+
+  _clearSearchHighlights() {
+    this._scroll.querySelectorAll('.cbx-search-match, .cbx-search-current').forEach(el => {
+      el.classList.remove('cbx-search-match', 'cbx-search-current')
+    })
+    this._searchMatches = []
+    this._searchIndex = -1
+  }
+
+  // ── Error jump ──────────────────────────────────────────────────────────────
+
+  _jumpToLastError() {
+    const errors = this._scroll.querySelectorAll('.cbx-block-error, .cbx-block-bash .cbx-bash-exit-fail')
+    const last = errors.length ? errors[errors.length - 1] : null
+    if (last) {
+      const block = last.closest('.cbx-block') || last
+      block.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      block.classList.add('cbx-search-current')
+      setTimeout(() => block.classList.remove('cbx-search-current'), 2000)
+    }
+  }
+
+  // ── File change grouping ────────────────────────────────────────────────────
+
+  _flushFileChangeGroup() {
+    const g = this._pendingFileChangeGroup
+    if (!g) return
+    this._pendingFileChangeGroup = null
+    if (g.timer) clearTimeout(g.timer)
+
+    if (g.items.length <= 1) {
+      // Single file change — render normally (already appended)
+      return
+    }
+    // Wrap multiple file changes in a collapsible group
+    const wrapper = document.createElement('article')
+    wrapper.className = 'cbx-block cbx-block-filegroup'
+    wrapper.setAttribute('data-fold', 'header')
+    const count = g.items.length
+    const paths = g.items.map(i => i.querySelector('.cbx-filechange-path')?.textContent || '').filter(Boolean)
+    const summary = paths.length <= 3 ? paths.join(', ') : `${paths.slice(0, 2).join(', ')} +${paths.length - 2} more`
+    wrapper.innerHTML =
+      `<div class="cbx-filegroup-header">` +
+      `<span class="cbx-filegroup-icon">\uD83D\uDCC1</span>` +
+      `<span class="cbx-filegroup-label">${count} files changed</span>` +
+      `<span class="cbx-filegroup-summary">${escHtml(summary)}</span>` +
+      `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
+      `</button>` +
+      `</div>` +
+      `<div class="cbx-filegroup-body"></div>`
+    const body = wrapper.querySelector('.cbx-filegroup-body')
+    for (const item of g.items) {
+      body.appendChild(item)
+    }
+    _attachFoldToggle(wrapper.querySelector('.cbx-filegroup-header'), wrapper)
+    // Insert the group where the first file change was
+    const firstParent = g.anchor
+    if (firstParent && firstParent.parentNode === this._scroll) {
+      this._scroll.replaceChild(wrapper, firstParent)
+    } else {
+      this._scroll.appendChild(wrapper)
+    }
   }
 
   _scrollBottom({ force = false } = {}) {
