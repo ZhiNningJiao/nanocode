@@ -29,6 +29,9 @@ let pollInFlight = false
 let lensUrl = ''
 let serverUrl = ''
 let lastState = null
+let lastPollTime = 0
+let workerSortCol = null  // null | column name
+let workerSortAsc = true
 
 export async function renderAkariPane(pane) {
   if (!pane) return
@@ -66,17 +69,19 @@ function stopPolling() {
 async function pollOnce() {
   if (pollInFlight) return
   pollInFlight = true
+  // Pulse animation on refresh button
+  const head = activePane?.querySelector('#akari-head')
+  if (head) head.classList.add('akari-polling')
   try {
     const r = await fetch('/api/akari/state')
     lastState = await r.json()
+    lastPollTime = Date.now()
     if (activePane) renderState(lastState)
   } catch {
-    // Network error talking to the nanocode server itself (not akari): render a
-    // calm degraded state rather than spamming. The proxy already swallows akari
-    // errors into reachable:false, so this is only for nanocode-server hiccups.
     if (activePane && lastState) renderState(lastState)
   } finally {
     pollInFlight = false
+    if (head) setTimeout(() => head.classList.remove('akari-polling'), 1000)
   }
 }
 
@@ -152,8 +157,9 @@ function renderState(state) {
   const meta = activePane?.querySelector('#akari-meta')
   if (meta) {
     const when = state.fetchedAt ? state.fetchedAt.slice(11, 16) : ''
+    const pollAge = lastPollTime ? `${Math.round((Date.now() - lastPollTime) / 1000)}s ago` : ''
     meta.textContent = reachable
-      ? `${state.serverUrl || serverUrl} · ${when}`
+      ? `${state.serverUrl || serverUrl} · ${when}${pollAge ? ' · polled ' + pollAge : ''}`
       : `${state.serverUrl || serverUrl} · unreachable${when ? ' · ' + when : ''}`
   }
 
@@ -268,11 +274,16 @@ function renderWorkers(w) {
     wrap.appendChild(empty)
     return wrap
   }
+  // Sort workers if a sort column is active
+  const sortedList = workerSortCol ? sortWorkers(list, workerSortCol, workerSortAsc) : list
+
   const tbl = document.createElement('table')
   tbl.className = 'akari-table'
-  tbl.appendChild(tableHead(['id', 'state', 'model', 'turn', 'tool', 'elapsed', 'tokens↑↓', 'activity']))
+  const cols = ['id', 'state', 'model', 'turn', 'tool', 'elapsed', 'tokens↑↓', 'activity']
+  const sortKeys = ['worker_id', 'state', 'model_id', 'turn', 'tool_calls', 'elapsed_secs', 'tokens_in', null]
+  tbl.appendChild(sortableTableHead(cols, sortKeys))
   const body = document.createElement('tbody')
-  for (const wk of list) {
+  for (const wk of sortedList) {
     const tr = document.createElement('tr')
     tr.className = wk.needs_attention ? 'akari-attention akari-expandable' : 'akari-expandable'
     tr.appendChild(td(wk.worker_id, 'akari-mono'))
@@ -418,6 +429,43 @@ function renderExternalArmy(agents, updatedAt) {
   tbl.appendChild(body)
   wrap.appendChild(scrollWrap(tbl))
   return wrap
+}
+
+// ── sortable table helpers ────────────────────────────────────────────────────
+
+function sortableTableHead(labels, sortKeys) {
+  const thead = document.createElement('thead')
+  const tr = document.createElement('tr')
+  for (let i = 0; i < labels.length; i++) {
+    const th = document.createElement('th')
+    const key = sortKeys[i]
+    if (key) {
+      th.className = 'akari-sortable'
+      const arrow = workerSortCol === key ? (workerSortAsc ? ' ▲' : ' ▼') : ''
+      th.innerHTML = `${labels[i]}<span class="akari-sort-indicator">${arrow}</span>`
+      th.addEventListener('click', () => {
+        if (workerSortCol === key) workerSortAsc = !workerSortAsc
+        else { workerSortCol = key; workerSortAsc = true }
+        if (activePane && lastState) renderState(lastState)
+      })
+    } else {
+      th.textContent = labels[i]
+    }
+    tr.appendChild(th)
+  }
+  thead.appendChild(tr)
+  return thead
+}
+
+function sortWorkers(list, col, asc) {
+  const sorted = [...list]
+  sorted.sort((a, b) => {
+    let va = a[col] ?? '', vb = b[col] ?? ''
+    if (typeof va === 'number' && typeof vb === 'number') return asc ? va - vb : vb - va
+    va = String(va).toLowerCase(); vb = String(vb).toLowerCase()
+    return asc ? va.localeCompare(vb) : vb.localeCompare(va)
+  })
+  return sorted
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

@@ -546,7 +546,7 @@ export class CodexBlockRenderer {
     this.onStatusChange = opts.onStatusChange || (() => {})
 
     // Session stats counters
-    this._stats = { blocks: 0, commands: 0, fileChanges: 0, turns: 0 }
+    this._stats = { blocks: 0, commands: 0, fileChanges: 0, turns: 0, tokensIn: 0, tokensOut: 0, cost: 0 }
 
     this.fitAddon = { fit: () => {} }
 
@@ -566,6 +566,17 @@ export class CodexBlockRenderer {
       this._scroll.scrollTo({ top: this._scroll.scrollHeight, behavior: 'smooth' })
     })
     container.appendChild(this._scrollBtn)
+
+    // ── Block search overlay ────────────────────────────────────────
+    this._searchOverlay = null
+    this._searchHighlights = []
+    this._searchCurrentIdx = -1
+
+    // ── Keyboard navigation ─────────────────────────────────────────
+    this._focusedBlockIdx = -1
+    this._keyHandler = (e) => this._handleKeyNav(e)
+    container.addEventListener('keydown', this._keyHandler)
+    container.setAttribute('tabindex', '0')
 
     let _scrollRafPending = false
     this._scroll.addEventListener('scroll', () => {
@@ -701,6 +712,7 @@ export class CodexBlockRenderer {
   dispose() {
     clearTimeout(this._reconnectTimer)
     this._stopPing()
+    this.container.removeEventListener('keydown', this._keyHandler)
     if (this._ws) {
       this._ws.onclose = null
       this._ws.close()
@@ -1845,6 +1857,8 @@ export class CodexBlockRenderer {
         this._finalizeAgentMessage()
         this._removeThinkingBlock()
         this._setThinking(false)
+        // Show usage/token stats if available (matches Claude tab UX)
+        if (event.usage) this._addUsageBlock(event.usage, event.cost_usd)
         this._addTurnSeparator()
         break
       case 'turn.failed':
@@ -2043,11 +2057,176 @@ export class CodexBlockRenderer {
   _updateStatsBar() {
     if (!this._statsBar) return
     const s = this._stats
-    this._statsBar.innerHTML =
+    let html =
       `<span class="cbx-stats-item" title="Total blocks">◈ ${s.blocks}</span>` +
       `<span class="cbx-stats-item" title="Commands">$ ${s.commands}</span>` +
       `<span class="cbx-stats-item" title="File changes">✏ ${s.fileChanges}</span>` +
       `<span class="cbx-stats-item" title="Turns">↻ ${s.turns}</span>`
+    if (s.tokensIn || s.tokensOut) {
+      html += `<span class="cbx-stats-item cbx-stats-tokens" title="Tokens in/out">⊕ ${s.tokensIn.toLocaleString()}/${s.tokensOut.toLocaleString()}</span>`
+    }
+    if (s.cost > 0) {
+      html += `<span class="cbx-stats-item cbx-stats-cost" title="Total cost">$ ${s.cost.toFixed(4)}</span>`
+    }
+    this._statsBar.innerHTML = html
+  }
+
+  // ── Keyboard navigation ──────────────────────────────────────────────────────
+  // j/k — next/prev block, G — scroll to bottom, F — fold/unfold all,
+  // Ctrl+Shift+F — open search overlay, Escape — close search / clear focus
+  _handleKeyNav(e) {
+    // Don't capture when typing in input/textarea
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+
+    // Ctrl+Shift+F — block search
+    if (e.ctrlKey && e.shiftKey && e.key === 'F') {
+      e.preventDefault()
+      this._openSearch()
+      return
+    }
+
+    const blocks = Array.from(this._scroll.querySelectorAll('.cbx-block'))
+    if (!blocks.length) return
+
+    if (e.key === 'j' || e.key === 'J') {
+      e.preventDefault()
+      this._focusedBlockIdx = Math.min(this._focusedBlockIdx + 1, blocks.length - 1)
+      this._highlightFocusedBlock(blocks)
+    } else if (e.key === 'k' || e.key === 'K') {
+      e.preventDefault()
+      this._focusedBlockIdx = Math.max(this._focusedBlockIdx - 1, 0)
+      this._highlightFocusedBlock(blocks)
+    } else if (e.key === 'G' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault()
+      this._focusedBlockIdx = blocks.length - 1
+      this._highlightFocusedBlock(blocks)
+      this._scrollBottom()
+    } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault()
+      this._toggleFoldAll(blocks)
+    } else if (e.key === 'Escape') {
+      this._clearBlockFocus(blocks)
+      this._closeSearch()
+    }
+  }
+
+  _highlightFocusedBlock(blocks) {
+    blocks.forEach(b => b.classList.remove('cbx-block-focused'))
+    const target = blocks[this._focusedBlockIdx]
+    if (target) {
+      target.classList.add('cbx-block-focused')
+      target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }
+
+  _clearBlockFocus(blocks) {
+    this._focusedBlockIdx = -1
+    blocks.forEach(b => b.classList.remove('cbx-block-focused'))
+  }
+
+  _toggleFoldAll(blocks) {
+    // If any block is expanded (data-fold='full'), collapse all; else expand all
+    const anyExpanded = blocks.some(b => b.getAttribute('data-fold') === 'full')
+    const newFold = anyExpanded ? 'header' : 'full'
+    blocks.forEach(b => {
+      if (b.hasAttribute('data-fold')) b.setAttribute('data-fold', newFold)
+    })
+  }
+
+  // ── Block search overlay ────────────────────────────────────────────────────
+  _openSearch() {
+    if (this._searchOverlay) { this._searchOverlay.querySelector('input')?.focus(); return }
+    const overlay = document.createElement('div')
+    overlay.className = 'cbx-search-overlay'
+    overlay.innerHTML =
+      `<input class="cbx-search-input" type="text" placeholder="Search blocks…" />` +
+      `<span class="cbx-search-count"></span>` +
+      `<button class="cbx-search-prev" title="Previous (Shift+Enter)">&#9650;</button>` +
+      `<button class="cbx-search-next" title="Next (Enter)">&#9660;</button>` +
+      `<button class="cbx-search-close" title="Close (Escape)">&times;</button>`
+    this.container.appendChild(overlay)
+    this._searchOverlay = overlay
+
+    const input = overlay.querySelector('input')
+    const countEl = overlay.querySelector('.cbx-search-count')
+    input.focus()
+
+    let debounceTimer = null
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => this._doSearch(input.value, countEl), 150)
+    })
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        if (e.shiftKey) this._searchNav(-1, countEl)
+        else this._searchNav(1, countEl)
+      }
+      if (e.key === 'Escape') { e.stopPropagation(); this._closeSearch() }
+    })
+    overlay.querySelector('.cbx-search-prev').addEventListener('click', () => this._searchNav(-1, countEl))
+    overlay.querySelector('.cbx-search-next').addEventListener('click', () => this._searchNav(1, countEl))
+    overlay.querySelector('.cbx-search-close').addEventListener('click', () => this._closeSearch())
+  }
+
+  _doSearch(query, countEl) {
+    // Clear old highlights
+    this._searchHighlights.forEach(el => el.classList.remove('cbx-search-match', 'cbx-search-current'))
+    this._searchHighlights = []
+    this._searchCurrentIdx = -1
+
+    if (!query || query.length < 2) { if (countEl) countEl.textContent = ''; return }
+
+    const lq = query.toLowerCase()
+    const blocks = this._scroll.querySelectorAll('.cbx-block')
+    blocks.forEach(b => {
+      if (b.textContent.toLowerCase().includes(lq)) {
+        b.classList.add('cbx-search-match')
+        this._searchHighlights.push(b)
+      }
+    })
+    if (countEl) countEl.textContent = this._searchHighlights.length ? `${this._searchHighlights.length} found` : 'no matches'
+    if (this._searchHighlights.length) this._searchNav(0, countEl)
+  }
+
+  _searchNav(direction, countEl) {
+    if (!this._searchHighlights.length) return
+    if (this._searchCurrentIdx >= 0) {
+      this._searchHighlights[this._searchCurrentIdx]?.classList.remove('cbx-search-current')
+    }
+    if (direction === 0) this._searchCurrentIdx = 0
+    else this._searchCurrentIdx = (this._searchCurrentIdx + direction + this._searchHighlights.length) % this._searchHighlights.length
+    const target = this._searchHighlights[this._searchCurrentIdx]
+    if (target) {
+      target.classList.add('cbx-search-current')
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }
+    if (countEl) countEl.textContent = `${this._searchCurrentIdx + 1}/${this._searchHighlights.length}`
+  }
+
+  _closeSearch() {
+    this._searchHighlights.forEach(el => el.classList.remove('cbx-search-match', 'cbx-search-current'))
+    this._searchHighlights = []
+    this._searchCurrentIdx = -1
+    if (this._searchOverlay) {
+      this._searchOverlay.remove()
+      this._searchOverlay = null
+    }
+  }
+
+  // ── Usage / token display ───────────────────────────────────────────────────
+  _addUsageBlock(usage, costUsd) {
+    const parts = []
+    if (usage.input_tokens != null) { this._stats.tokensIn += usage.input_tokens; parts.push(`in ${usage.input_tokens.toLocaleString()}`) }
+    if (usage.output_tokens != null) { this._stats.tokensOut += usage.output_tokens; parts.push(`out ${usage.output_tokens.toLocaleString()}`) }
+    if (usage.cache_read_input_tokens != null) parts.push(`cache_read ${usage.cache_read_input_tokens.toLocaleString()}`)
+    if (costUsd != null) { this._stats.cost += Number(costUsd); parts.push(`$${Number(costUsd).toFixed(4)}`) }
+    if (!parts.length) return
+    const article = this._makeBlock('cbx-block-usage')
+    article.innerHTML = `<p class="cbx-usage">${escHtml(parts.join(' · '))}</p>`
+    this._scroll.appendChild(article)
+    this._updateStatsBar()
+    this._scrollBottom()
   }
 
   _scrollBottom() {
