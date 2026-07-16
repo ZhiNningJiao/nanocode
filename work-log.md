@@ -625,3 +625,20 @@ commit 03beb00
 - fork 状态（本轮 `git fetch fork` 后）：本分支 vs fork/zhining/nano-9476-integ-0716 = 0 ahead / 0 behind（R9 push 已同步，本轮无新功能改动）；vs fork/main = 8 ahead / 4 behind——fork/main 的 opus_burn 4 提交（5945c5a/e68ed60/d3da9db/570c744）仍**未并入** 9476 运行分支，按任务书「大改先在任务书下等批」继续不动，留主人定夺
 - 过程产物：run_nano_maint.log gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
 - 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；仅提交 work-log 记账，无 push 无部署
+
+## 2026-07-16 [nano_maint R11 — 十一巡，读 opus_burn handoff，9475/9476 健康，fork 同步 2 doc 提交，NOTHING-TO-DO]
+- 接班状态：HEAD 88d427e（R10 work-log 提交），工作树干净（仅未跟踪 .git.bak-migrate，前置遗留不动）
+- 健康巡检（`tee -a run_nano_maint.log`）：
+  - 9475 = 200（未触碰，按红线不动 9475）
+  - 9476 = 200；/api/health = ok；/api/services：nanocode up / akari up（mblend·dccpipeline·regression·TTS down，非 nanocode 维护面，预期，与 R1-R10 一致）；/api/sessions 经 localhost = 200 `{"sessions":[]}`
+  - 注：外部 IP 10.18.8.55:9476/api/sessions 返回 403——服务器按设计将 /api/sessions 限定 localhost 访问（CSRF/origin 守卫），非回归；历轮均 curl localhost 故记 200
+- 前端报错巡检（Playwright headless 加载 http://localhost:9476/，networkidle+2.5s，脚本 _fe_check.mjs 仓内起、用后即删）：
+  - title="Nanocode"，console error/warning = 0，pageerror = 0，failed request = 0
+- npm test（`tee run_nano_maint.log`）：`node --test server/tests/*.test.js` → 653 pass / 0 fail
+- run.log 自查：`git check-ignore run_nano_maint.log` 命中（gitignored）；`rg --no-ignore -c "^not ok"` = 0 匹配；npm test 汇总 `# fail 0` 确认零失败
+- 待办扫描：~/codex_work/REVIEW_REQ_* / CHORE_* = 0；FLAG_* ~397 个仍为 6 月遗留空旗（按 handoff 跳过）
+- opus_burn handoff（本轮新读）：~/codex_work/HANDOFF_opus_burn.md 已落地。内容：opus_burn R4-R9 收尾——codex-block-renderer（command/file/thinking/markdown/usage/MCP/image 等块渲染，parity Claude tab）、akari-panel、USER_MANUAL 更新；653/0 测过；明确 "wrap up for GLM maintenance"。关键交付实为 `public/js/codex-block-renderer.js`（handoff 误记为 `public/`，本轮 `git ls-tree fork/main` 勘正）
+- fork 状态（本轮 `git fetch fork`）：本分支 HEAD 88d427e vs fork/zhining/nano-9476-integ-0716(a4989c2) = 1 ahead（R10 work-log 未推）；vs fork/main(5945c5a) = 9 ahead / 4 behind——opus_burn 4 提交（570c744/d3da9db/e68ed60/5945c5a）仍**未并入** 9476 运行分支，按任务书「大改先在任务书下等批」继续不动，留主人定夺（handoff 已读、工作就绪且测过，待主人一声令下即 merge→冒烟→部署）
+- 动作：提交 R11 work-log 记账 + push fork 同步分支（R10+R11 两 doc 提交，不开 PR，不动 9475，无功能改动故不部署 9476）
+- 过程产物：run_nano_maint.log gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
+- 本轮无可修复 bug / 无待办 → NOTHING-TO-DO
