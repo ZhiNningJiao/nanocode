@@ -433,10 +433,21 @@ export class TabManager {
     // dispose()'d cleanly before the block renderer installs on the same
     // element. Cold-load delta on the default terminal-mode path: ~41 KB gz
     // not shipped. (port of upstream d952583)
-    let pane = new TerminalPane(paneEl, paneOpts)
+    //
+    // skipTouchScroll: when a block renderer will replace this pane, do NOT
+    // attach the non-passive touchmove+preventDefault listener. On real iOS,
+    // once preventDefault fires inside a touchmove, the OS commits the entire
+    // gesture to a non-scroll intent — even after dispose() removes the
+    // listener and the block renderer takes over, the in-flight touch still
+    // can't scroll (gesture poisoning). CDP/Playwright can't reproduce this
+    // because Input.dispatchTouchEvent lacks iOS's gesture-commitment
+    // semantics. Skipping the listener for transient placeholder panes is the
+    // real-device root-cause fix.
+    const willSwapToBlock = useClaudeRenderer || useCodexRenderer
+    let pane = new TerminalPane(paneEl, { ...paneOpts, skipTouchScroll: willSwapToBlock })
     this.tabs.push({ id, label, type, pane, paneEl, persona: opts.persona || '' })
 
-    if (useClaudeRenderer || useCodexRenderer) {
+    if (willSwapToBlock) {
       const loader = useClaudeRenderer ? loadClaudeBlock() : loadCodexBlock()
       loader.then((Cls) => {
         const tab = this.tabs.find((t) => t.id === id)
@@ -447,6 +458,13 @@ export class TabManager {
         tab.pane = new Cls(paneEl, blockOpts)
       }).catch((err) => {
         console.error('[tab-manager] failed to load block renderer:', err)
+        // Block renderer failed to load — the TerminalPane stays as the
+        // permanent pane. Retroactively enable touch scroll so the terminal
+        // is still usable on mobile (it was skipped at creation time).
+        const tab = this.tabs.find((t) => t.id === id)
+        if (tab?.pane?.initTouchScroll) {
+          try { tab.pane.initTouchScroll() } catch {}
+        }
       })
     }
     // Track grew; keep the visible position pinned to the active tab.

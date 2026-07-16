@@ -1,42 +1,62 @@
-=== Mobile Scroll Fix Verification ===
-Date: 2026-07-16
+=== Mobile Scroll Fix — Final Verification ===
+Date: 2026-07-16 09:41:58
+Branch: zhining/nano-plugin-akari
+Server: 9476 (integrated, wt-nano-akari)
 
-=== Server ===
-9476 (integrated branch, wt-nano-akari, PORT=9476)
-Serving corrected files (Content-Length: 48188 for tab-manager.js)
+=== Files changed ===
+ public/js/tab-manager.js   | 22 ++++++++++++++++++++--
+ public/js/terminal-pane.js | 31 ++++++++++++++++++++++++++++++-
+ run_mobile_scroll.log      | 46 +++++-----------------------------------------
+ 3 files changed, 55 insertions(+), 44 deletions(-)
 
-=== Test 1: Block mode (claude tab) touch scroll — AFTER FIX ===
-Command: node /tmp/opencode/test_scroll_fresh.js
-Result:
-  Before: {"scrollHeight":5024,"clientHeight":609,"canScroll":true}
-  Touch scroll test:
+=== TEST 1: Block mode — skipTouchScroll + scroll ===
+=== TEST 1: Block mode — no non-passive touchmove during placeholder ===
+  Placeholder state: {
+  "hasXterm": false,
+  "paneClass": "pane-terminal active cbr-container"
+}
+  Touch handler check: {
+  "hasOurViewportStyles": false
+}
+  ✓ skipTouchScroll working — no touch handlers attached during placeholder
+  After block renderer load: {"hasCbr":true,"hasXterm":true,"blockCount":0}
+  Scroll container: {"canScroll":true}
   Scroll after touch: 229 SCROLLED ✓
 
-=== Test 2: Terminal mode (bash tab) touch scroll — AFTER FIX ===
-Command: node /tmp/opencode/test_bash_scroll.js
-Result:
-  Bash tab state: {"hasXterm":true,"hasCbr":false,"paneClass":"pane-terminal active"}
-  Terminal scroll info: {"found":true,"scrollTop":6324,"scrollHeight":6918,"clientHeight":594}
-  Terminal scroll after touch: 6324 (at bottom, xterm internal scroll)
+=== TEST 2: Terminal mode — touch handlers attached (no regression) ===
+  Terminal mode state: {
+  "hasXterm": true,
+  "screenTouchAction": "none",
+  "viewportTouchAction": "none",
+  "viewportOverscrollBehavior": "none",
+  "hasTouchHandlers": true
+}
+  ✓ Terminal mode has touch handlers (no regression)
 
-=== Test 3: Clone test — BEFORE FIX (stale server) ===
-Command: node /tmp/opencode/test_clone.js
-Result:
-  TEST 1: Original pane (with lingering listeners): 0 NOT SCROLLED ✗
-  TEST 2: Cloned pane (listeners stripped): 229 SCROLLED ✓
-  TEST 3: Wheel scroll: 0 NOT SCROLLED (expected - non-touch)
+=== TEST 2: Abort fallback — retroactive initTouchScroll ===
+=== TEST: Abort block renderer — verify skip + fallback initTouchScroll ===
+  State after block renderer abort: {
+  "hasXterm": true,
+  "hasCbr": false,
+  "paneClass": "pane-terminal active",
+  "screenTouchAction": "none",
+  "viewportTouchAction": "none",
+  "viewportOverscrollBehavior": "none",
+  "hasTouchHandlers": true
+}
+  ✓ TerminalPane stayed as pane (block renderer aborted)
+  ✓ Retroactive initTouchScroll() called — touch handlers present (fallback works)
+  Error log present: ✓
+  All logs: [log] [ntfy-hook] loaded — listening for [NTFY]...[/NTFY] markers
+  [log] [slash-commands] loaded 79 commands from server
+  [error] Failed to load resource: net::ERR_FAILED
+  [error] [tab-manager] failed to load block renderer: TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:9476/js/claude-block-renderer.js
 
-=== Root Cause ===
-TerminalPane.dispose() called this._keyDisposable.dispose() which threw TypeError
-because attachCustomKeyEventHandler() returns void, not IDisposable.
-The throw aborted dispose() before touch handler cleanup, leaving non-passive
-touchmove with preventDefault() on the pane element. When the block renderer
-mounted on the same element, the lingering listener blocked native scroll.
+=== TEST 3: Deployed 9476 scroll with content ===
+Before: {"scrollHeight":7808,"clientHeight":609,"canScroll":true,"scrollTop":0}
 
-=== Fix ===
-1. Moved touch handler cleanup to TOP of dispose()
-2. this._keyDisposable?.dispose() (optional chaining)
+=== Touch scroll test (inertial) ===
+scrollTop after: 269 SCROLLED ✓
 
-=== Verdict ===
-PASS — Block mode touch scroll works (229 SCROLLED)
-PASS — Terminal mode not broken (xterm present, touch handler active)
+=== Errors ===
+(none)
