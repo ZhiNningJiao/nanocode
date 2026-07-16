@@ -28,6 +28,7 @@ const ttsPromptTextInput = document.getElementById('tts-prompt-text')
 const ttsSaveBtn = document.getElementById('tts-save-btn')
 const ttsTestBtn = document.getElementById('tts-test-btn')
 const ttsSaveStatus = document.getElementById('tts-status')
+const ttsReplayBtn = document.getElementById('tts-replay-btn')
 
 function ttsLog(msg, level = 'ok') {
   const ts = new Date().toLocaleTimeString()
@@ -183,6 +184,7 @@ function enqueueTts(text) {
     ttsPlayedHashes.delete(first)
   }
   setLastTtsText(text)
+  if (ttsReplayBtn) ttsReplayBtn.style.display = 'inline-flex'
   ttsQueue.push(text)
   playNextTts()
 }
@@ -291,6 +293,16 @@ if (ttsTestBtn) ttsTestBtn.addEventListener('click', async () => {
     if (ttsSaveStatus) ttsSaveStatus.textContent = 'Failed: ' + e.message
   }
 })
+
+if (ttsReplayBtn) {
+  ttsReplayBtn.style.display = 'none'
+  ttsReplayBtn.addEventListener('click', () => {
+    if (!ttsLastText) return
+    unlockAudio()
+    ttsQueue.push(ttsLastText)
+    playNextTts()
+  })
+}
 
 // Voice input via Web Speech API
 const micBtn = document.getElementById('mic-btn')
