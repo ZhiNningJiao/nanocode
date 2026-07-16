@@ -1,0 +1,42 @@
+=== Mobile Scroll Fix Verification ===
+Date: 2026-07-16
+
+=== Server ===
+9476 (integrated branch, wt-nano-akari, PORT=9476)
+Serving corrected files (Content-Length: 48188 for tab-manager.js)
+
+=== Test 1: Block mode (claude tab) touch scroll — AFTER FIX ===
+Command: node /tmp/opencode/test_scroll_fresh.js
+Result:
+  Before: {"scrollHeight":5024,"clientHeight":609,"canScroll":true}
+  Touch scroll test:
+  Scroll after touch: 229 SCROLLED ✓
+
+=== Test 2: Terminal mode (bash tab) touch scroll — AFTER FIX ===
+Command: node /tmp/opencode/test_bash_scroll.js
+Result:
+  Bash tab state: {"hasXterm":true,"hasCbr":false,"paneClass":"pane-terminal active"}
+  Terminal scroll info: {"found":true,"scrollTop":6324,"scrollHeight":6918,"clientHeight":594}
+  Terminal scroll after touch: 6324 (at bottom, xterm internal scroll)
+
+=== Test 3: Clone test — BEFORE FIX (stale server) ===
+Command: node /tmp/opencode/test_clone.js
+Result:
+  TEST 1: Original pane (with lingering listeners): 0 NOT SCROLLED ✗
+  TEST 2: Cloned pane (listeners stripped): 229 SCROLLED ✓
+  TEST 3: Wheel scroll: 0 NOT SCROLLED (expected - non-touch)
+
+=== Root Cause ===
+TerminalPane.dispose() called this._keyDisposable.dispose() which threw TypeError
+because attachCustomKeyEventHandler() returns void, not IDisposable.
+The throw aborted dispose() before touch handler cleanup, leaving non-passive
+touchmove with preventDefault() on the pane element. When the block renderer
+mounted on the same element, the lingering listener blocked native scroll.
+
+=== Fix ===
+1. Moved touch handler cleanup to TOP of dispose()
+2. this._keyDisposable?.dispose() (optional chaining)
+
+=== Verdict ===
+PASS — Block mode touch scroll works (229 SCROLLED)
+PASS — Terminal mode not broken (xterm present, touch handler active)

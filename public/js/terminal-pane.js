@@ -553,23 +553,30 @@ export class TerminalPane {
   }
 
   dispose() {
-    this._stopPing()
-    clearTimeout(this._reconnectTimer)
-    clearTimeout(this._resizeTimer)
-    this._resizeObserver.disconnect()
-    this._dataDisposable.dispose()
-    this._keyDisposable.dispose()
-    if (this._ws) {
-      this._ws.onclose = null
-      this._ws.close()
-    }
-    // Clean up touch scroll handlers so they don't leak onto the container
-    // when a block renderer replaces this pane (prevents blocking native scroll)
+    // Remove touch scroll handlers FIRST so they can't leak onto the
+    // container when a block renderer replaces this pane. Must run
+    // before any potentially-throwing call below — if _keyDisposable
+    // (void from attachCustomKeyEventHandler) or term.dispose() throws,
+    // these listeners would otherwise stay attached and block native
+    // scroll on the block renderer that takes over the same element.
     if (this._touchContainer) {
       this._touchContainer.removeEventListener('touchstart', this._touchStartHandler)
       this._touchContainer.removeEventListener('touchmove', this._touchMoveHandler)
       this._touchContainer.removeEventListener('touchend', this._touchEndHandler)
       this._touchContainer = null
+    }
+    this._stopPing()
+    clearTimeout(this._reconnectTimer)
+    clearTimeout(this._resizeTimer)
+    this._resizeObserver.disconnect()
+    this._dataDisposable.dispose()
+    // attachCustomKeyEventHandler returns void (not IDisposable), so
+    // _keyDisposable is undefined — use optional chaining to avoid a
+    // throw that would abort the rest of dispose().
+    this._keyDisposable?.dispose()
+    if (this._ws) {
+      this._ws.onclose = null
+      this._ws.close()
     }
     PANES.delete(this)
     this.term.dispose()
