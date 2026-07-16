@@ -1691,3 +1691,18 @@ commit 03beb00
   - 归档标记：NANOCODE_FEATURE_AUDIT.md 已由 R69 标 `ARCHIVED-DO-NOT-MERGE`（agent-naming-and-ux / pre-rebase-backup / nano-integration-0715 / -v2 / nano-plugin-akari，仅标记未删——删分支需主人亲批）
   - 过程产物：run_nano_maint.log gitignored（*.log）；_fe_check_9476.mjs 用后即删不入库；不开 PR；不动 9475；nanocode-9476-runtime .git 软链未动
   - 状态板记账（本行）：R70 5 项丢失特性已并集合入 fork/main=523a33c（cc-parity 10c + plugins-notif + nc01-land + nc220 tmux + TTS replay），npm test 663/0，9476 rsync 16 文件 + restart 已 live 验收（端点 200/新端点生效/LIVE==DISK/fe 0 错误），9475 不动；FLAG_nano_maint_recover
+
+## 2026-07-16 21:0x [nano_maint R71 — 接班巡检：R70 交付独立复验+补 REPORT，9476/9475 健康，npm test 663/0，无 REVIEW_REQ/CHORE，NOTHING-TO-DO]
+  - 任务来源：任务书 nano_maint 常驻维护线（接 Opus 双线班）；入口复读 HANDOFF_opus_officer.md + HANDOFF_opus_burn.md；红线 WORKER_CORE 全套、过程产物不入库、不动 9475、tee run_nano_maint.log、FLAG 不设终点旗（常驻维护每轮记账）
+  - 接手状态：R68（fork 同步）+ R69（特性考古 audit-only）+ R70（秘书批复 20:2x 落地：5 项丢失特性并集合入 fork/main=523a33c，npm test 663/0，9476 rsync+restart live 验收，FLAG_nano_maint_recover）均由前序会话完成；fork/main==本地 HEAD==bfa69cd（fork/main..HEAD 双向空，已推）；本轮为接班后首轮巡检
+  - R70 交付独立复验（不信任 R70 summary，按 verify-hard/anti-fake-pass 自验）：
+    - npm test 重跑（`tee -a run_nano_maint.log`）：`# tests 663 # pass 663 # fail 0`，exit 0 ✅ 与 R70 记账一致
+    - live 9476 端点：`/` 200、`/api/services` 200、`/api/akari/state` 200、`/api/historian/briefing` 200 ✅
+    - 新 notify 端点（server/index.js:225/241/247 注册为 **app.post**）：初测用 GET → test-ntfy/linear-poll 返 404 → **自查发现是自己用错方法**（POST-only 路由 GET 当然 404）；改 POST 复测 → `POST /api/notify/linear-important`(空 body)=400(校验生效)、`POST /api/notify/test-ntfy`=200、`POST /api/notify/linear-poll`=200 ✅；R70 记账正确，无 discrepancy（防假过：纠正自己误测，不冤枉前序）
+    - LIVE==DISK md5：runtime server/index.js(90978b72…)==worktree MATCH；public/style.css MATCH、public/js/tts.js MATCH、public/js/terminal-view.js MATCH；runtime server/linear-notif.js 8302B 落盘 ✅
+    - 前端报错（Playwright headless 加载 live 9476，networkidle+2.5s，_fe_check_9476.mjs 用后即删不入库）：title="Nanocode"，console error/warning=0，pageerror=0，failed request=0 ✅
+    - 9475 红线：`/` 200、`/api/services` 200，未触碰 ✅
+  - 补 REPORT：R70 FLAG_nano_maint_recover 此前无 REPORT（officer 继承协议「reject if no REPORT」会被打回）；本轮写 `~/codex_work/REPORT_nano_maint_recover.md`（含 5 项 commit SHA + npm test + live 复验证据 + 9475 不动 + 红线），让 R70 交付可被 officer 正常验收（防假过：不给 officer 留空壳 FLAG）
+  - 待办扫描：`~/codex_work/REVIEW_REQ_*` 无、`CHORE_*` 无；FLAG_nano_maint_recover 待 officer 验收（非本 worker 自验范围）；无主人在 9476 上新反馈 bug
+  - 过程产物：run_nano_maint.log gitignored（*.log）；_fe_check_9476.mjs 用后即删；git status 仅 `?? .git.bak-migrate`（迁移残留，非本轮产物，pre-existing）；未碰 9475；未 push（无新 commit）
+  - NOTHING-TO-DO：R70 秘书批复 20:2x 已全量落地并独立复验通过，9476/9475 健康、npm test 663/0、前端 0 错误、无 REVIEW_REQ/CHORE/新 bug；常驻维护线本轮无新活，结束该轮
