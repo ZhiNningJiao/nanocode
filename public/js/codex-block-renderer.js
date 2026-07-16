@@ -545,6 +545,9 @@ export class CodexBlockRenderer {
     this.tabId = opts.tabId
     this.onStatusChange = opts.onStatusChange || (() => {})
 
+    // Session stats counters
+    this._stats = { blocks: 0, commands: 0, fileChanges: 0, turns: 0 }
+
     this.fitAddon = { fit: () => {} }
 
     container.classList.add('cbx-container')
@@ -611,6 +614,11 @@ export class CodexBlockRenderer {
 
     // Update/tip notice dedup — only show once per session
     this._shownUpdateNotice = false
+
+    // Session stats bar — shows block/command/file-change/turn counts
+    this._statsBar = document.createElement('div')
+    this._statsBar.className = 'cbx-stats-bar'
+    container.appendChild(this._statsBar)
 
     // P2: Loading indicator — show "Connecting…" until WS ready
     this._connectingEl = document.createElement('div')
@@ -1454,6 +1462,7 @@ export class CodexBlockRenderer {
       this._statusBannerEl.remove()
       this._statusBannerEl = null
     }
+    this._stats.commands++
 
     const article = this._makeBlock('cbx-block-bash')
     const foldLevel = getFoldLevel()
@@ -1494,23 +1503,40 @@ export class CodexBlockRenderer {
   _appendToBashOutput(line) {
     if (!this._currentBashBlock) return
     this._currentBashBlock.outputLines.push(line)
-    const lines = this._currentBashBlock.outputLines
+    this._renderBashOutput()
+    this._scrollBottom()
+  }
+
+  _renderBashOutput(showAll = false) {
+    if (!this._currentBashBlock) return
+    const bb = this._currentBashBlock
+    const lines = bb.outputLines
     const text = lines.join('\n')
     const MAX_CHARS = 4000
     const MAX_LINES = 80
-    const isTooLong = text.length > MAX_CHARS || lines.length > MAX_LINES
-    let display
+    const isTooLong = !showAll && (text.length > MAX_CHARS || lines.length > MAX_LINES)
+
+    // Remove existing "Show all" button if any
+    const existingBtn = bb.article.querySelector('.cbx-show-all-btn')
+    if (existingBtn) existingBtn.remove()
+
     if (isTooLong) {
-      // Show first MAX_LINES lines only, with a clear truncation notice
       const kept = lines.slice(0, MAX_LINES)
       const dropped = lines.length - kept.length
-      const keptText = kept.join('\n').slice(0, MAX_CHARS)
-      display = keptText + `\n\n… [${dropped} more lines hidden — scroll terminal for full output]`
+      bb.outputEl.textContent = kept.join('\n').slice(0, MAX_CHARS) + `\n\n… [${dropped} more lines hidden]`
+      // Add expandable "Show all" button
+      const btn = document.createElement('button')
+      btn.className = 'cbx-show-all-btn'
+      btn.textContent = `Show all ${lines.length} lines`
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        bb._expanded = true
+        this._renderBashOutput(true)
+      })
+      bb.outputEl.parentElement.appendChild(btn)
     } else {
-      display = text
+      bb.outputEl.textContent = text
     }
-    this._currentBashBlock.outputEl.textContent = display
-    this._scrollBottom()
   }
 
   _finalizeBashBlockWithExit(exitLine) {
@@ -1594,6 +1620,7 @@ export class CodexBlockRenderer {
 
   /** Render a file change block from SDK file_change events. */
   _addFileChangeBlock(kind, filePath, change = null) {
+    this._stats.fileChanges++
     const icon = kind === 'create' ? '+' : kind === 'delete' ? '−' : '✏'
     const kindLabel = kind === 'create' ? 'created' : kind === 'delete' ? 'deleted' : 'modified'
     const shortPath = filePath
@@ -1640,6 +1667,7 @@ export class CodexBlockRenderer {
       return lines.map(l => `<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
     }
     // Modified: LCS-based diff with context collapse (3 lines around changes)
+    // Now with line numbers for old/new sides
     const diffResult = _computeLineDiff(oldContent, newContent)
     const CTX = 3
     // Mark which lines are within CTX of a change
@@ -1649,33 +1677,47 @@ export class CodexBlockRenderer {
         for (let j = Math.max(0, i - CTX); j <= Math.min(diffResult.length - 1, i + CTX); j++) show[j] = 1
       }
     }
+    // Track line numbers for old/new sides
+    let oldLine = 1, newLine = 1
+    const lineNums = diffResult.map(entry => {
+      const r = { old: null, new: null }
+      if (entry.type === 'equal') { r.old = oldLine++; r.new = newLine++ }
+      else if (entry.type === 'removed') { r.old = oldLine++ }
+      else if (entry.type === 'added') { r.new = newLine++ }
+      return r
+    })
     const result = []
     let rendered = 0
     let skipped = 0
     for (let i = 0; i < diffResult.length; i++) {
       if (rendered >= 200) {
-        result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… ${diffResult.length - i} more lines</span></div>`)
+        result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">\u2026 ${diffResult.length - i} more lines</span></div>`)
         break
       }
       if (!show[i]) { skipped++; continue }
       if (skipped > 0) {
-        result.push(`<div class="cbx-diff-line cbx-diff-collapse"><span class="cbx-diff-gutter">⋯</span><span class="cbx-diff-text">${skipped} unchanged lines</span></div>`)
+        result.push(`<div class="cbx-diff-line cbx-diff-collapse"><span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span><span class="cbx-diff-gutter">\u22EF</span><span class="cbx-diff-text">${skipped} unchanged lines</span></div>`)
         skipped = 0
       }
       const entry = diffResult[i]
+      const ln = lineNums[i]
       const cls = entry.type === 'added' ? 'cbx-diff-added' : entry.type === 'removed' ? 'cbx-diff-removed' : 'cbx-diff-equal'
       const gutter = entry.type === 'added' ? '+' : entry.type === 'removed' ? '-' : ' '
-      result.push(`<div class="cbx-diff-line ${cls}"><span class="cbx-diff-gutter">${gutter}</span><span class="cbx-diff-text">${escHtml(entry.line)}</span></div>`)
+      const oldN = ln.old != null ? ln.old : ''
+      const newN = ln.new != null ? ln.new : ''
+      result.push(`<div class="cbx-diff-line ${cls}"><span class="cbx-diff-lno">${oldN}</span><span class="cbx-diff-lno">${newN}</span><span class="cbx-diff-gutter">${gutter}</span><span class="cbx-diff-text">${escHtml(entry.line)}</span></div>`)
       rendered++
     }
     if (skipped > 0) {
-      result.push(`<div class="cbx-diff-line cbx-diff-collapse"><span class="cbx-diff-gutter">⋯</span><span class="cbx-diff-text">${skipped} unchanged lines</span></div>`)
+      result.push(`<div class="cbx-diff-line cbx-diff-collapse"><span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span><span class="cbx-diff-gutter">\u22EF</span><span class="cbx-diff-text">${skipped} unchanged lines</span></div>`)
     }
     return result.join('')
   }
 
   /** Render a visual turn separator. */
   _addTurnSeparator() {
+    this._stats.turns++
+    this._updateStatsBar()
     const el = document.createElement('div')
     el.className = 'cbx-turn-sep'
     this._scroll.appendChild(el)
@@ -1749,6 +1791,12 @@ export class CodexBlockRenderer {
   _makeBlock(extraClasses = '') {
     const article = document.createElement('article')
     article.className = `cbx-block ${extraClasses}`.trim()
+    // Timestamp badge
+    const now = new Date()
+    const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`
+    article.setAttribute('data-ts', ts)
+    this._stats.blocks++
+    this._updateStatsBar()
     return article
   }
 
@@ -1990,6 +2038,16 @@ export class CodexBlockRenderer {
     if (!this._thinkingBlockEl) return
     this._thinkingBlockEl.remove()
     this._thinkingBlockEl = null
+  }
+
+  _updateStatsBar() {
+    if (!this._statsBar) return
+    const s = this._stats
+    this._statsBar.innerHTML =
+      `<span class="cbx-stats-item" title="Total blocks">◈ ${s.blocks}</span>` +
+      `<span class="cbx-stats-item" title="Commands">$ ${s.commands}</span>` +
+      `<span class="cbx-stats-item" title="File changes">✏ ${s.fileChanges}</span>` +
+      `<span class="cbx-stats-item" title="Turns">↻ ${s.turns}</span>`
   }
 
   _scrollBottom() {
