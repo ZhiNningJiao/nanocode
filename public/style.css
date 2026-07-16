@@ -7947,6 +7947,45 @@ body.workspace-active .landing-overlay { display: none; }
   margin-left: auto;
 }
 
+/* ── Streaming cursor (blinking caret at end of live text) ───── */
+.cbx-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--primary);
+  vertical-align: text-bottom;
+  animation: cbx-blink 1s step-end infinite;
+  margin-left: 1px;
+}
+@keyframes cbx-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ── Error system block (red tint) ────────────────────────────── */
+.cbx-block-error {
+  background: color-mix(in srgb, #e26159 10%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, #e26159 30%, transparent);
+  border-left: 3px solid #e26159;
+}
+.cbx-block-error .cbx-system {
+  color: #e26159;
+  font-style: normal;
+}
+
+/* ── Diff context collapse row ────────────────────────────────── */
+.cbx-diff-collapse {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, transparent);
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.68rem;
+  cursor: default;
+}
+.cbx-diff-collapse .cbx-diff-gutter {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
 /* ── Mobile tweaks ──────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -7960,6 +7999,20 @@ body.workspace-active .landing-overlay { display: none; }
   .cbx-bash-output {
     font-size: 0.72rem;
     max-height: 200px;
+  }
+  /* Mobile code overflow fix */
+  .cbx-text-md pre {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cbx-filechange-diff {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cbx-diff-text {
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 }
 

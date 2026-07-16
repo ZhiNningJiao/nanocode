@@ -349,6 +349,34 @@ function _renderCbxMarkdown(text, { streaming = false } = {}) {
   return `<pre class="cbx-text-pre">${escHtml(renderText)}</pre>`
 }
 
+// ── Syntax highlighting (uses hljs if loaded, matching Claude tab) ─────────
+function _highlightCodeBlocks(el) {
+  if (!window.hljs) return
+  el.querySelectorAll('pre code[class*="language-"]').forEach((block) => {
+    try { window.hljs.highlightElement(block) } catch { /* ignore */ }
+  })
+}
+
+// ── Tool icon map for command blocks (subset of Claude tab TOOL_ICONS) ───────
+const CMD_ICONS = {
+  git:    '⎇',
+  npm:    '📦',
+  node:   '⬡',
+  python: '🐍', python3: '🐍', py: '🐍',
+  cargo:  '🦀', rustc: '🦀',
+  go:     '🔷',
+  docker: '🐳',
+  curl:   '🌐', wget: '🌐',
+  ssh:    '🔑', scp: '🔑',
+  make:   '⚙',  cmake: '⚙',
+}
+
+function _cmdIcon(cmd) {
+  if (!cmd) return '$'
+  const bin = cmd.split(/[\s/]/).pop()?.split(/[\s=]/)?.shift() || ''
+  return CMD_ICONS[bin] || '$'
+}
+
 // ── Copy button handlers (mirrors Claude tab UX) ─────────────────────────────
 function _attachCopyHandlers(el) {
   el.querySelectorAll('.cbx-copy-btn').forEach((btn) => {
@@ -1432,11 +1460,12 @@ export class CodexBlockRenderer {
     article.setAttribute('data-fold', foldLevel)
 
     const cmdHtml = `<code class="cbx-bash-cmd">${escHtml(cmd)}</code>`
+    const icon = _cmdIcon(cmd)
 
     article.innerHTML =
       `<div class="cbx-bash-card">` +
       `<div class="cbx-bash-header">` +
-      `<span class="cbx-bash-icon">$</span>` +
+      `<span class="cbx-bash-icon">${escHtml(icon)}</span>` +
       `<span class="cbx-bash-cmd-text">${cmdHtml}</span>` +
       `<span class="cbx-bash-status cbx-bash-running">running…</span>` +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
@@ -1610,19 +1639,37 @@ export class CodexBlockRenderer {
       const lines = oldContent.split('\n').slice(0, 50)
       return lines.map(l => `<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
     }
-    // Modified: LCS-based diff (same algorithm as Claude tab)
+    // Modified: LCS-based diff with context collapse (3 lines around changes)
     const diffResult = _computeLineDiff(oldContent, newContent)
+    const CTX = 3
+    // Mark which lines are within CTX of a change
+    const show = new Uint8Array(diffResult.length)
+    for (let i = 0; i < diffResult.length; i++) {
+      if (diffResult[i].type !== 'equal') {
+        for (let j = Math.max(0, i - CTX); j <= Math.min(diffResult.length - 1, i + CTX); j++) show[j] = 1
+      }
+    }
     const result = []
     let rendered = 0
-    for (const entry of diffResult) {
+    let skipped = 0
+    for (let i = 0; i < diffResult.length; i++) {
       if (rendered >= 200) {
-        result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… ${diffResult.length - rendered} more lines</span></div>`)
+        result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… ${diffResult.length - i} more lines</span></div>`)
         break
       }
+      if (!show[i]) { skipped++; continue }
+      if (skipped > 0) {
+        result.push(`<div class="cbx-diff-line cbx-diff-collapse"><span class="cbx-diff-gutter">⋯</span><span class="cbx-diff-text">${skipped} unchanged lines</span></div>`)
+        skipped = 0
+      }
+      const entry = diffResult[i]
       const cls = entry.type === 'added' ? 'cbx-diff-added' : entry.type === 'removed' ? 'cbx-diff-removed' : 'cbx-diff-equal'
       const gutter = entry.type === 'added' ? '+' : entry.type === 'removed' ? '-' : ' '
       result.push(`<div class="cbx-diff-line ${cls}"><span class="cbx-diff-gutter">${gutter}</span><span class="cbx-diff-text">${escHtml(entry.line)}</span></div>`)
       rendered++
+    }
+    if (skipped > 0) {
+      result.push(`<div class="cbx-diff-line cbx-diff-collapse"><span class="cbx-diff-gutter">⋯</span><span class="cbx-diff-text">${skipped} unchanged lines</span></div>`)
     }
     return result.join('')
   }
@@ -1706,7 +1753,9 @@ export class CodexBlockRenderer {
   }
 
   _addSystemBlock(msg) {
-    const article = this._makeBlock('cbx-block-system')
+    const isError = /\[Error|error|failed|lost/i.test(msg)
+    const cls = isError ? 'cbx-block-system cbx-block-error' : 'cbx-block-system'
+    const article = this._makeBlock(cls)
     article.innerHTML = `<p class="cbx-system">${escHtml(msg)}</p>`
     this._scroll.appendChild(article)
     this._scrollBottom()
@@ -1883,7 +1932,9 @@ export class CodexBlockRenderer {
     const div = this._liveAgentBlock.querySelector('.cbx-text-md')
     if (!div) return
     try {
-      div.innerHTML = _renderCbxMarkdown(this._liveAgentText, { streaming })
+      let html = _renderCbxMarkdown(this._liveAgentText, { streaming })
+      if (streaming) html += '<span class="cbx-cursor"></span>'
+      div.innerHTML = html
     } catch {
       div.textContent = this._liveAgentText
     }
@@ -1903,6 +1954,7 @@ export class CodexBlockRenderer {
     }
     this._renderLiveAgentMarkdown(false)
     _attachCopyHandlers(this._liveAgentBlock)
+    _highlightCodeBlocks(this._liveAgentBlock)
     this._liveAgentBlock.classList.remove('cbx-live')
     this._liveAgentBlock = null
     this._liveAgentItemId = null
