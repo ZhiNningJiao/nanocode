@@ -90,6 +90,15 @@ terminal/claude-session-controller.js  →  acquireSessionLock(sessionId, { pid:
 - 新增单测 `session-lock-dual-server.test.js` 第 5 例「read-only server blocks the inject API (no consumer spawned); host still wakes」：只读服务器 inject → 423 + `ok:false` + `readOnly:true` + `lockHolderPort=9477` + turns 不变；host inject → 200 + `ok:true` + turns 递增（合法 wake 路径完好）。
 - `scripts/verify-session-singleton.mjs` 新增 Test 2b：真实双服务器 9477/9478，只读服务器 inject → 423 / ok:false / readOnly:true / host=:9477，stderr 确认 `inject blocked — ... hosted by :9477 (read-only mode)`。断言从 8 升至 12，全过。
 
+### 6. Pre-existing CustomEvent 测试环境失败 — 修复（第 24 次独立验证发现并修复）
+
+**发现的缺口**：第 23 次独立验证诚实地发现 `npm test` 实际是 645/653 pass / 6 fail（而非 re-verified-19/20/21 误报的「653/653 pass 0 fail」），6 个失败全是 `opencode-replay-dedup-repro.test.js` 的 `ReferenceError: CustomEvent is not defined`（`claude-block-renderer.js:1411` `new CustomEvent(...)`）。第 23 次验证推断这是 Node 18 环境问题、与 session-singleton 无关，但**从未在父提交上实跑验证**。
+
+**本次（第 24 次）新增的实证 + 修复**：
+- **实证不是回归**：在 session-singleton 实现提交 `3c8ff14` 的父提交 `87c5802`（`git worktree add /tmp/opencode/ss-pre 3c8ff14~1`）上实跑同一个测试 → 同样 6 fail / 0 pass，**证明 6 个失败在 session-singleton 之前就已存在**（`git blame` 确认 1411 行来自 `725cc0dd` 2026-06-03，非 `3c8ff14`）。
+- **全消费者 spawn 路径审计**：追踪 `dispatchClaudeTurn` 全部 9 个调用点（543/570/773/804/820 = 已运行 turn 的 proc close/error 续延；909 = inject 已守卫；1297 = WS claude-input 已守卫于 1189；1516 = interrupt 续延）——**确认无剩余绕过点**（第 20 次验证发现的 inject 是最后一个，现已堵住）。
+- **修复 6 个预存失败**：根因是测试 `before()` mock 了 `global.document.dispatchEvent` 为 no-op，但 Node 18 没有 `global.CustomEvent`（Node 19+ 才有），导致 `new CustomEvent(...)` 抛 `ReferenceError`。加一行 polyfill `global.CustomEvent = class CustomEvent { constructor(type, options = {}) { this.type = type; this.detail = options.detail } }` 到测试 setup。修复后 `opencode-replay-dedup-repro.test.js` 6/6 pass，**全量回归首次真实全绿 651/653 pass / 0 fail / 2 skipped**（纠正 prior FLAGs 的假报）。
+
 ## 文件变更清单
 
 | 文件 | 状态 | 变更 |
@@ -102,6 +111,7 @@ terminal/claude-session-controller.js  →  acquireSessionLock(sessionId, { pid:
 | `public/style.css` | 修改 | banner 样式 |
 | `server/tests/session-lock.test.js` | 新增 | 21 个单元测试 |
 | `server/tests/session-lock-dual-server.test.js` | 新增 | 4 个双服务器集成测试 |
+| `server/tests/opencode-replay-dedup-repro.test.js` | 修改 | CustomEvent polyfill（修复 6 个 Node 18 预存测试失败） |
 | `scripts/verify-session-singleton.mjs` | 新增 | 手工验证脚本（起 9477/9478 双实例） |
 
 ## 验证证据
@@ -124,8 +134,9 @@ terminal/claude-session-controller.js  →  acquireSessionLock(sessionId, { pid:
 
 ### 全量回归
 ```
-# tests 653  # pass 653  # fail 0  (648 原有 + 4 初始新增 + 1 inject 新增)
+# tests 653  # pass 651  # fail 0  # skipped 2
 ```
+首次真实全绿（第 24 次验证修复 CustomEvent 后）。注：re-verified-19/20/21 误报「653/653 pass 0 fail」，实际有 6 个 `CustomEvent is not defined` 失败（Node 18 预存环境问题，非 session-singleton 回归——已在 `3c8ff14~1` 父提交上实证）；本次加一行 polyfill 后真实 0 fail。
 
 ### 手工验证脚本（`scripts/verify-session-singleton.mjs`）
 ```
@@ -167,3 +178,13 @@ ALL ASSERTIONS PASSED — session singleton lock works.
 - 锁仅在 SDK stream-json bridge 路径（renderMode='block'）生效；PTY 终端模式（renderMode='terminal'）下每个服务器独立 PTY，不共享会话
 - 锁依赖 PID 存活校验；如果持锁进程被 `kill -9` 但 PID 被复用（极小概率），锁不会自动失效直到新进程 acquire 时发现 PID 存活 — 但此时 acquire 会被拒绝（活锁），需要持锁进程真正退出后才会释放
 - 跨服务器需要共享同一 `~/.nanocode/session-locks/` 目录（NFS home 场景已满足）
+
+## 第 25 次独立验证（2026-07-16，opencode/GLM 全新会话，不信任何 prior FLAG/REPORT）
+
+- **不信任先验**：全新会话独立重跑，先 `git fetch fork` 确认 fork/main HEAD `04540b6`、本地 `6ec2dbf`（4 ahead / 3 behind；3 behind 是并行 codex/akari Round-4 功能，4 ahead 中只有 `6ec2dbf` 碰 session-singleton 且仅为 1 行 Node18 CustomEvent 测试 polyfill，非锁逻辑）；`git merge-base --is-ancestor` 确认实现 `3c8ff14` 与 inject 修复 `dcc0ab3` **均在 fork/main**。
+- **源码 provenance**：重读 `terminal/session-lock.js`（201L：`openSync('wx')` 原子创建 @78 / `process.kill(pid,0)` 存活探测 ESRCH=死 EPERM=活 @39-48 / 仅 owner pid+port 释放 @181 / 同 pid+port 可重入 @139 / 损坏锁覆盖 @132-136）+ controller 接线（acquire@1072 / promoted@1078 / readonly-banner@1110 / WS 输入拦截不 spawn@1170 / inject readOnly 守卫@887-899 在 dispatchClaudeTurn@909 之前 / 末客户端释放@1299 / dispose 释放@1816）——与声称一致，全部为真。
+- **自跑测试**：`node --test server/tests/session-lock.test.js server/tests/session-lock-dual-server.test.js` → 26/26 pass 0 fail（0 TAP `^not ok`）；`npm test` 全量回归 → 653 tests / 651 pass / 0 fail / 2 skipped（`run_session_singleton_25thverify_full.log`，0 `^not ok`）。
+- **真实双服务器**：`node scripts/verify-session-singleton.mjs` 用真实 9477/9478 共享全新 temp HOME（复现 9475/9476 双秘书冲突）→ 12/12 断言全过（test UUID `679e07f2-2252-4ce4-a86b-a4483b71271c`）：A 获锁为 host、B 收「会话由 :9477 托管」banner、B WS 输入被拦「只读模式」不 spawn、B inject → 423 Locked / ok:false / readOnly:true / host=:9477、A 断开锁释放、B 升级为 host、锁转 :9478；stderr 确认 `[claude:lock] ... hosted by :9477 (pid 32316). Read-only mode.` → `inject blocked — ... read-only mode.` → `promoted to host`。
+- **红线**：9475 全程 LISTENING（前后 HTTP 200，未碰），9477/9478 前后空闲，`data/nanocode.json` 备份+恢复 sha256 完全一致（`36584e47…`，无污染），真实 `~/.nanocode/session-locks/` 前后 300 条、test UUID 不在其中，temp home 已清理；`run_session_singleton_25thverify_dual.log` grep 干净（0 `^not ok`/`FAIL:`）。
+- **交付**：24th 发现的 polyfill（`6ec2dbf`）此前仅本地；本次以干净 fast-forward（无 force-push）落到 fork/main，使 fork/main `npm test` 首次真实全绿（此前 6 个 Node18 CustomEvent 预存失败）。
+- **anti-fake-pass 裁决**：REAL（file-exists PASS / provenance PASS / HTTP N/A / anim N/A）。
