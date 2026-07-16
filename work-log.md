@@ -1719,3 +1719,17 @@ commit 03beb00
   - fork 同步判断：`git fetch fork` 后 fork/main 无新 commit（HEAD..fork/main 双向：fork/main 不领先本地）；本地领先 fork/main 仅 R71 的 work-log doc（c515d0d，纯 doc 无 runtime 改动）。按 R71 既定惯例（纯 doc 巡检轮不 push，待下次有实质代码变更时一并上 fork/main），本轮同样**不 push**——无代码/runtime 变更，推 doc-only 巡检日志只会给 fork/main 增噪声，且 R71 已立此先例
   - 过程产物：run_nano_maint.log gitignored（*.log），本轮追加 tee；git status 仅 `?? .git.bak-migrate`（迁移残留，pre-existing，非本轮产物）；未碰 9475；未 rsync（无 runtime 变更）；未 push
   - NOTHING-TO-DO：任务书全部实质指令（19:5x fork 同步 / 20:0x 特性考古 / 20:2x 秘书批复并集合入 / 推 fork/main / 9476 冒烟 rsync 重部 / FLAG_nano_maint_recover）已由 R68-R70 全量落地、R71 独立复验通过；本轮巡检 9476/9475 健康、npm test 663/0、新端点活、无 REVIEW_REQ/CHORE/新 bug；常驻维护线本轮无新活，结束该轮
+
+## 2026-07-16 21:18 [nano_maint R73 — 常驻巡检：R70 交付后状态确认（第 3 轮），npm test 663/0，9476 端点+R70 特性 LIVE 签名命中，9475 不动，无 REVIEW_REQ/CHORE，NOTHING-TO-DO]
+  - 任务来源：任务书 nano_maint 常驻维护线（接 Opus 双线班，主人 2026-07-16「推上去让 glm 维护干」）；入口复读 HANDOFF_opus_officer.md + NANOCODE_FEATURE_AUDIT.md（R69 审计/R70 回填均已落）；红线 WORKER_CORE 全套、过程产物不入库、不动 9475、tee run_nano_maint.log、FLAG 不设终点旗（常驻维护每轮记账）
+  - 接手状态：R68（fork 同步）+ R69（特性考古 audit-only）+ R70（秘书批复 20:2x 落地：5 项丢失特性并集合入 fork/main=bfa69cd，npm test 663/0，9476 rsync 16 文件+restart live 验收，FLAG_nano_maint_recover）+ R71（接班独立复验+补 REPORT_nano_maint_recover.md）+ R72（再次巡检 NOTHING-TO-DO）均由前序会话完成；`git fetch fork` 后 fork/main==bfa69cd（ls-remote 证实 R70 push 已落），本地 HEAD=c5ac10e（领先 fork/main 2 个纯 doc work-log commit：R71 c515d0d / R72 c5ac10e，按 R72 既定惯例 doc-only 巡检轮不 push）；fork/main 不领先本地（无新 commit 待同步）；本轮为第 3 轮接班巡检
+  - 本轮独立复验（不信任前序 summary，按 verify-hard/anti-fake-pass 自验；此后无代码/runtime 变更，仅 work-log.md doc 变动）：
+    - npm test 重跑（`tee -a ~/codex_work/run_nano_maint.log`）：`# tests 663 # suites 147 # pass 663 # fail 0 # cancelled 0 # skipped 0`，exit 0 ✅ 与 R70/R71/R72 记账一致，0 fail 门槛满足
+    - live 9476 端点：`/` 200、`/api/services` 200、`/api/akari/state` 200、`/api/historian/briefing` 200 ✅
+    - 新 notify 端点（R70 合入，POST-only）：`POST /api/notify/linear-important`(空 body)=400(校验生效)、`POST /api/notify/test-ntfy`=200、`POST /api/notify/linear-poll`=200 ✅（端点仍活，R70 部署未回归）
+    - **LIVE 签名核实**（curl 9476 live 文件 grep，证 R70 特性确实 live 服务而非仅落盘）：style.css `44px` touch-target=89 命中（cc-parity mobile）、terminal-view.js `permission-mode`=2 命中（cc-parity badge）、tts.js `replay`=1 命中（TTS replay 按钮）；runtime `~/.nanocode-9476-runtime/server/linear-notif.js`=8302B 在盘 ✅
+    - 9475 红线：`/` 200、`/api/services` 200，未触碰 ✅；PID 沿用核对：9476=118213、9475=304142（自 R70 restart 起未变，9475 自 7/15 起未动）✅
+    - 待办扫描：`~/codex_work/REVIEW_REQ_*` 无、`CHORE_*` 无（find -mmin -180 无新文件）；FLAG_nano_maint_recover + REPORT_nano_maint_recover.md 仍在（待 officer 验收，非本 worker 自验范围）；无主人在 9476 上新反馈 bug
+  - fork 同步判断：沿用 R72 既定惯例——本地领先 fork/main 仅 2 个纯 doc work-log commit（无代码/runtime 变更），9476 由 working tree rsync 部署不受 fork/main doc 漂移影响，推 doc-only 巡检日志只增 fork/main 噪声；本轮同样**不 push**，待下次有实质代码变更时一并上 fork/main
+  - 过程产物：run_nano_maint.log 在 ~/codex_work/（repo 外，repo 内 *.log gitignored），本轮 tee 追加；git status 仅 `?? .git.bak-migrate`（迁移残留，pre-existing，非本轮产物）；未碰 9475；未 rsync（无 runtime 变更）；未 push
+  - NOTHING-TO-DO：任务书全部实质指令（19:5x fork 同步 / 20:0x 特性考古 / 20:2x 秘书批复并集合入 / 推 fork/main / 9476 冒烟 rsync 重部 / FLAG_nano_maint_recover）已由 R68-R70 全量落地、R71 独立复验通过、R72/R73 两轮巡检确认；本轮 npm test 663/0、9476 端点+R70 特性 LIVE 签名命中、9475 不动、无 REVIEW_REQ/CHORE/新 bug；常驻维护线本轮无新活，结束该轮
