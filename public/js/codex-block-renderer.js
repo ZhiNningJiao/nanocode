@@ -288,6 +288,271 @@ function linkifyText(text) {
   })
 }
 
+// ── Markdown rendering (mirrors claude-block-renderer) ──────────────────────
+// Guards unclosed ``` fences during streaming to prevent layout chaos.
+function _guardUnclosedFences(text) {
+  if (!text) return { safe: text, truncated: false }
+  const lines = text.split('\n')
+  let fenceOpen = false
+  let lastFenceStart = -1
+  let charOffset = 0
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (/^```/.test(line)) {
+      if (!fenceOpen) { fenceOpen = true; lastFenceStart = charOffset }
+      else { fenceOpen = false; lastFenceStart = -1 }
+    }
+    charOffset += line.length + 1
+  }
+  if (fenceOpen && lastFenceStart > 0) {
+    return { safe: text.slice(0, lastFenceStart).trimEnd(), truncated: true }
+  }
+  return { safe: text, truncated: false }
+}
+
+const XML_STRIP_TAGS = ['local-command-caveat', 'antml:function_calls', 'antml:invoke', 'antml:parameter', 'system-reminder']
+function _stripXmlCaveats(text) {
+  if (!text || !/</.test(text)) return text
+  let out = text
+  for (const tag of XML_STRIP_TAGS) {
+    out = out.replace(new RegExp(`<${tag}(?:\\s[^>]*)?>.*?<\\/${tag}>`, 'gsi'), '')
+    out = out.replace(new RegExp(`<${tag}(?:\\s[^>]*)?\\/?>`, 'gi'), '')
+  }
+  return out.trim()
+}
+
+function _renderCbxMarkdown(text, { streaming = false } = {}) {
+  if (!text) return ''
+  text = _stripXmlCaveats(text)
+  if (!text) return ''
+  let renderText = text
+  if (streaming) {
+    const { safe } = _guardUnclosedFences(text)
+    renderText = safe || text
+  }
+  try {
+    if (window.marked && window.DOMPurify) {
+      let html = window.DOMPurify.sanitize(window.marked.parse(renderText))
+      html = html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ')
+      // Inject copy buttons into code blocks (matching Claude tab UX)
+      html = html.replace(
+        /<pre><code(?:\s+class="language-(\w+)")?>/g,
+        (_, lang) => {
+          const langLabel = lang ? `<span class="cbr-code-lang">${escHtml(lang)}</span>` : ''
+          return `<div class="cbx-code-wrap"><div class="cbx-code-header">${langLabel}<button class="cbx-copy-btn" aria-label="Copy code">Copy</button></div><pre><code${lang ? ` class="language-${lang}"` : ''}>`
+        }
+      )
+      html = html.replace(/<\/code><\/pre>/g, '</code></pre></div>')
+      return html
+    }
+  } catch { /* fall through */ }
+  return `<pre class="cbx-text-pre">${escHtml(renderText)}</pre>`
+}
+
+// ── Syntax highlighting (uses hljs if loaded, matching Claude tab) ─────────
+function _highlightCodeBlocks(el) {
+  if (!window.hljs) return
+  el.querySelectorAll('pre code[class*="language-"]').forEach((block) => {
+    try { window.hljs.highlightElement(block) } catch { /* ignore */ }
+  })
+}
+
+// ── Tool icon map for command blocks (subset of Claude tab TOOL_ICONS) ───────
+const CMD_ICONS = {
+  git:    '⎇',
+  npm:    '📦',
+  node:   '⬡',
+  python: '🐍', python3: '🐍', py: '🐍',
+  cargo:  '🦀', rustc: '🦀',
+  go:     '🔷',
+  docker: '🐳',
+  curl:   '🌐', wget: '🌐',
+  ssh:    '🔑', scp: '🔑',
+  make:   '⚙',  cmake: '⚙',
+}
+
+function _cmdIcon(cmd) {
+  if (!cmd) return '$'
+  const bin = cmd.split(/[\s/]/).pop()?.split(/[\s=]/)?.shift() || ''
+  return CMD_ICONS[bin] || '$'
+}
+
+// ── Copy button handlers (mirrors Claude tab UX) ─────────────────────────────
+function _attachCopyHandlers(el) {
+  el.querySelectorAll('.cbx-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const pre = btn.closest('.cbx-code-wrap')?.querySelector('pre')
+      const text = pre ? pre.textContent : el.textContent
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.textContent
+        btn.textContent = 'Copied!'
+        setTimeout(() => { btn.textContent = orig }, 1500)
+      }).catch(() => {})
+    })
+  })
+}
+
+// ── File path & URL auto-linking (ported from Claude block renderer) ─────────
+// Makes file paths clickable (open in explorer) and URLs clickable (open in tab).
+const CBX_PATH_RE = /(?:(?:\/(?:storage|home)\/[^\s,;:!?()\[\]"'<>]+)|(?:~\/[^\s,;:!?()\[\]"'<>]+)|(?<![:/])(?:[a-zA-Z][a-zA-Z0-9_.-]*(?:\/[a-zA-Z0-9_.+-]+)+\.[a-zA-Z]{2,10})(?=\s|$|[,;:!?()\[\]"'<>]))/g
+const CBX_URL_RE = /https?:\/\/[^\s"'<>[\]()]+[^\s"'<>[\]().,;:!?]/g
+
+function _attachPathAndUrlLinks(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      let p = node.parentElement
+      while (p && p !== root) {
+        const tag = p.tagName.toLowerCase()
+        if (tag === 'a' || tag === 'pre' || tag === 'code') return NodeFilter.FILTER_REJECT
+        p = p.parentElement
+      }
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+  const textNodes = []
+  let node
+  while ((node = walker.nextNode())) textNodes.push(node)
+
+  for (const textNode of textNodes) {
+    const text = textNode.nodeValue
+    if (!text) continue
+    if (!/https?:\/\//.test(text) && !/(\/storage\/|\/home\/|~\/|\w+\/\w+\.\w{1,10})/.test(text)) continue
+
+    const matches = []
+    let m
+    CBX_URL_RE.lastIndex = 0
+    CBX_PATH_RE.lastIndex = 0
+    while ((m = CBX_URL_RE.exec(text)) !== null) {
+      matches.push({ type: 'url', start: m.index, end: m.index + m[0].length, value: m[0] })
+    }
+    CBX_URL_RE.lastIndex = 0
+    while ((m = CBX_PATH_RE.exec(text)) !== null) {
+      if (m[0].length > 300) continue
+      matches.push({ type: 'path', start: m.index, end: m.index + m[0].length, value: m[0] })
+    }
+    CBX_PATH_RE.lastIndex = 0
+    if (!matches.length) continue
+
+    matches.sort((a, b) => a.start - b.start)
+    const deduped = []
+    let lastEnd = 0
+    for (const match of matches) {
+      if (match.start < lastEnd) continue
+      deduped.push(match)
+      lastEnd = match.end
+    }
+    if (!deduped.length) continue
+
+    const frag = document.createDocumentFragment()
+    let pos = 0
+    for (const match of deduped) {
+      if (match.start > pos) frag.appendChild(document.createTextNode(text.slice(pos, match.start)))
+      if (match.type === 'url') {
+        const a = document.createElement('a')
+        a.href = match.value
+        a.target = '_blank'
+        a.rel = 'noopener noreferrer'
+        a.textContent = match.value
+        a.className = 'cbx-autolink-url'
+        frag.appendChild(a)
+      } else {
+        const span = document.createElement('span')
+        span.className = 'cbx-path-link'
+        span.textContent = match.value
+        span.title = 'Open in explorer: ' + match.value
+        span.dataset.path = match.value
+        span.addEventListener('click', (e) => {
+          e.stopPropagation()
+          document.dispatchEvent(new CustomEvent('nanocode:open-in-explorer', {
+            detail: { path: match.value },
+            bubbles: true,
+          }))
+        })
+        frag.appendChild(span)
+      }
+      pos = match.end
+    }
+    if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)))
+    textNode.parentNode.replaceChild(frag, textNode)
+  }
+}
+
+// ── Word-level inline diff highlighting ──────────────────────────────────────
+// For adjacent removed/added line pairs, compute word-level diffs and wrap
+// changed words in <span class="cbx-diff-word-*"> for highlight.
+function _wordDiff(oldLine, newLine) {
+  const oldWords = oldLine.split(/(\s+)/)
+  const newWords = newLine.split(/(\s+)/)
+  // Simple LCS on words
+  const m = oldWords.length, n = newWords.length
+  if (m > 200 || n > 200) return null // too long, skip
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = oldWords[i] === newWords[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const oldMarks = new Uint8Array(m) // 1 = changed
+  const newMarks = new Uint8Array(n)
+  let i = 0, j = 0
+  while (i < m || j < n) {
+    if (i < m && j < n && oldWords[i] === newWords[j]) { i++; j++ }
+    else if (j < n && (i >= m || dp[i][j + 1] >= dp[i + 1][j])) { newMarks[j] = 1; j++ }
+    else { oldMarks[i] = 1; i++ }
+  }
+  const renderSide = (words, marks, cls) => {
+    let html = ''
+    for (let k = 0; k < words.length; k++) {
+      html += marks[k] ? `<span class="${cls}">${escHtml(words[k])}</span>` : escHtml(words[k])
+    }
+    return html
+  }
+  return {
+    oldHtml: renderSide(oldWords, oldMarks, 'cbx-diff-word-del'),
+    newHtml: renderSide(newWords, newMarks, 'cbx-diff-word-add'),
+  }
+}
+
+// ── LCS-based line diff (ported from Claude block renderer) ──────────────────
+function _computeLineDiff(oldText, newText) {
+  const oldLines = oldText.split('\n')
+  const newLines = newText.split('\n')
+  if (oldLines.length > 500 || newLines.length > 500) {
+    return [
+      ...oldLines.map((line) => ({ type: 'removed', line })),
+      ...newLines.map((line) => ({ type: 'added', line })),
+    ]
+  }
+  const m = oldLines.length
+  const n = newLines.length
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (oldLines[i] === newLines[j]) {
+        dp[i][j] = dp[i + 1][j + 1] + 1
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1])
+      }
+    }
+  }
+  const result = []
+  let i = 0, j = 0
+  while (i < m || j < n) {
+    if (i < m && j < n && oldLines[i] === newLines[j]) {
+      result.push({ type: 'equal', line: oldLines[i] })
+      i++; j++
+    } else if (j < n && (i >= m || dp[i][j + 1] >= dp[i + 1][j])) {
+      result.push({ type: 'added', line: newLines[j] })
+      j++
+    } else {
+      result.push({ type: 'removed', line: oldLines[i] })
+      i++
+    }
+  }
+  return result
+}
+
 // ── Pattern detection ─────────────────────────────────────────────────────────
 // Codex outputs several distinct line patterns.
 
@@ -357,6 +622,42 @@ const STARTUP_NOISE_RE = /^(?:[\\|\/\-]{1,4}$|-?npm\s+(?:error|warn|notice|info)
 // Capture up to but not including any trailing │ border char
 const SESSION_INFO_RE = /^[│]\s+(model|directory|permissions):\s+(.*?)\s*[│]?\s*$/
 
+// ── S5: todo_list event → nanocode:todo-update dispatch ───────────────────────
+// The Codex SDK emits structured events for todo list updates. The driver
+// forwards all raw events to the frontend via codex-event (codex-sdk-driver.js).
+// extractCodexTodos pulls the todo array from the recognized event shapes
+// (pure — no DOM — exported for unit testing); _maybeDispatchTodoUpdate wraps
+// it in the nanocode:todo-update CustomEvent for the tasks panel.
+//
+// SDK ThreadItem shape (per @openai/codex-sdk index.d.ts:90-102): a todo_list
+// item arrives inside item.started/updated/completed events as
+//   { type: 'item.started', item: { type: 'todo_list', items: [{ text, completed }] } }
+// The field is `items` (NOT `todos`). Both names are accepted for robustness.
+export function extractCodexTodos(event) {
+  if (!event) return null
+  if (event.type === 'todo_list') {
+    return Array.isArray(event.items) ? event.items
+      : Array.isArray(event.todos) ? event.todos : null
+  }
+  if (event.type === 'item.started' || event.type === 'item.completed' || event.type === 'item.updated') {
+    const item = event.item
+    if (item && item.type === 'todo_list') {
+      return Array.isArray(item.items) ? item.items
+        : Array.isArray(item.todos) ? item.todos : null
+    }
+  }
+  return null
+}
+
+function _maybeDispatchTodoUpdate(event, tabId) {
+  const todos = extractCodexTodos(event)
+  if (todos) {
+    document.dispatchEvent(new CustomEvent('nanocode:todo-update', {
+      detail: { source: 'codex', tabId, todos },
+    }))
+  }
+}
+
 // ── Main class ────────────────────────────────────────────────────────────────
 export class CodexBlockRenderer {
   constructor(container, opts = {}) {
@@ -364,6 +665,9 @@ export class CodexBlockRenderer {
     this.projectId = opts.projectId
     this.tabId = opts.tabId
     this.onStatusChange = opts.onStatusChange || (() => {})
+
+    // Session stats counters
+    this._stats = { blocks: 0, commands: 0, fileChanges: 0, turns: 0 }
 
     this.fitAddon = { fit: () => {} }
 
@@ -380,9 +684,13 @@ export class CodexBlockRenderer {
       `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">` +
       `<polyline points="6 9 12 15 18 9"/></svg>`
     this._scrollBtn.addEventListener('click', () => {
+      this._userScrolledUp = false
       this._scroll.scrollTo({ top: this._scroll.scrollHeight, behavior: 'smooth' })
     })
     container.appendChild(this._scrollBtn)
+
+    // Smart auto-scroll: track when user scrolls away from bottom
+    this._userScrolledUp = false
 
     let _scrollRafPending = false
     this._scroll.addEventListener('scroll', () => {
@@ -390,6 +698,9 @@ export class CodexBlockRenderer {
       _scrollRafPending = true
       requestAnimationFrame(() => {
         _scrollRafPending = false
+        const s = this._scroll
+        const atBottom = s.scrollHeight - s.scrollTop - s.clientHeight < 40
+        this._userScrolledUp = !atBottom
         this._updateScrollBtn()
       })
     }, { passive: true })
@@ -417,9 +728,25 @@ export class CodexBlockRenderer {
     this._liveAgentBlock = null
     this._liveAgentItemId = null
     this._liveAgentText = ''
+    this._liveAgentRenderTimer = null  // throttle markdown re-render during streaming
+    this._thinkingBlockEl = null       // SDK thinking indicator block
+    this._thinkingStartTime = 0         // timestamp for elapsed timer
+
+    // SDK mode: when codex-event messages arrive, we render from structured
+    // events instead of PTY text. The driver also sends formatted PTY text
+    // (codexBroadcast) for the same events — suppress that to avoid duplicates.
+    this._sdkMode = false
+
+    // Track active SDK command blocks by item ID for proper finalization
+    this._sdkCommandBlocks = new Map()
 
     // Update/tip notice dedup — only show once per session
     this._shownUpdateNotice = false
+
+    // Session stats bar — shows block/command/file-change/turn counts
+    this._statsBar = document.createElement('div')
+    this._statsBar.className = 'cbx-stats-bar'
+    container.appendChild(this._statsBar)
 
     // P2: Loading indicator — show "Connecting…" until WS ready
     this._connectingEl = document.createElement('div')
@@ -456,6 +783,18 @@ export class CodexBlockRenderer {
     // P2: Welcome screen dedup — track content fingerprints already rendered
     this._renderedContentHashes = new Set()
 
+    // Keyboard shortcuts: Ctrl+Shift+F = toggle fold all blocks
+    this._foldAllHandler = (e) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'F') {
+        e.preventDefault()
+        const blocks = this._scroll.querySelectorAll('[data-fold]')
+        const anyOpen = [...blocks].some(b => b.getAttribute('data-fold') === 'full')
+        const newFold = anyOpen ? 'header' : 'full'
+        blocks.forEach(b => b.setAttribute('data-fold', newFold))
+      }
+    }
+    document.addEventListener('keydown', this._foldAllHandler)
+
     this._connect()
   }
 
@@ -487,10 +826,17 @@ export class CodexBlockRenderer {
     // Reset response block tracking: new turn always starts a fresh block
     this._lastResponseBlockEl = null
     this._lastResponseBlockTs = 0
+    // Resume auto-scroll on new input
+    this._userScrolledUp = false
   }
 
   sendRaw(data) {
     if (data === '\x03') {
+      // Ctrl+C: POST interrupt API (matches Claude tab behavior)
+      if (this.projectId && this.tabId) {
+        fetch(`/api/projects/${this.projectId}/tabs/${this.tabId}/interrupt`, { method: 'POST' })
+          .catch(() => {})
+      }
       this._addSystemBlock('[Interrupted]')
       this._send({ type: 'input', data })
     }
@@ -502,6 +848,10 @@ export class CodexBlockRenderer {
   dispose() {
     clearTimeout(this._reconnectTimer)
     this._stopPing()
+    if (this._foldAllHandler) {
+      document.removeEventListener('keydown', this._foldAllHandler)
+      this._foldAllHandler = null
+    }
     if (this._ws) {
       this._ws.onclose = null
       this._ws.close()
@@ -632,6 +982,11 @@ export class CodexBlockRenderer {
       for (const line of lines) this._processLine(line.replace(/\r/g, ''))
       return
     }
+
+    // SDK mode: when codex-event messages drive rendering, suppress PTY text
+    // to avoid duplicate blocks. The driver sends formatted text for the same
+    // events (command_execution, file_change, turn boundaries) — skip it.
+    if (this._sdkMode) return
 
     // ── Sync output (ESC[?2026h/l) boundary detection ───────────────────────
     // Codex CLI uses DEC private mode 2026 for frame-level batching.
@@ -898,12 +1253,29 @@ export class CodexBlockRenderer {
       `<span class="cbx-altscreen-icon">${iconText}</span>` +
       `<span class="cbx-altscreen-label">${labelText}</span>` +
       (isWelcome ? '' : `<span class="cbx-altscreen-done">✓ done</span>`) +
+      (isWelcome ? '' : `<button class="cbx-copy-output-btn" type="button" title="Copy output" aria-label="Copy output">Copy</button>`) +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
       `</button>` +
       `</div>` +
       `<div class="cbx-altscreen-body cbx-sync-body"></div>` +
       `</div>`
+
+    // Copy output button for non-welcome blocks
+    if (!isWelcome) {
+      const copyBtn = article.querySelector('.cbx-copy-output-btn')
+      if (copyBtn) {
+        copyBtn.addEventListener('click', (e) => {
+          e.stopPropagation()
+          const body = article.querySelector('.cbx-sync-body')
+          const text = body ? body.textContent : ''
+          navigator.clipboard.writeText(text).then(() => {
+            copyBtn.textContent = 'Copied!'
+            setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
+          }).catch(() => {})
+        })
+      }
+    }
 
     // P3: Render each line as a separate div for proper line breaks
     const bodyEl = article.querySelector('.cbx-sync-body')
@@ -1117,6 +1489,7 @@ export class CodexBlockRenderer {
       `<span class="cbx-altscreen-icon">◈</span>` +
       `<span class="cbx-altscreen-label">Codex Response</span>` +
       `<span class="cbx-altscreen-done">✓ done</span>` +
+      `<button class="cbx-copy-output-btn" type="button" title="Copy output" aria-label="Copy output">Copy</button>` +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
       `</button>` +
@@ -1126,6 +1499,18 @@ export class CodexBlockRenderer {
 
     // Set text content safely (no HTML injection)
     article.querySelector('.cbx-altscreen-body').textContent = text
+
+    // Copy output button handler
+    const copyBtn = article.querySelector('.cbx-copy-output-btn')
+    if (copyBtn) {
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        navigator.clipboard.writeText(text).then(() => {
+          copyBtn.textContent = 'Copied!'
+          setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
+        }).catch(() => {})
+      })
+    }
 
     // Click/touch header to toggle fold: full ↔ header
     const header = article.querySelector('.cbx-altscreen-header')
@@ -1258,25 +1643,45 @@ export class CodexBlockRenderer {
       this._statusBannerEl.remove()
       this._statusBannerEl = null
     }
+    this._stats.commands++
 
     const article = this._makeBlock('cbx-block-bash')
     const foldLevel = getFoldLevel()
     article.setAttribute('data-fold', foldLevel)
 
     const cmdHtml = `<code class="cbx-bash-cmd">${escHtml(cmd)}</code>`
+    const icon = _cmdIcon(cmd)
+    const now = new Date()
+    const ts = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
 
     article.innerHTML =
       `<div class="cbx-bash-card">` +
       `<div class="cbx-bash-header">` +
-      `<span class="cbx-bash-icon">$</span>` +
+      `<span class="cbx-bash-icon">${escHtml(icon)}</span>` +
       `<span class="cbx-bash-cmd-text">${cmdHtml}</span>` +
+      `<span class="cbx-bash-ts">${ts}</span>` +
       `<span class="cbx-bash-status cbx-bash-running">running…</span>` +
+      `<button class="cbx-copy-output-btn" type="button" title="Copy output" aria-label="Copy output">Copy</button>` +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
       `</button>` +
       `</div>` +
       `<pre class="cbx-bash-output cbx-bash-body"></pre>` +
       `</div>`
+
+    // Copy output button handler
+    const copyBtn = article.querySelector('.cbx-copy-output-btn')
+    if (copyBtn) {
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const output = article.querySelector('.cbx-bash-output')
+        const text = output ? output.textContent : ''
+        navigator.clipboard.writeText(text).then(() => {
+          copyBtn.textContent = 'Copied!'
+          setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
+        }).catch(() => {})
+      })
+    }
 
     // Click/touch header to toggle fold: full ↔ header
     const header = article.querySelector('.cbx-bash-header')
@@ -1297,23 +1702,40 @@ export class CodexBlockRenderer {
   _appendToBashOutput(line) {
     if (!this._currentBashBlock) return
     this._currentBashBlock.outputLines.push(line)
-    const lines = this._currentBashBlock.outputLines
+    this._renderBashOutput()
+    this._scrollBottom()
+  }
+
+  _renderBashOutput(showAll = false) {
+    if (!this._currentBashBlock) return
+    const bb = this._currentBashBlock
+    const lines = bb.outputLines
     const text = lines.join('\n')
     const MAX_CHARS = 4000
     const MAX_LINES = 80
-    const isTooLong = text.length > MAX_CHARS || lines.length > MAX_LINES
-    let display
+    const isTooLong = !showAll && (text.length > MAX_CHARS || lines.length > MAX_LINES)
+
+    // Remove existing "Show all" button if any
+    const existingBtn = bb.article.querySelector('.cbx-show-all-btn')
+    if (existingBtn) existingBtn.remove()
+
     if (isTooLong) {
-      // Show first MAX_LINES lines only, with a clear truncation notice
       const kept = lines.slice(0, MAX_LINES)
       const dropped = lines.length - kept.length
-      const keptText = kept.join('\n').slice(0, MAX_CHARS)
-      display = keptText + `\n\n… [${dropped} more lines hidden — scroll terminal for full output]`
+      bb.outputEl.textContent = kept.join('\n').slice(0, MAX_CHARS) + `\n\n… [${dropped} more lines hidden]`
+      // Add expandable "Show all" button
+      const btn = document.createElement('button')
+      btn.className = 'cbx-show-all-btn'
+      btn.textContent = `Show all ${lines.length} lines`
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        bb._expanded = true
+        this._renderBashOutput(true)
+      })
+      bb.outputEl.parentElement.appendChild(btn)
     } else {
-      display = text
+      bb.outputEl.textContent = text
     }
-    this._currentBashBlock.outputEl.textContent = display
-    this._scrollBottom()
   }
 
   _finalizeBashBlockWithExit(exitLine) {
@@ -1330,6 +1752,10 @@ export class CodexBlockRenderer {
       if (isSuccess) {
         statusEl.className = 'cbx-bash-status cbx-bash-ok'
         statusEl.textContent = '✓ exit 0'
+        // Auto-fold successful commands to save screen space (like claude tab)
+        if (article.getAttribute('data-fold') === 'full') {
+          article.setAttribute('data-fold', 'header')
+        }
       } else {
         statusEl.className = 'cbx-bash-status cbx-bash-err'
         statusEl.textContent = `✗ exit ${exitCode}`
@@ -1395,6 +1821,162 @@ export class CodexBlockRenderer {
     this._scrollBottom()
   }
 
+  /** Render a file change block from SDK file_change events. */
+  _addFileChangeBlock(kind, filePath, change = null) {
+    this._stats.fileChanges++
+    const icon = kind === 'create' ? '+' : kind === 'delete' ? '−' : '✏'
+    const kindLabel = kind === 'create' ? 'created' : kind === 'delete' ? 'deleted' : 'modified'
+    const shortPath = filePath
+      .replace(/^\/storage\/home\/[^/]+\//, '~/')
+      .replace(/^\/home\/[^/]+\//, '~/')
+
+    const article = this._makeBlock('cbx-block-filechange')
+    const foldLevel = getFoldLevel()
+    article.setAttribute('data-fold', foldLevel)
+
+    let diffHtml = ''
+    if (change && (change.old_content != null || change.new_content != null)) {
+      diffHtml = this._buildSimpleDiff(change.old_content || '', change.new_content || '', kind)
+    }
+
+    article.innerHTML =
+      `<div class="cbx-filechange-card">` +
+      `<div class="cbx-filechange-header">` +
+      `<span class="cbx-filechange-icon cbx-filechange-${kind}">${icon}</span>` +
+      `<span class="cbx-filechange-path">${escHtml(shortPath)}</span>` +
+      `<span class="cbx-filechange-kind">${kindLabel}</span>` +
+      (diffHtml ? `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>` : '') +
+      `</div>` +
+      (diffHtml ? `<div class="cbx-filechange-diff">${diffHtml}</div>` : '') +
+      `</div>`
+
+    if (diffHtml) {
+      const header = article.querySelector('.cbx-filechange-header')
+      _attachFoldToggle(header, article)
+      // Attach expand handlers for collapsed context sections
+      const diffData = this._lastDiffData
+      if (diffData) {
+        article.querySelectorAll('.cbx-diff-expandable').forEach(el => {
+          el.style.cursor = 'pointer'
+          el.addEventListener('click', (e) => {
+            e.stopPropagation()
+            const start = parseInt(el.dataset.start, 10)
+            const end = parseInt(el.dataset.end, 10)
+            if (isNaN(start) || isNaN(end)) return
+            const lines = []
+            for (let k = start; k < end; k++) {
+              const entry = diffData.diffResult[k]
+              const ln = diffData.lineNums[k]
+              if (!entry) continue
+              const oldN = ln?.old != null ? ln.old : ''
+              const newN = ln?.new != null ? ln.new : ''
+              lines.push(`<div class="cbx-diff-line cbx-diff-equal"><span class="cbx-diff-lno">${oldN}</span><span class="cbx-diff-lno">${newN}</span><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">${escHtml(entry.line)}</span></div>`)
+            }
+            const frag = document.createRange().createContextualFragment(lines.join(''))
+            el.parentNode.insertBefore(frag, el)
+            el.remove()
+          })
+        })
+        this._lastDiffData = null
+      }
+    }
+
+    this._scroll.appendChild(article)
+    this._scrollBottom()
+  }
+
+  _buildSimpleDiff(oldContent, newContent, kind) {
+    if (kind === 'create') {
+      const lines = newContent.split('\n').slice(0, 50)
+      return lines.map(l => `<div class="cbx-diff-line cbx-diff-added"><span class="cbx-diff-gutter">+</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
+        + (newContent.split('\n').length > 50 ? `<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… ${newContent.split('\n').length - 50} more lines</span></div>` : '')
+    }
+    if (kind === 'delete') {
+      const lines = oldContent.split('\n').slice(0, 50)
+      return lines.map(l => `<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
+    }
+    // Modified: LCS-based diff with context collapse + word-level highlights
+    const diffResult = _computeLineDiff(oldContent, newContent)
+    const CTX = 3
+    const show = new Uint8Array(diffResult.length)
+    for (let i = 0; i < diffResult.length; i++) {
+      if (diffResult[i].type !== 'equal') {
+        for (let j = Math.max(0, i - CTX); j <= Math.min(diffResult.length - 1, i + CTX); j++) show[j] = 1
+      }
+    }
+    // Track line numbers
+    let oldLine = 1, newLine = 1
+    const lineNums = diffResult.map(entry => {
+      const r = { old: null, new: null }
+      if (entry.type === 'equal') { r.old = oldLine++; r.new = newLine++ }
+      else if (entry.type === 'removed') { r.old = oldLine++ }
+      else if (entry.type === 'added') { r.new = newLine++ }
+      return r
+    })
+    // Pre-compute word-level diffs for adjacent removed/added pairs
+    const wordDiffs = new Map()
+    for (let i = 0; i < diffResult.length - 1; i++) {
+      if (diffResult[i].type === 'removed' && diffResult[i + 1].type === 'added') {
+        const wd = _wordDiff(diffResult[i].line, diffResult[i + 1].line)
+        if (wd) { wordDiffs.set(i, wd.oldHtml); wordDiffs.set(i + 1, wd.newHtml) }
+      }
+    }
+    const result = []
+    let rendered = 0
+    let skippedStart = -1
+    let skippedCount = 0
+    const _flushSkipped = () => {
+      if (skippedCount <= 0) return
+      // data-start/data-end encode the range of hidden diff entries for expand
+      result.push(
+        `<div class="cbx-diff-line cbx-diff-collapse cbx-diff-expandable" ` +
+        `data-start="${skippedStart}" data-end="${skippedStart + skippedCount}" ` +
+        `title="Click to expand">` +
+        `<span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span>` +
+        `<span class="cbx-diff-gutter">\u22EF</span>` +
+        `<span class="cbx-diff-text">${skippedCount} unchanged lines</span></div>`)
+      skippedStart = -1
+      skippedCount = 0
+    }
+    for (let i = 0; i < diffResult.length; i++) {
+      if (rendered >= 200) {
+        _flushSkipped()
+        result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">\u2026 ${diffResult.length - i} more lines</span></div>`)
+        break
+      }
+      if (!show[i]) {
+        if (skippedCount === 0) skippedStart = i
+        skippedCount++
+        continue
+      }
+      _flushSkipped()
+      const entry = diffResult[i]
+      const ln = lineNums[i]
+      const cls = entry.type === 'added' ? 'cbx-diff-added' : entry.type === 'removed' ? 'cbx-diff-removed' : 'cbx-diff-equal'
+      const gutter = entry.type === 'added' ? '+' : entry.type === 'removed' ? '-' : ' '
+      const oldN = ln.old != null ? ln.old : ''
+      const newN = ln.new != null ? ln.new : ''
+      // Use word-level highlight if available, otherwise plain escHtml
+      const textHtml = wordDiffs.has(i) ? wordDiffs.get(i) : escHtml(entry.line)
+      result.push(`<div class="cbx-diff-line ${cls}"><span class="cbx-diff-lno">${oldN}</span><span class="cbx-diff-lno">${newN}</span><span class="cbx-diff-gutter">${gutter}</span><span class="cbx-diff-text">${textHtml}</span></div>`)
+      rendered++
+    }
+    _flushSkipped()
+    // Store diffResult + lineNums on a closure for expand clicks
+    this._lastDiffData = { diffResult, lineNums }
+    return result.join('')
+  }
+
+  /** Render a visual turn separator. */
+  _addTurnSeparator() {
+    this._stats.turns++
+    this._updateStatsBar()
+    const el = document.createElement('div')
+    el.className = 'cbx-turn-sep'
+    this._scroll.appendChild(el)
+    this._scrollBottom()
+  }
+
   _appendTextLine(line) {
     // Clear status banner since we got actual text
     if (this._statusBannerEl) {
@@ -1404,21 +1986,37 @@ export class CodexBlockRenderer {
 
     // Check if last block is a text block we can append to
     const last = this._scroll.lastElementChild
-    if (last && last.classList.contains('cbx-block-text')) {
-      const pre = last.querySelector('.cbx-text-pre')
-      if (pre) {
-        pre.textContent += '\n' + line
-        this._scrollBottom()
-        return
+    if (last && last.classList.contains('cbx-block-text') && !last.classList.contains('cbx-live')) {
+      // Accumulate raw text and re-render as markdown
+      last._rawText = (last._rawText || '') + '\n' + line
+      const div = last.querySelector('.cbx-text-md') || last.querySelector('.cbx-text-pre')
+      if (div) {
+        const html = _renderCbxMarkdown(last._rawText, { streaming: true })
+        if (html && div.classList.contains('cbx-text-md')) {
+          div.innerHTML = html
+          _highlightCodeBlocks(div)
+        } else if (div.classList.contains('cbx-text-pre')) {
+          div.textContent += '\n' + line
+        }
       }
+      this._scrollBottom()
+      return
     }
 
-    // Create new text block
+    // Create new text block with markdown rendering
     const article = this._makeBlock('cbx-block-text')
-    const pre = document.createElement('pre')
-    pre.className = 'cbx-text-pre'
-    pre.textContent = line
-    article.appendChild(pre)
+    article._rawText = line
+    const div = document.createElement('div')
+    div.className = 'cbx-text-md'
+    const html = _renderCbxMarkdown(line, { streaming: true })
+    if (html) {
+      div.innerHTML = html
+      _highlightCodeBlocks(div)
+      _attachCopyHandlers(div)
+    } else {
+      div.textContent = line
+    }
+    article.appendChild(div)
     this._scroll.appendChild(article)
     this._scrollBottom()
   }
@@ -1460,13 +2058,35 @@ export class CodexBlockRenderer {
   // ── Utility blocks ────────────────────────────────────────────────────────────
 
   _makeBlock(extraClasses = '') {
+    // Finalize auto-linking on previous text blocks before creating a new block
+    this._finalizePreviousTextBlocks()
     const article = document.createElement('article')
     article.className = `cbx-block ${extraClasses}`.trim()
+    // Timestamp badge
+    const now = new Date()
+    const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`
+    article.setAttribute('data-ts', ts)
+    this._stats.blocks++
+    this._updateStatsBar()
     return article
   }
 
+  /** Apply auto-linking to text blocks that are no longer being appended to. */
+  _finalizePreviousTextBlocks() {
+    if (!this._scroll) return
+    const last = this._scroll.lastElementChild
+    if (last && last.classList.contains('cbx-block-text') && !last.classList.contains('cbx-live')
+        && !last._linksAttached) {
+      last._linksAttached = true
+      const md = last.querySelector('.cbx-text-md')
+      if (md) _attachPathAndUrlLinks(md)
+    }
+  }
+
   _addSystemBlock(msg) {
-    const article = this._makeBlock('cbx-block-system')
+    const isError = /\[Error|error|failed|lost/i.test(msg)
+    const cls = isError ? 'cbx-block-system cbx-block-error' : 'cbx-block-system'
+    const article = this._makeBlock(cls)
     article.innerHTML = `<p class="cbx-system">${escHtml(msg)}</p>`
     this._scroll.appendChild(article)
     this._scrollBottom()
@@ -1486,8 +2106,177 @@ export class CodexBlockRenderer {
 
   _handleCodexEvent(event) {
     if (!event) return
-    if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
-      this._finalizeAgentMessage(event.item.id)
+
+    // Enter SDK mode on first structured event — suppresses duplicate PTY text
+    this._sdkMode = true
+
+    // S5: forward todo_list events to the tasks panel
+    _maybeDispatchTodoUpdate(event, this.tabId)
+
+    switch (event.type) {
+      case 'item.started':
+        this._handleSdkItemStarted(event.item)
+        break
+      case 'item.completed':
+        this._handleSdkItemCompleted(event.item)
+        break
+      case 'item.updated':
+        // agent_message text updates are handled by codex-stream-text
+        break
+      case 'turn.completed':
+        this._finalizeCurrentBlock()
+        this._finalizeAgentMessage()
+        this._removeThinkingBlock()
+        this._setThinking(false)
+        this._maybeAddUsageBlock(event)
+        this._addTurnSeparator()
+        // Dispatch turn-complete for notification system
+        document.dispatchEvent(new CustomEvent('nanocode:turn-complete', {
+          detail: { tabId: this.tabId },
+        }))
+        break
+      case 'turn.failed':
+        this._finalizeCurrentBlock()
+        this._finalizeAgentMessage()
+        this._removeThinkingBlock()
+        this._setThinking(false)
+        this._addSystemBlock(`[Error: ${event.error?.message || 'Codex turn failed'}]`)
+        this._maybeAddUsageBlock(event)
+        this._addTurnSeparator()
+        break
+      case 'error':
+        this._addSystemBlock(`[Error: ${event.message || 'Codex stream error'}]`)
+        break
+      case 'turn.started':
+        this._setThinking(true)
+        break
+      case 'rate_limit':
+        this._handleRateLimit(event)
+        break
+      case 'thread.started':
+        // informational — no visual rendering
+        break
+    }
+  }
+
+  /** Show a rate-limit warning with retry countdown (mirrors Claude tab). */
+  _handleRateLimit(event) {
+    const info = event.rate_limit_info || {}
+    const msg = info.retryAfterMs
+      ? `Rate limited \u2014 retry in ${(info.retryAfterMs / 1000).toFixed(0)}s`
+      : 'Rate limit warning'
+    this._addSystemBlock(`[${msg}]`)
+  }
+
+  _handleSdkItemStarted(item) {
+    if (!item) return
+
+    if (item.type === 'command_execution' && item.command) {
+      this._finalizeCurrentBlock()
+      this._finalizeAgentMessage()
+      this._removeThinkingBlock()
+      this._startBashBlock(item.command)
+      // Track by item ID for completion matching
+      if (item.id) this._sdkCommandBlocks.set(item.id, this._currentBashBlock)
+      this._setThinking(true)
+    }
+
+    if (item.type === 'file_change') {
+      this._finalizeCurrentBlock()
+      this._finalizeAgentMessage()
+      const changes = item.changes || []
+      for (const c of changes) {
+        this._addFileChangeBlock(c.kind || 'update', c.path || '', c)
+      }
+    }
+
+    if (item.type === 'agent_message') {
+      // Text will stream via codex-stream-text deltas
+      this._setThinking(true)
+      this._showThinkingBlock()
+    }
+
+    if (item.type === 'reasoning') {
+      this._setThinking(true)
+      this._showThinkingBlock()
+    }
+
+    if (item.type === 'mcp_tool_call') {
+      this._finalizeCurrentBlock()
+      this._finalizeAgentMessage()
+      this._removeThinkingBlock()
+      this._addMcpToolBlock(item)
+      this._setThinking(true)
+    }
+
+    if (item.type === 'web_search') {
+      this._finalizeCurrentBlock()
+      this._finalizeAgentMessage()
+      this._removeThinkingBlock()
+      this._addSystemBlock(`\uD83C\uDF10 Web search: ${item.query || ''}`)
+      this._setThinking(true)
+    }
+  }
+
+  _handleSdkItemCompleted(item) {
+    if (!item) return
+
+    if (item.type === 'agent_message') {
+      this._finalizeAgentMessage(item.id)
+      return
+    }
+
+    if (item.type === 'command_execution') {
+      // Restore the tracked bash block for this item ID
+      const tracked = item.id ? this._sdkCommandBlocks.get(item.id) : null
+      if (tracked) {
+        this._currentBashBlock = tracked
+        this._sdkCommandBlocks.delete(item.id)
+      }
+
+      if (this._currentBashBlock) {
+        // Add command output — batch all lines then render once (not per-line)
+        if (item.aggregated_output) {
+          const lines = item.aggregated_output.split('\n')
+          for (const line of lines) {
+            if (line) this._currentBashBlock.outputLines.push(line)
+          }
+          this._renderBashOutput()
+        }
+        // Finalize with exit code
+        const code = item.exit_code
+        if (code != null) {
+          const exitLine = code === 0 ? '✓ exit 0' : `✗ exit ${code}`
+          this._finalizeBashBlockWithExit(exitLine)
+        } else {
+          this._finalizeCurrentBlock()
+        }
+      }
+      this._setThinking(false)
+      return
+    }
+
+    if (item.type === 'file_change') {
+      const changes = item.changes || []
+      for (const c of changes) {
+        this._addFileChangeBlock(c.kind || 'update', c.path || '', c)
+      }
+      return
+    }
+
+    if (item.type === 'reasoning') {
+      this._removeThinkingBlock()
+      // Show reasoning text as a collapsible thinking block
+      if (item.text) {
+        this._addReasoningBlock(item.text)
+      }
+      return
+    }
+
+    if (item.type === 'mcp_tool_call') {
+      this._finalizeMcpToolBlock(item)
+      this._setThinking(false)
+      return
     }
   }
 
@@ -1502,23 +2291,42 @@ export class CodexBlockRenderer {
       this._finalizeAgentMessage(this._liveAgentItemId)
     }
 
+    // Remove thinking indicator once text starts streaming
+    this._removeThinkingBlock()
+
     this._liveAgentItemId = itemId
     this._liveAgentText += delta
 
     if (!this._liveAgentBlock) {
       const article = this._makeBlock('cbx-block-text cbx-live')
-      const pre = document.createElement('pre')
-      pre.className = 'cbx-text-pre'
-      article.appendChild(pre)
+      const div = document.createElement('div')
+      div.className = 'cbx-text-md'
+      article.appendChild(div)
       this._scroll.appendChild(article)
       this._liveAgentBlock = article
     }
 
-    const pre = this._liveAgentBlock.querySelector('.cbx-text-pre')
-    if (pre) {
-      pre.textContent = this._liveAgentText
+    // Throttle markdown re-rendering to every 150ms during streaming
+    if (!this._liveAgentRenderTimer) {
+      this._liveAgentRenderTimer = setTimeout(() => {
+        this._liveAgentRenderTimer = null
+        this._renderLiveAgentMarkdown(true)
+      }, 150)
     }
     this._scrollBottom()
+  }
+
+  _renderLiveAgentMarkdown(streaming) {
+    if (!this._liveAgentBlock) return
+    const div = this._liveAgentBlock.querySelector('.cbx-text-md')
+    if (!div) return
+    try {
+      let html = _renderCbxMarkdown(this._liveAgentText, { streaming })
+      if (streaming) html += '<span class="cbx-cursor"></span>'
+      div.innerHTML = html
+    } catch {
+      div.textContent = this._liveAgentText
+    }
   }
 
   _finalizeAgentMessage(itemId = null) {
@@ -1528,13 +2336,179 @@ export class CodexBlockRenderer {
       this._liveAgentText = ''
       return
     }
+    // Clear any pending render timer and do a final render
+    if (this._liveAgentRenderTimer) {
+      clearTimeout(this._liveAgentRenderTimer)
+      this._liveAgentRenderTimer = null
+    }
+    this._renderLiveAgentMarkdown(false)
+    _attachCopyHandlers(this._liveAgentBlock)
+    _highlightCodeBlocks(this._liveAgentBlock)
+    _attachPathAndUrlLinks(this._liveAgentBlock)
     this._liveAgentBlock.classList.remove('cbx-live')
     this._liveAgentBlock = null
     this._liveAgentItemId = null
     this._liveAgentText = ''
   }
 
-  _scrollBottom() {
+  _showThinkingBlock() {
+    if (this._thinkingBlockEl) return
+    this._thinkingStartTime = Date.now()
+    const el = document.createElement('div')
+    el.className = 'cbx-thinking-block'
+    el.innerHTML =
+      `<span class="cbx-thinking-dot"></span>` +
+      `<span class="cbx-thinking-label">Thinking…</span>` +
+      `<span class="cbx-thinking-elapsed"></span>`
+    this._scroll.appendChild(el)
+    this._thinkingBlockEl = el
+    // Update elapsed timer every second
+    this._thinkingTimer = setInterval(() => {
+      if (!this._thinkingBlockEl) return
+      const elapsed = ((Date.now() - this._thinkingStartTime) / 1000) | 0
+      const elEl = this._thinkingBlockEl.querySelector('.cbx-thinking-elapsed')
+      if (elEl) elEl.textContent = elapsed > 0 ? `${elapsed}s` : ''
+    }, 1000)
+    this._scrollBottom()
+  }
+
+  _removeThinkingBlock() {
+    if (this._thinkingTimer) {
+      clearInterval(this._thinkingTimer)
+      this._thinkingTimer = null
+    }
+    if (!this._thinkingBlockEl) return
+    this._thinkingBlockEl.remove()
+    this._thinkingBlockEl = null
+  }
+
+  /** Render a reasoning (thinking) summary as a collapsible block. */
+  _addReasoningBlock(text) {
+    const article = this._makeBlock('cbx-block-reasoning')
+    article.setAttribute('data-fold', 'header')
+    // Extract first sentence or 120 chars for preview
+    const firstSentence = text.match(/^[^.!?\n]+[.!?]?/)?.[0] || ''
+    const preview = firstSentence.length > 120 ? firstSentence.slice(0, 120) + '\u2026' : firstSentence
+    const elapsed = this._thinkingStartTime ? `${(((Date.now() - this._thinkingStartTime) / 1000) | 0)}s` : ''
+    article.innerHTML =
+      `<div class="cbx-reasoning-card">` +
+      `<div class="cbx-reasoning-header">` +
+      `<span class="cbx-reasoning-icon">\uD83D\uDCA1</span>` +
+      `<span class="cbx-reasoning-label">Thinking</span>` +
+      (elapsed ? `<span class="cbx-thinking-elapsed">${elapsed}</span>` : '') +
+      `<span class="cbx-reasoning-preview">${escHtml(preview)}</span>` +
+      `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
+      `</button>` +
+      `</div>` +
+      `<div class="cbx-reasoning-body"></div>` +
+      `</div>`
+    // Render body as markdown for better readability
+    const bodyEl = article.querySelector('.cbx-reasoning-body')
+    const html = _renderCbxMarkdown(text)
+    if (html) {
+      bodyEl.innerHTML = html
+      _highlightCodeBlocks(bodyEl)
+      _attachCopyHandlers(bodyEl)
+    } else {
+      bodyEl.textContent = text
+    }
+    const header = article.querySelector('.cbx-reasoning-header')
+    _attachFoldToggle(header, article)
+    this._scroll.appendChild(article)
+    this._scrollBottom()
+  }
+
+  /** Render an MCP tool call block (started state). */
+  _addMcpToolBlock(item) {
+    const article = this._makeBlock('cbx-block-mcp')
+    article.setAttribute('data-fold', getFoldLevel())
+    const toolName = item.tool || 'tool'
+    const serverName = item.server || ''
+    article.innerHTML =
+      `<div class="cbx-mcp-card">` +
+      `<div class="cbx-mcp-header">` +
+      `<span class="cbx-mcp-icon">\uD83D\uDD27</span>` +
+      `<span class="cbx-mcp-tool">${escHtml(toolName)}</span>` +
+      (serverName ? `<span class="cbx-mcp-server">${escHtml(serverName)}</span>` : '') +
+      `<span class="cbx-bash-status cbx-bash-running">running\u2026</span>` +
+      `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
+      `</button>` +
+      `</div>` +
+      `<pre class="cbx-mcp-body"></pre>` +
+      `</div>`
+    if (item.arguments) {
+      try {
+        article.querySelector('.cbx-mcp-body').textContent = typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments, null, 2)
+      } catch { /* ignore */ }
+    }
+    const header = article.querySelector('.cbx-mcp-header')
+    _attachFoldToggle(header, article)
+    this._scroll.appendChild(article)
+    this._scrollBottom()
+    // Track by item ID
+    if (item.id) this._sdkCommandBlocks.set(item.id, { article, type: 'mcp' })
+  }
+
+  /** Finalize an MCP tool call block with result/error. */
+  _finalizeMcpToolBlock(item) {
+    const tracked = item.id ? this._sdkCommandBlocks.get(item.id) : null
+    if (tracked && tracked.type === 'mcp') {
+      this._sdkCommandBlocks.delete(item.id)
+      const statusEl = tracked.article.querySelector('.cbx-bash-status')
+      if (item.error) {
+        if (statusEl) {
+          statusEl.className = 'cbx-bash-status cbx-bash-err'
+          statusEl.textContent = '\u2717 error'
+        }
+        const body = tracked.article.querySelector('.cbx-mcp-body')
+        if (body) body.textContent += '\n\nError: ' + (item.error.message || JSON.stringify(item.error))
+      } else {
+        if (statusEl) {
+          statusEl.className = 'cbx-bash-status cbx-bash-ok'
+          statusEl.textContent = '\u2713 done'
+        }
+        // Auto-fold on success
+        tracked.article.setAttribute('data-fold', 'header')
+      }
+    }
+  }
+
+  /** Render a usage/token/cost block from turn.completed event (mirrors Claude tab). */
+  _maybeAddUsageBlock(event) {
+    if (!event) return
+    const usage = event.usage
+    if (!usage) return
+    const parts = []
+    if (usage.input_tokens != null) parts.push(`in ${usage.input_tokens.toLocaleString()}`)
+    if (usage.output_tokens != null) parts.push(`out ${usage.output_tokens.toLocaleString()}`)
+    // SDK uses cached_input_tokens; Claude uses cache_read_input_tokens — handle both
+    const cached = usage.cached_input_tokens ?? usage.cache_read_input_tokens
+    if (cached != null) parts.push(`cached ${cached.toLocaleString()}`)
+    if (usage.reasoning_output_tokens != null) parts.push(`reasoning ${usage.reasoning_output_tokens.toLocaleString()}`)
+    if (event.cost_usd != null) parts.push(`$${Number(event.cost_usd).toFixed(4)}`)
+    if (parts.length) {
+      const article = this._makeBlock('cbx-block-usage')
+      article.innerHTML = `<p class="cbx-usage">${escHtml(parts.join(' \u00b7 '))}</p>`
+      this._scroll.appendChild(article)
+      this._scrollBottom()
+    }
+  }
+
+  _updateStatsBar() {
+    if (!this._statsBar) return
+    const s = this._stats
+    this._statsBar.innerHTML =
+      `<span class="cbx-stats-item" title="Total blocks">◈ ${s.blocks}</span>` +
+      `<span class="cbx-stats-item" title="Commands">$ ${s.commands}</span>` +
+      `<span class="cbx-stats-item" title="File changes">✏ ${s.fileChanges}</span>` +
+      `<span class="cbx-stats-item" title="Turns">↻ ${s.turns}</span>`
+  }
+
+  _scrollBottom({ force = false } = {}) {
+    // Smart auto-scroll: if user has scrolled up to read, don't force-scroll
+    if (!force && this._userScrolledUp) return
     requestAnimationFrame(() => {
       this._scroll.scrollTop = this._scroll.scrollHeight
       this._updateScrollBtn()

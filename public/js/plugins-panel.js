@@ -78,7 +78,84 @@ function renderError(pane, err) {
 function renderTeamModelContent(pane, teamsRes, modelsRes, snapshotRes, codexRes) {
   pane.innerHTML = ''
   pane.appendChild(renderTeamSection(pane, teamsRes))
+  pane.appendChild(renderSessionTeamSection(pane, teamsRes))
   pane.appendChild(renderModelSection(modelsRes, snapshotRes, codexRes))
+}
+
+// Per-session team controls for the ACTIVE claude tab: move THIS conversation to
+// another team now (copy transcript + switch org quota + upgrade model), and a
+// failover opt-in toggle (auto-switch on 429 / org spend limit). Reads the active
+// claude tab exposed by terminal-view (window.__nanocodeActiveClaudeTab).
+function renderSessionTeamSection(pane, teamsRes) {
+  const section = document.createElement('div')
+  section.className = 'rp-section'
+  const title = document.createElement('div')
+  title.className = 'rp-section-title'
+  title.textContent = t('plugins.sessionTeam.title')
+  section.appendChild(title)
+
+  const active = (typeof window !== 'undefined' && window.__nanocodeActiveClaudeTab) || null
+  if (!active || !active.tabId) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = t('plugins.sessionTeam.noTab')
+    section.appendChild(empty)
+    return section
+  }
+  const teams = (teamsRes?.teams || []).filter((x) => x.exists)
+  const curDir = active.claudeConfigDir || (teams.find((x) => x.id === 'team1')?.path) || ''
+  const nameOf = (dir) => teams.find((x) => x.path === dir)?.name || (dir ? dir.split('/').pop() : '—')
+
+  const cur = document.createElement('div')
+  cur.className = 'rp-hint'
+  cur.textContent = t('plugins.sessionTeam.current') + '：' + nameOf(curDir)
+  section.appendChild(cur)
+
+  // Switch buttons for every OTHER team.
+  for (const team of teams) {
+    if (team.path === curDir) continue
+    const btn = document.createElement('button')
+    btn.className = 'rp-btn'
+    btn.textContent = t('plugins.sessionTeam.switchTo') + ' ' + team.name
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      try {
+        const r = await fetch(`/api/projects/${active.projectId}/tabs/${active.tabId}/switch-team`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetConfigDir: team.path }),
+        })
+        const j = await r.json().catch(() => ({}))
+        flashStatus(pane, j.ok ? `${t('plugins.sessionTeam.switched')} ${team.name}（${j.model || ''}）` : (j.error || 'failed'), !j.ok)
+        if (j.ok) { active.claudeConfigDir = team.path; usageLoaded = false }
+        renderTeamModelPane(pane)
+      } catch (err) { flashStatus(pane, String(err.message || err), true); btn.disabled = false }
+    })
+    section.appendChild(btn)
+  }
+
+  // Failover opt-in toggle (auto-switch on 429 / org spend limit).
+  const row = document.createElement('label')
+  row.className = 'rp-option'
+  const cb = document.createElement('input')
+  cb.type = 'checkbox'
+  cb.checked = !!active.allowTeamFailover
+  cb.addEventListener('change', async () => {
+    try {
+      await fetch(`/api/projects/${active.projectId}/tabs/${active.tabId}/failover`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowTeamFailover: cb.checked }),
+      })
+      active.allowTeamFailover = cb.checked
+      flashStatus(pane, cb.checked ? t('plugins.sessionTeam.failoverOn') : t('plugins.sessionTeam.failoverOff'))
+    } catch (err) { flashStatus(pane, String(err.message || err), true) }
+  })
+  const lab = document.createElement('span')
+  lab.className = 'rp-option-label'
+  lab.textContent = t('plugins.sessionTeam.failover')
+  row.appendChild(cb)
+  row.appendChild(lab)
+  section.appendChild(row)
+  return section
 }
 
 function renderTeamSection(pane, teamsRes) {
@@ -341,40 +418,170 @@ async function onEffortChange(effort) {
 
 export async function renderUsagePane(pane) {
   if (!pane) return
-  if (!usageLoaded) {
-    pane.innerHTML = ''
-    pane.appendChild(buildSkeleton())
-    usageLoaded = true
-  }
-  try {
-    await ensureSettings()
-    // Fetch usage sources in parallel. Each endpoint degrades to
-    // { error } on failure (never rejects) so a missing opencode DB does not
-    // hide the claude panel, and vice-versa. The summary endpoint drives the
-    // MES-13788 three-source CodexBar-style card at the top.
-    const [usage, opencode, summary] = await Promise.all([
-      fetch('/api/usage/claude').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
-      fetch('/api/usage/opencode').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
-      fetch('/api/usage/summary').then((r) => r.json()).catch(() => ({ error: 'fetch failed' })),
-    ])
-    renderUsageContent(pane, usage, opencode, summary)
-  } catch (err) {
-    renderError(pane, err)
-  }
-}
-
-function renderUsageContent(pane, usage, opencode, summary) {
   pane.innerHTML = ''
+  usageLoaded = true
+
   const refreshBtn = document.createElement('button')
   refreshBtn.className = 'rp-refresh-btn'
   refreshBtn.textContent = t('usage.refresh')
-  refreshBtn.addEventListener('click', () => { usageLoaded = false; renderUsagePane(pane) })
+  refreshBtn.addEventListener('click', () => renderUsagePane(pane))
   pane.appendChild(refreshBtn)
 
-  pane.appendChild(renderUsageSummarySection(summary))
-  pane.appendChild(renderClaudeUsageSection(usage))
-  pane.appendChild(renderOpencodeUsageSection(opencode))
-  pane.appendChild(renderAigwProbeSection(pane))
+  // Per-section slots rendered INDEPENDENTLY: a slow source must never block a
+  // fast one. /api/usage/summary hits AIGW (~10s); /api/usage/claude reads jsonl
+  // (~0.4s). The old code awaited Promise.all([all four]) then painted once, so
+  // Claude Token usage sat behind the 10s summary and looked "missing". Now each
+  // fetch fills its own slot as it resolves — fastest paints first.
+  const slot = () => {
+    const d = document.createElement('div')
+    const stub = document.createElement('div')
+    stub.className = 'rp-empty'
+    stub.textContent = t('usage.summary.loading')
+    d.appendChild(stub)
+    pane.appendChild(d)
+    return d
+  }
+  const budgetSlot = slot()
+  const summarySlot = slot()
+  const claudeSlot = slot()
+  const opencodeSlot = slot()
+  const probeSlot = slot()
+
+  try { await ensureSettings() } catch {}
+
+  const fill = (s, el) => { s.innerHTML = ''; s.appendChild(el) }
+  const j = (url) => fetch(url).then((r) => r.json()).catch(() => ({ error: 'fetch failed' }))
+
+  // Probe section needs no fetch — render immediately.
+  fill(probeSlot, renderAigwProbeSection(pane))
+  // Fire each source independently; whichever resolves first paints first.
+  j('/api/usage/aigw-budget').then((d) => fill(budgetSlot, renderAigwBudgetSection(d)))
+  j('/api/usage/claude').then((d) => fill(claudeSlot, renderClaudeUsageSection(d)))
+  j('/api/usage/opencode').then((d) => fill(opencodeSlot, renderOpencodeUsageSection(d)))
+  j('/api/usage/summary').then((d) => fill(summarySlot, renderUsageSummarySection(d)))
+}
+
+// ── AIGW monthly budget card (MES-13788 延续: /user/info 剩余额度 + 自适配档) ──
+// Headline card: remaining $ + progress bar (spent/max) + tier badge (colored
+// by strategy) + reset date / days-left + advice. Mobile 390×844 + touch ≥44px
+// handled by the .rp-budget-* CSS. Falls back to an honest unavailable state.
+function renderAigwBudgetSection(budget) {
+  const section = document.createElement('div')
+  section.className = 'rp-section rp-budget-card'
+  const title = document.createElement('div')
+  title.className = 'rp-section-title'
+  title.textContent = t('usage.budget.title')
+  section.appendChild(title)
+  const desc = document.createElement('div')
+  desc.className = 'rp-hint'
+  desc.textContent = t('usage.budget.desc')
+  section.appendChild(desc)
+
+  if (!budget || budget.error || !budget.available) {
+    const empty = document.createElement('div')
+    empty.className = 'rp-empty'
+    empty.textContent = budget?.error || t('usage.budget.unavailable')
+    section.appendChild(empty)
+    return section
+  }
+
+  const maxBudget = Number(budget.max_budget)
+  const spend = Number(budget.spend)
+  const remaining = Number(budget.remaining)
+  const pctUsed = Number(budget.pct_used)
+  const pctRem = Number(budget.pct_remaining)
+  const daysLeft = budget.days_left
+  const tier = budget.tier || 'BALANCED'
+
+  // Headline row: remaining $ (big) + tier badge (colored)
+  const head = document.createElement('div')
+  head.className = 'rp-budget-head'
+  const rem = document.createElement('div')
+  rem.className = 'rp-budget-remaining'
+  const remLabel = document.createElement('span')
+  remLabel.className = 'rp-budget-remaining-label'
+  remLabel.textContent = t('usage.budget.remaining')
+  const remVal = document.createElement('span')
+  remVal.className = 'rp-budget-remaining-value'
+  remVal.textContent = Number.isFinite(remaining) ? `$${remaining.toFixed(2)}` : '—'
+  rem.appendChild(remLabel)
+  rem.appendChild(remVal)
+  head.appendChild(rem)
+
+  const tierBadge = document.createElement('span')
+  tierBadge.className = `rp-tier-badge rp-tier-${tier.toLowerCase().replace(/_/g, '-')}`
+  tierBadge.textContent = t(`usage.budget.tier.${tier}`) || tier
+  tierBadge.title = t(`usage.budget.tierLabel.${tier}`) || ''
+  head.appendChild(tierBadge)
+  section.appendChild(head)
+
+  // Progress bar: spent fills toward max_budget. Color by severity (used%).
+  const bar = document.createElement('div')
+  bar.className = 'rp-budget-bar'
+  const fill = document.createElement('div')
+  fill.className = 'rp-budget-bar-fill'
+  if (Number.isFinite(pctUsed)) fill.style.width = `${Math.min(100, Math.max(0, pctUsed))}%`
+  if (pctUsed >= 90) fill.classList.add('rp-budget-bar-critical')
+  else if (pctUsed >= 75) fill.classList.add('rp-budget-bar-warning')
+  bar.appendChild(fill)
+  section.appendChild(bar)
+
+  // Meta: spent of total · reset · days-left
+  const meta = document.createElement('div')
+  meta.className = 'rp-budget-meta'
+  const spentCell = document.createElement('span')
+  spentCell.className = 'rp-budget-meta-cell'
+  const spentLab = document.createElement('span')
+  spentLab.className = 'rp-budget-meta-label'
+  spentLab.textContent = t('usage.budget.spend')
+  const spentVal = document.createElement('span')
+  spentVal.className = 'rp-budget-meta-value'
+  spentVal.textContent = Number.isFinite(spend) && Number.isFinite(maxBudget)
+    ? `$${spend.toFixed(2)} ${t('usage.budget.of')} $${maxBudget.toFixed(0)}${Number.isFinite(pctUsed) ? ` (${Math.round(pctUsed)}%)` : ''}`
+    : (Number.isFinite(spend) ? `$${spend.toFixed(2)}` : '—')
+  spentCell.appendChild(spentLab)
+  spentCell.appendChild(spentVal)
+  meta.appendChild(spentCell)
+
+  const resetCell = document.createElement('span')
+  resetCell.className = 'rp-budget-meta-cell'
+  const resetLab = document.createElement('span')
+  resetLab.className = 'rp-budget-meta-label'
+  resetLab.textContent = t('usage.budget.reset')
+  const resetVal = document.createElement('span')
+  resetVal.className = 'rp-budget-meta-value'
+  resetVal.textContent = fmtBudgetReset(budget.reset_at, daysLeft)
+  resetCell.appendChild(resetLab)
+  resetCell.appendChild(resetVal)
+  meta.appendChild(resetCell)
+  section.appendChild(meta)
+
+  // Advice line (tier strategy hint)
+  if (budget.advice) {
+    const advice = document.createElement('div')
+    advice.className = 'rp-hint rp-budget-advice'
+    advice.textContent = budget.advice
+    section.appendChild(advice)
+  }
+  if (budget.user_email) {
+    const who = document.createElement('div')
+    who.className = 'rp-hint rp-budget-user'
+    who.textContent = budget.user_email
+    section.appendChild(who)
+  }
+  return section
+}
+
+function fmtBudgetReset(resetAt, daysLeft) {
+  if (!resetAt) return t('usage.budget.noReset')
+  const ts = Date.parse(resetAt)
+  if (!Number.isFinite(ts)) return t('usage.budget.noReset')
+  const date = new Date(ts)
+  const dateStr = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+  if (Number.isFinite(Number(daysLeft)) && Number(daysLeft) >= 0) {
+    return `${dateStr} (${daysLeft} ${t('usage.budget.daysLeft')})`
+  }
+  return dateStr
 }
 
 // ── MES-13788 three-source usage summary (CodexBar-style) ─────────────────────
@@ -413,6 +620,17 @@ function renderUsageSummarySection(summary) {
     section.appendChild(renderUsageSourceCard(src))
   }
   return section
+}
+
+// Friendly model label: claude-opus-4-8 → "Opus 4.8", claude-sonnet-4-6 →
+// "Sonnet 4.6", claude-fable-5 → "Fable 5". Unknown models shown verbatim.
+function prettyModelName(model) {
+  const s = String(model || '')
+  const fam = /opus/i.test(s) ? 'Opus' : /sonnet/i.test(s) ? 'Sonnet'
+    : /haiku/i.test(s) ? 'Haiku' : /fable/i.test(s) ? 'Fable' : null
+  if (!fam) return s
+  const ver = s.match(/(\d+(?:[-.]\d+)?)/)
+  return ver ? `${fam} ${ver[1].replace('-', '.')}` : fam
 }
 
 function renderUsageSourceCard(src) {
@@ -455,6 +673,32 @@ function renderUsageSourceCard(src) {
   }
   for (const w of windows) {
     card.appendChild(renderUsageWindowRow(w))
+  }
+  // Per-model breakdown for this team (Fable / Opus / Sonnet / Haiku …). OAuth
+  // exposes no per-model limit, so this is token usage + message rows, from the
+  // team's own jsonl — not a limit bar.
+  if (Array.isArray(src.byModel) && src.byModel.length) {
+    const subTitle = document.createElement('div')
+    subTitle.className = 'rp-subtitle'
+    subTitle.textContent = t('usage.claude.byModel')
+    card.appendChild(subTitle)
+    const list = document.createElement('div')
+    list.className = 'rp-list'
+    for (const m of src.byModel) {
+      const r = document.createElement('div')
+      r.className = 'rp-list-row'
+      const nm = document.createElement('span')
+      nm.className = 'rp-list-name'
+      nm.textContent = prettyModelName(m.model)
+      nm.title = m.model
+      const val = document.createElement('span')
+      val.className = 'rp-list-val'
+      val.textContent = `${fmtTokens(m.tokens)} · ${fmtNum(m.rows)} msgs`
+      r.appendChild(nm)
+      r.appendChild(val)
+      list.appendChild(r)
+    }
+    card.appendChild(list)
   }
   // provenance note (compact) for the unavailable/estimated case
   if (src.error) {

@@ -14,7 +14,14 @@ import { randomUUID } from 'crypto'
 const TAB_TYPES = new Set(['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw', 'fable5', 'tmux'])
 
 function emptyData() {
-  return { projects: [], settings: {}, tabs: {} }
+  return {
+    projects: [],
+    settings: {
+      // Default Claude cache TTL to 5 minutes. Users can switch to 1h in settings.
+      claude_cache_ttl: '5m',
+    },
+    tabs: {},
+  }
 }
 
 export function createStore(filePath = ':memory:') {
@@ -133,6 +140,11 @@ export function createStore(filePath = ':memory:') {
       // lookup use the right team/project-slug dir.
       if (opts.claudeConfigDir) tab.claudeConfigDir = opts.claudeConfigDir
       if (opts.claudeSessionCwd) tab.claudeSessionCwd = opts.claudeSessionCwd
+      // team-failover opt-in: when true, this session may auto-switch team on a
+      // 429 and resume (secretary sessions only; default off; inherited by
+      // child tabs spawned from a flagged session). See memory
+      // project_nanocode_team_failover.
+      if (opts.allowTeamFailover) tab.allowTeamFailover = true
       // 需求8: persona id chosen at new-session creation. Stored on the tab so
       // every turn (new or resume) re-injects the persona via --append-system-prompt,
       // keeping the persona active across reconnects. Empty/absent = no persona.
@@ -200,7 +212,7 @@ export function createStore(filePath = ':memory:') {
     if (!data.tabs[projectId]) return null
     const tab = data.tabs[projectId].find((t) => t.id === tabId)
     if (!tab) return null
-    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona', 'opencodeSessionId']
+    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona', 'opencodeSessionId', 'allowTeamFailover']
     let changed = false
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
@@ -241,8 +253,14 @@ export function createStore(filePath = ':memory:') {
   }
 
   function ensureStarterProject() {
-    if (data.projects.length > 0) return
+    // Idempotent: ensure the launch-cwd project exists so a top-level
+    // (~zhining, non-repo) launch is a first-class workspace — not stranded
+    // on the project picker. Previously this only fired when the store was
+    // empty, so a restart at ~zhining with existing projects left ~zhining
+    // unregistered and compare / resume unreachable from there. Safe because
+    // it is a no-op when a project with this cwd already exists.
     const cwd = process.cwd()
+    if (data.projects.some((p) => p.cwd === cwd)) return
     const name = cwd.split('/').filter(Boolean).pop() || 'project'
     createProject(name, cwd)
   }

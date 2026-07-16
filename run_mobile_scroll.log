@@ -1,0 +1,62 @@
+=== Mobile Scroll Fix — Final Verification ===
+Date: 2026-07-16 09:41:58
+Branch: zhining/nano-plugin-akari
+Server: 9476 (integrated, wt-nano-akari)
+
+=== Files changed ===
+ public/js/tab-manager.js   | 22 ++++++++++++++++++++--
+ public/js/terminal-pane.js | 31 ++++++++++++++++++++++++++++++-
+ run_mobile_scroll.log      | 46 +++++-----------------------------------------
+ 3 files changed, 55 insertions(+), 44 deletions(-)
+
+=== TEST 1: Block mode — skipTouchScroll + scroll ===
+=== TEST 1: Block mode — no non-passive touchmove during placeholder ===
+  Placeholder state: {
+  "hasXterm": false,
+  "paneClass": "pane-terminal active cbr-container"
+}
+  Touch handler check: {
+  "hasOurViewportStyles": false
+}
+  ✓ skipTouchScroll working — no touch handlers attached during placeholder
+  After block renderer load: {"hasCbr":true,"hasXterm":true,"blockCount":0}
+  Scroll container: {"canScroll":true}
+  Scroll after touch: 229 SCROLLED ✓
+
+=== TEST 2: Terminal mode — touch handlers attached (no regression) ===
+  Terminal mode state: {
+  "hasXterm": true,
+  "screenTouchAction": "none",
+  "viewportTouchAction": "none",
+  "viewportOverscrollBehavior": "none",
+  "hasTouchHandlers": true
+}
+  ✓ Terminal mode has touch handlers (no regression)
+
+=== TEST 2: Abort fallback — retroactive initTouchScroll ===
+=== TEST: Abort block renderer — verify skip + fallback initTouchScroll ===
+  State after block renderer abort: {
+  "hasXterm": true,
+  "hasCbr": false,
+  "paneClass": "pane-terminal active",
+  "screenTouchAction": "none",
+  "viewportTouchAction": "none",
+  "viewportOverscrollBehavior": "none",
+  "hasTouchHandlers": true
+}
+  ✓ TerminalPane stayed as pane (block renderer aborted)
+  ✓ Retroactive initTouchScroll() called — touch handlers present (fallback works)
+  Error log present: ✓
+  All logs: [log] [ntfy-hook] loaded — listening for [NTFY]...[/NTFY] markers
+  [log] [slash-commands] loaded 79 commands from server
+  [error] Failed to load resource: net::ERR_FAILED
+  [error] [tab-manager] failed to load block renderer: TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:9476/js/claude-block-renderer.js
+
+=== TEST 3: Deployed 9476 scroll with content ===
+Before: {"scrollHeight":7808,"clientHeight":609,"canScroll":true,"scrollTop":0}
+
+=== Touch scroll test (inertial) ===
+scrollTop after: 269 SCROLLED ✓
+
+=== Errors ===
+(none)

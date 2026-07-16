@@ -1,0 +1,10 @@
+[degraded] akari pane text:
+akari
+Lens ↗
+↻
+http://10.18.8.55:9999 · unreachable · 11:50
+akari server unreachable — the panel will retry quietly and recover automatically.
+health: fetch failed · concurrency: fetch failed · workers: fetch failed · lanes: fetch failed
+
+[degraded] #akari-pane children: 711 chars
+[degraded] console errors: (none)

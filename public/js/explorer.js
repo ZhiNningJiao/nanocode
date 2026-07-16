@@ -969,7 +969,14 @@ export function createExplorer(container, projectId) {
   /** Restore persisted state: expand ancestors of selectedPath then select it. */
   async function restorePersisted() {
     const persisted = loadExplorerState(project)
-    if (!persisted) return
+    if (!persisted) {
+      // Fresh load with no persisted state: the boot path only calls
+      // renderTree() (via loadDir), so render() — which draws the header
+      // (new file / upload / refresh) — never runs. Render once
+      // here so the explorer header is visible on first visit.
+      render()
+      return
+    }
 
     // Restore expanded set first so the tree shows correctly even if the file
     // load below fails (e.g., file was deleted since last visit).

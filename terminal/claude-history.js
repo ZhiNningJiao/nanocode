@@ -8,6 +8,8 @@ import { effectiveClaudeConfigDir, claudeProjectsDir, resolveClaudeConfigDirForT
 export function cwdToClaudeProjectDir(home, cwd) {
   // Backward-compatible: defaults to ~/.claude. Kept for existing tests/callers
   // that don't know about the Team switch (CLAUDE_CONFIG_DIR) setting.
+  // claudeProjectsDir now encodes cwd with both '/' and '.' → '-' (Claude CLI's
+  // actual encoding), fixing dot-path resolution (e.g. ".../nanocode/.probe").
   return claudeProjectsDir(join(home, '.claude'), cwd)
 }
 
@@ -488,10 +490,13 @@ export function scanRecentConversations(home, cwd, limit = 5, now = Date.now(), 
       })
     } catch {}
   }
-  // "较长" = longer conversation. Sort by byte size desc (字节数, per the
-  // requirement), tiebreak by most-recent mtime so equally-sized files prefer
-  // the fresher one.
-  entries.sort((a, b) => b.byteSize - a.byteSize || b.mtimeMs - a.mtimeMs)
+  // 需求3 紧急修正: "最近的 5 条较长对话" — sort by most-recent activity (mtime)
+  // desc as the PRIMARY key, with byte size desc as a secondary tiebreaker (the
+  // "较长" criterion among equally-recent files). The old byte-size-desc-first
+  // sort let big OLD sessions permanently suppress recent small ones (master saw
+  // only stale conversations on 9475). The < 200-byte skip above already drops
+  // fragmentary 1-message sessions, so "较长" survives as the secondary key.
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs || b.byteSize - a.byteSize)
   const top = entries.slice(0, limit)
   return top.map((e) => ({
     sessionId: e.sessionId,
@@ -557,8 +562,9 @@ function _scanProjectDirEntries(projectDir, teamMeta, sourceCwd, activeConfigDir
  *   isCrossTeam, isHome — everything the picker needs to resume the session
  *   with the owning team's CLAUDE_CONFIG_DIR and the session's original cwd.
  *
- * Returns an array sorted by byte size desc (the "较长" criterion), capped
- * at `limit`.
+ * Returns an array sorted by most-recent mtime desc (the "最近的" criterion,
+ * 需求3 紧急修正 — recent sessions always surface above big old ones), with
+ * byte size desc as a secondary tiebreaker ("较长"), capped at `limit`.
  */
 export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = Date.now(), source = 'all') {
   const { teams } = listTeams(home, store)
@@ -587,7 +593,11 @@ export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = 
       }
     }
   }
-  entries.sort((a, b) => b.byteSize - a.byteSize || b.mtimeMs - a.mtimeMs)
+  // 需求3 紧急修正: mtime desc PRIMARY (最近的对话优先), byte size desc as a
+  // secondary tiebreaker (较长). The old byte-size-desc-first sort let big old
+  // sessions permanently suppress recent small ones — master saw only stale
+  // conversations on 9475.
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs || b.byteSize - a.byteSize)
   const top = entries.slice(0, limit)
   return top.map((e) => ({
     sessionId: e.sessionId,
@@ -700,9 +710,38 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     const tabs = store.listTabs(project.id).filter((t) => t.type === 'claude')
     if (!tabs.length) return null
 
+    const projectDir = cwdToClaudeProjectDir(home, project.cwd)
+
+    // The "latest conversation in this directory" is the newest .jsonl in the
+    // project dir (by mtime) — NOT merely the newest among tab-owned sessions.
+    // A conversation may have happened via the raw claude CLI (no tab), via the
+    // Recent-Agents resume flow, or a tab may have been re-pointed. Selecting a
+    // tab that OWNS the newest jsonl makes CASE A (history endpoint) read that
+    // newest conversation directly, satisfying "点进目录自动回放该目录最近一次对话".
+    const newest = findNewestJsonl(projectDir)
+    if (newest) {
+      for (const tab of tabs) {
+        if (tab.claudeSessionId && tab.claudeSessionId === newest.sessionId) {
+          return tab.id
+        }
+      }
+    }
+
+    // No tab owns the newest jsonl. Prefer a claude tab WITHOUT a valid own
+    // jsonl — the history endpoint's CASE B fallback will then resolve to the
+    // newest jsonl in the dir for that tab (auto-resume behaviour). This avoids
+    // landing on a tab whose own (stale) session would be read via CASE A.
+    for (const tab of tabs) {
+      if (!tab.claudeSessionId) return tab.id
+      const jsonlPath = join(projectDir, `${tab.claudeSessionId}.jsonl`)
+      if (!existsSync(jsonlPath)) return tab.id
+    }
+
+    // All tabs have their own valid jsonl but none matches the newest. Fall
+    // back to the tab whose own jsonl has the newest mtime (best-effort: shows
+    // a real conversation even if not the absolute newest in the dir).
     let bestTabId = null
     let bestMtime = 0
-
     for (const tab of tabs) {
       if (!tab.claudeSessionId) continue
       // 需求5: each claude tab may carry its own configDir + session cwd

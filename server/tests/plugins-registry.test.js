@@ -73,6 +73,33 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(v.ok, `compare manifest invalid: ${v.errors.join('; ')}`)
   })
 
+  it('sessions plugin (MES-14031) declares work group + fs.read', () => {
+    const m = builtinPlugin('sessions')
+    assert.ok(m, 'sessions plugin must be registered')
+    assert.equal(m.group, 'work')
+    assert.equal(m.tab.id, 'sessions')
+    assert.equal(m.apiVersion, PLUGIN_API_VERSION)
+    assert.ok(Array.isArray(m.permissions))
+    assert.ok(m.permissions.includes('fs.read'))
+    assert.ok(m.settings && typeof m.settings === 'object')
+    assert.equal(m.settings.defaultLimit, 50)
+    assert.equal(m.refreshOnActivate, true)
+    const v = validateManifest(m)
+    assert.ok(v.ok, `sessions manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('tasks plugin (MES-14031 S5) declares work group + no permissions', () => {
+    const m = builtinPlugin('tasks')
+    assert.ok(m, 'tasks plugin must be registered')
+    assert.equal(m.group, 'work')
+    assert.equal(m.tab.id, 'tasks')
+    assert.equal(m.apiVersion, PLUGIN_API_VERSION)
+    assert.ok(Array.isArray(m.permissions))
+    assert.equal(m.permissions.length, 0, 'tasks needs no permissions — purely client-side events')
+    const v = validateManifest(m)
+    assert.ok(v.ok, `tasks manifest invalid: ${v.errors.join('; ')}`)
+  })
+
   it('remote plugin (需求10) declares monitor group + network permission', () => {
     const m = builtinPlugin('remote')
     assert.ok(m, 'remote plugin must be registered')
@@ -81,8 +108,20 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.equal(m.apiVersion, PLUGIN_API_VERSION)
     assert.ok(Array.isArray(m.permissions))
     assert.ok(m.permissions.includes('network'))
+    // MES-13824: remote plugin declares the personal.remote permission so the
+    // permission-gated injection (projectForPlugin) releases dev machines to it.
+    assert.ok(m.permissions.includes('personal.remote'))
     const v = validateManifest(m)
     assert.ok(v.ok, `remote manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('usage plugin (MES-13824) declares personal.aigw for masked AIGW key display', () => {
+    const m = builtinPlugin('usage')
+    assert.ok(m, 'usage plugin must be registered')
+    assert.ok(Array.isArray(m.permissions))
+    assert.ok(m.permissions.includes('personal.aigw'), 'usage must declare personal.aigw')
+    const v = validateManifest(m)
+    assert.ok(v.ok, `usage manifest invalid: ${v.errors.join('; ')}`)
   })
 
   it('notify plugin (需求13) is settings-only (no tab) + network perm', () => {
@@ -115,6 +154,18 @@ describe('plugins-registry (MES-13740 需求6)', () => {
     assert.ok(m.permissions.includes('network'))
     const v = validateManifest(m)
     assert.ok(v.ok, `services manifest invalid: ${v.errors.join('; ')}`)
+  })
+
+  it('historian plugin declares monitor group + tmux.read + refreshOnActivate', () => {
+    const m = builtinPlugin('historian')
+    assert.ok(m, 'historian plugin must be registered')
+    assert.equal(m.group, 'monitor')
+    assert.equal(m.tab.id, 'historian')
+    assert.ok(m.permissions.includes('tmux.read'))
+    assert.ok(m.permissions.includes('fs.read'))
+    assert.ok(m.refreshOnActivate, 'historian should refresh on tab activate')
+    const v = validateManifest(m)
+    assert.ok(v.ok, `historian manifest invalid: ${v.errors.join('; ')}`)
   })
 
   it('accepts a settings-only manifest with no tab (需求13)', () => {

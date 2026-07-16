@@ -17,7 +17,7 @@ import {
   getToolFoldLevel, setToolFoldLevel,
   getSubagentPromptVisible, setSubagentPromptVisible,
   getSubagentActivityVisible, setSubagentActivityVisible,
-} from './claude-block-renderer.js'
+} from './claude-block-settings.js'
 import { initI18n, setLang, t } from './i18n.js'
 
 let workspaceReady = false
@@ -33,6 +33,11 @@ function setGlobalMuted(v) {
   _globalMuted = v
   try { localStorage.setItem(MUTED_KEY, String(v)) } catch {}
   _updateMuteBtn()
+  // tts.js polls localStorage but cannot observe same-tab writes, so dispatch
+  // an event it listens for: on mute it stops the audio playing *now* + clears
+  // the queue, so the speaker switch actually silences in-progress TTS rather
+  // than only blocking future playback. (MES-14030 mute-fix)
+  document.dispatchEvent(new CustomEvent('nanocode:mute-changed', { detail: { muted: v } }))
 }
 
 function isGlobalMuted() {
@@ -177,6 +182,13 @@ function showNotifyToast(msg, duration = 6000) {
   el._timer = setTimeout(() => { el.style.opacity = '0' }, duration)
 }
 
+// Reconnect backoff for /ws/notify. A missing/old worker handler makes the
+// proxy return 502 every connect; a fixed 5s retry hammers the (overloaded)
+// worker forever, stealing accept-queue slots from /ws/terminal and /api/*
+// that actually need to work. Exponential backoff up to 5min — when the
+// endpoint comes back online (worker restart picks up extras.js) the next
+// scheduled attempt finds it. (upstream ae19703 改造)
+let _notifyAttempts = 0
 function initNotifyWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const ws = new WebSocket(`${proto}//${location.host}/ws/notify`)
@@ -215,7 +227,13 @@ function initNotifyWs() {
       }
     } catch {}
   }
-  ws.onclose = () => setTimeout(initNotifyWs, 5000)
+  ws.onopen = () => { _notifyAttempts = 0 }
+  ws.onclose = () => {
+    _notifyAttempts++
+    // 5s, 10s, 20s, 40s, 80s, capped at 5min. After ~7 attempts it stays at 5min.
+    const delay = Math.min(5 * 60_000, 5000 * Math.pow(2, Math.min(_notifyAttempts - 1, 6)))
+    setTimeout(initNotifyWs, delay)
+  }
   ws.onerror = () => {}
 }
 
@@ -539,6 +557,9 @@ function loadSettings(serverSettings) {
   loadFable5RenderModeSettings(serverSettings)
   // Claude Model / Codex Model / Effort selectors migrated to the team-model
   // plugin (MES-13740 R2). Loaded when the Team & Model pane renders.
+  // Claude prompt cache TTL (MES-13254) stays here — it's a caching knob, not
+  // a model selector.
+  loadClaudeCacheTtlSettings(serverSettings)
   loadGlobalPermissionModeSettings(serverSettings)
   loadLangSelect()
   loadTabTypesSettings()
@@ -1016,6 +1037,39 @@ async function loadAuthStatus() {
 // The Claude model (--model), Codex model, and effort-level selectors now live in
 // the Team & Model pane (Session domain → team-model tab). Storage keys are
 // unchanged (claude_model / codex_model / claude_effort). See plugins-panel.js.
+
+// ── Claude prompt cache TTL (MES-13254) — 5m / 1h. Controls the cache_control
+// ttl passed to the SDK; lives here (not the team-model plugin) since it's a
+// caching knob, not a model selector.
+function loadClaudeCacheTtlSettings(serverSettings) {
+  const mode = serverSettings?.claude_cache_ttl || '5m'
+  const radios = document.querySelectorAll('input[name="claude-cache-ttl"]')
+  for (const radio of radios) {
+    radio.checked = radio.value === mode
+  }
+}
+
+const claudeCacheTtlSaveBtn = document.getElementById('claude-cache-ttl-save-btn')
+if (claudeCacheTtlSaveBtn) {
+  claudeCacheTtlSaveBtn.addEventListener('click', async () => {
+    const selected = document.querySelector('input[name="claude-cache-ttl"]:checked')
+    const statusEl = document.getElementById('claude-cache-ttl-status')
+    try {
+      await updateSetting('claude_cache_ttl', selected?.value || '5m')
+      if (statusEl) {
+        statusEl.textContent = 'Saved'
+        statusEl.className = 'settings-status success'
+        setTimeout(() => { statusEl.textContent = '' }, 2500)
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = err.message
+        statusEl.className = 'settings-status error'
+        setTimeout(() => { statusEl.textContent = '' }, 3000)
+      }
+    }
+  })
+}
 
 // ─── Global Permission mode (drives Claude + Codex) ──────────────────────────
 

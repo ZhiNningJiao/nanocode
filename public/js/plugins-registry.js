@@ -84,8 +84,13 @@ export const BUILTIN_PLUGINS = [
     apiVersion: '1.0',
     group: 'monitor',
     tab: { id: 'usage', labelKey: 'plugin.usage.label' },
-    permissions: ['fs.read', 'network'],
+    permissions: ['fs.read', 'network', 'personal.aigw'],
     descriptionKey: 'plugin.usage.desc',
+    // MES-13788 延续: re-fetch usage sources every time the tab becomes active
+    // (主人要求: 每次拉开/切换到这个 tab 都刷新). The renderer is idempotent and
+    // degrades to honest unavailable states, so re-invoking on each activation is
+    // safe and keeps the budget/usage numbers fresh without a manual click.
+    refreshOnActivate: true,
     builtin: true,
   },
   {
@@ -124,6 +129,63 @@ export const BUILTIN_PLUGINS = [
     builtin: true,
   },
   {
+    // MES-14031 — Sessions: browse / preview / fork-resume past agent sessions.
+    // Ports Codex CLI's `codex resume` (picker) + `codex fork` to the nanocode
+    // plugin surface. Lists Codex (~/.codex/sessions) + Claude Code
+    // (~/.claude/projects) sessions newest-first, shows a tail excerpt, and
+    // lets the user fork a previous session into a new tab. Read-only.
+    name: 'sessions',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'work',
+    tab: { id: 'sessions', labelKey: 'plugin.sessions.label' },
+    permissions: ['fs.read'],
+    settings: { defaultLimit: 50 },
+    descriptionKey: 'plugin.sessions.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
+    // MES-14031 S2 — Rewind: Claude Code desktop's checkpointing/rewind, ported
+    // to nanocode. Every user prompt is a checkpoint; the user can rewind the
+    // conversation to a prior turn, discarding the tail — the recovery path when
+    // an agent goes off track (vs /clear which loses all context). This prototype
+    // delivers CONVERSATION rewind (backup + truncate the jsonl at a turn
+    // boundary); "restore code" (per-turn file snapshots) is the documented next
+    // step, not faked here. Placed in `work` (operates the current agent's
+    // transcript) alongside sessions/compare. fs.write because apply mutates the
+    // jsonl (after a backup); no personal.* secrets needed.
+    name: 'rewind',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'work',
+    tab: { id: 'rewind', labelKey: 'plugin.rewind.label' },
+    permissions: ['fs.read', 'fs.write'],
+    descriptionKey: 'plugin.rewind.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
+    // MES-14031 S5 — Tasks: live agent TODO list. Both Claude Code (TodoWrite
+    // tool) and Codex (todo_list structured events) emit task lists during
+    // agent turns. This panel surfaces them as a dedicated right-side tab so
+    // the user can see what the agent is working on at a glance — instead of
+    // scrolling through terminal output to find the latest todo list.
+    // Purely client-side: the block renderers dispatch nanocode:todo-update
+    // CustomEvents; this panel listens and re-renders. No backend route.
+    // Placed in `work` (operates the current agent's task state) alongside
+    // sessions/rewind. No permissions needed — reads only from in-process
+    // events, no fs or network access.
+    name: 'tasks',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'work',
+    tab: { id: 'tasks', labelKey: 'plugin.tasks.label' },
+    permissions: [],
+    descriptionKey: 'plugin.tasks.desc',
+    builtin: true,
+  },
+  {
     // 需求10 — Remote machines: address book that launches the user's *local*
     // native RustDesk client via the `rustdesk://` URI scheme. The server only
     // stores the book (core settings); it bundles no RustDesk code, so AGPL is
@@ -135,7 +197,7 @@ export const BUILTIN_PLUGINS = [
     apiVersion: '1.0',
     group: 'monitor',
     tab: { id: 'remote', labelKey: 'plugin.remote.label' },
-    permissions: ['network'],
+    permissions: ['network', 'personal.remote'],
     descriptionKey: 'plugin.remote.desc',
     builtin: true,
   },
@@ -181,6 +243,41 @@ export const BUILTIN_PLUGINS = [
     tab: { id: 'services', labelKey: 'plugin.services.label' },
     permissions: ['network'],
     descriptionKey: 'plugin.services.desc',
+    builtin: true,
+  },
+  {
+    // Historian — full-sweep task monitor + waker status panel.
+    // Polls /api/historian/briefing for running tasks, stalled alerts, signal
+    // flags, tmux sessions, and port health. Companion to the native waker
+    // (POST /api/waker/tick). Per HISTORIAN_WAKER.md v4.
+    name: 'historian',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'historian', labelKey: 'plugin.historian.label' },
+    permissions: ['fs.read', 'tmux.read', 'network'],
+    descriptionKey: 'plugin.historian.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
+    // MES-14049 — akari 检察: a dedicated monitor tab for the self-hosted akari
+    // dispatch server. Polls the nanocode same-origin proxy (/api/akari/state)
+    // every ≥10s and renders health summary (version/build/dispatch_caps),
+    // concurrency (in-flight/permits), the live workers table, and the lane
+    // fleet status. A one-click button jumps to the akari lens dashboard. The
+    // akari server URL is personal-config driven (personal.akari.*); when akari
+    // is down the panel degrades to a calm "unreachable" state — no error spam.
+    // The Port Health grid also shows a managed `akari` row (up/down via
+    // /api/health) — see services-panel.js + runServiceChecks.
+    name: 'akari',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'akari', labelKey: 'plugin.akari.label' },
+    permissions: ['network', 'personal.akari'],
+    descriptionKey: 'plugin.akari.desc',
+    refreshOnActivate: true,
     builtin: true,
   },
 ]
