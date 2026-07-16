@@ -1663,3 +1663,31 @@ commit 03beb00
   - 红线：⚠️ 只审计不擅自合（任务书步骤4「只审计不擅自合，批了再按并集原则合入」）；未 merge/cherry-pick/push；未碰 9475；npm test 门槛不变（待批合入时再跑）；本审计未改任何功能代码
   - 给秘书建议：批了就合(高价值需解冲突)=cc-parity-b1 逐 commit cherry-pick + plugins-notif cherry-pick；顺手合(小 fix)=nc01-land 1 行 + nc220-persist 15 行；可选取回=TTS replay 按钮 + runtime notify WS 重连/render-mode 单选；可归档清理=agent-naming-and-ux/pre-rebase-backup/nano-integration-0715/-v2/nano-plugin-akari
   - NOTHING-TO-DO（本轮为审计任务，无 bug 待修）；本行记账，不 push 不部署
+
+## 2026-07-16 20:4x [nano_maint R70 — 秘书批复 20:2x 落地：5 项丢失特性并集合入 fork/main，npm test 663/0，推 fork/main cd99061..523a33c，9476 rsync 重部+restart，live 验收全绿，9475 不动]
+  - 任务来源：任务书【秘书批复 20:2x — 特性考古清单批示】「审计通过，按批示执行（并集原则、npm test 653/0 门槛、每合一项跑一次测试再合下一项）」+ 终态「全部合完：npm test 全绿 → 推 fork/main → 9476 冒烟后 rsync 重部 → 状态板+work-log 记录 → FLAG_nano_maint_recover」
+  - 入口复读：HANDOFF_opus_officer.md（officer 收线）+ HANDOFF_opus_burn.md（opus_burn R4-R9 已在 fork/main）+ NANOCODE_FEATURE_AUDIT.md（R69 审计）均读；WORKER_CORE 全套遵守
+  - 接手状态：R68（fork 同步，merge opus_burn 4 commit 已推 cd99061）、R69（审计，产出 NANOCODE_FEATURE_AUDIT.md，audit-only）已由前序会话完成；R70 的 5 项并集合入已由前序会话 commit（14 个 merge commit b95a2b7..523a33c，已落本地），但**未 push / 未部署 / 未记 work-log / 未 FLAG**——本轮收尾
+  - 合入核实（逐项对账，确认前序 R70 已正确合入）：
+    1. `nano-cc-parity-b1` 10 commit → HEAD b95a2b7/361caa2/dc33f30/3f1b05f/89e0ad7/b7772fb/ec8274b/1213361/5e1066d/1e52a7d（逐 commit 标题与 b1 分支 386b52c..a8232ea 一一对应）✅
+    2. `plugins-notif`（MES-13279 Linear→ntfy 通知桥）→ HEAD 1463383（linear-notif.js 273L+test 276L+3 新 API+qa-watcher 接线）✅
+    3. `nc01-land` c2140a4（worker TAB_TYPES 漏 meshy-aigw 1 行）→ HEAD 73806b5 ✅
+    4. `nc220-persist`：7765c38（tmux-driver 复用 bridge 接 cs/state）→ HEAD 13fe319 ✅；6818d32（history-replay 无 live block 也渲染）**跳过**——核实 HEAD claude-block-renderer.js:1689-1715 已用 `hadLiveBlock` 跳过逻辑等价实现 history-replay 文本渲染（loop 内 `if (part===textPart && hadLiveBlock) continue` 落到 `_renderContentPart`），6818d32 的 if/else 写法是同一行为的旧形态，合入会双重渲染 → 跳过正确 ✅
+    5. `pre-rebase-backup` cf787d0 TTS replay 按钮 → HEAD 523a33c（index.html+style.css+tts.js handler）✅；runtime notify WS 自动重连 + render-mode 单选 **已在 main**（app.js/index.html 已有）→ 冗余跳过 ✅；stale claude-block import 按批示未取 ✅
+  - npm test 门槛（`tee -a run_nano_maint.log`）：`# tests 663 # pass 663 # fail 0`，exit 0。基线 653/0 + item 2 新增 10 个 linear-notif 测试 = 663。0 fail 满足「全绿」门槛 ✅
+  - 推 fork/main：`git push fork zhining/nano-9476-integ-0716:main` → `cd99061..523a33c`（14 个 R70 merge commit + R68/R69 work-log 全量上 fork/main）✅
+  - 冒烟（9478 临时实例，前序已验，本轮复验）：`node --check` 全 10 个改动文件 OK；`PORT=9478 node server/index.js` 干净启动（`[linear-notif] started, polling every 5 minute(s)`，0 error）；既有端点 `/` `/api/services` `/api/akari/state` `/api/historian/briefing` 全 200；新端点 POST `/api/notify/linear-important`=400（空 body 校验，端点存在且校验生效）、`/api/notify/test-ntfy`=200、`/api/notify/linear-poll`=200；cc-parity 前端 sigs（style.css 44px=89、terminal-view.js permission-mode//rewind=6）+ TTS replay sigs（index.html/tts.js）全命中 → 新代码可起可服务 ✅
+  - rsync 重部 9476 runtime（`~/.nanocode-9476-runtime`，surgical `--relative` 不用 `--delete`——runtime 有 node_modules/data/config 不能误删）：
+    - 干跑 `rsync -ani --relative` 16 个改动文件：3 新增（plugins/monitor/lanes.json、server/linear-notif.js、server/tests/linear-notif.test.js）+ 13 更新，**0 删除**
+    - 实跑 `rsync -avi --relative`：16 文件落盘，逐文件 md5 worktree==runtime 全 MATCH（mismatch=0）
+    - 改动含 server/index.js + server/linear-notif.js（新端点）→ node 缓存已加载模块，**必须 restart** 才能让新端点生效
+  - restart 9476（`systemctl --user restart nanocode-9476.service`，绝不碰 9475）：新 PID 118213，cwd=~/.nanocode-9476-runtime；启动日志 `[linear-notif] started, polling every 5 minute(s)` + `Nanocode running on http://0.0.0.0:9476`，0 error；9475 PID 304142 沿用未动 ✅
+  - live 9476 验收：
+    - 端点 `/` `/api/services` `/api/akari/state` `/api/historian/briefing` 全 200；新端点 POST `/api/notify/linear-important`=400 / `/test-ntfy`=200 / `/linear-poll`=200
+    - LIVE==DISK md5（curl live vs runtime 磁盘）：style.css / js/terminal-view.js / js/tts.js / js/codex-block-renderer.js 全 LIVE==DISK
+    - live 前端 sigs：style.css 44px=89、terminal-view.js permission-mode//rewind=5、tts.js replay=1、index.html replay=1；codex-block-renderer R9 sigs（renderImage|blockNavigation）=3（opus_burn R8/R9 未回归）
+    - 前端报错（Playwright headless 加载 live 9476，networkidle+2.5s，_fe_check_9476.mjs 用后即删不入库）：title="Nanocode"，console error/warning=0，pageerror=0，failed request=0
+  - 9475 红线：未触碰。PID 304142 沿用（起 7/15 18:13），端点 `/` `/api/services` 全 200；rsync 只动 runtime 不动 .git 软链（指向 nanocode 主仓 .git）/HEAD → 9475 共享 HEAD 不受影响
+  - 归档标记：NANOCODE_FEATURE_AUDIT.md 已由 R69 标 `ARCHIVED-DO-NOT-MERGE`（agent-naming-and-ux / pre-rebase-backup / nano-integration-0715 / -v2 / nano-plugin-akari，仅标记未删——删分支需主人亲批）
+  - 过程产物：run_nano_maint.log gitignored（*.log）；_fe_check_9476.mjs 用后即删不入库；不开 PR；不动 9475；nanocode-9476-runtime .git 软链未动
+  - 状态板记账（本行）：R70 5 项丢失特性已并集合入 fork/main=523a33c（cc-parity 10c + plugins-notif + nc01-land + nc220 tmux + TTS replay），npm test 663/0，9476 rsync 16 文件 + restart 已 live 验收（端点 200/新端点生效/LIVE==DISK/fe 0 错误），9475 不动；FLAG_nano_maint_recover
