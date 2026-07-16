@@ -2,11 +2,53 @@
 
 **Date**: 2026-07-16
 **Branch**: `zhining/codex-render-polish` (nanocode) + `zhining/lens-external-army` (akari)
-**Commits**: Rounds 1-4 (prior) + Round 5 (this session)
+**Commits**: Rounds 1-5 (prior) + Round 6 (this session)
 
 ---
 
-## Round 5 (this session)
+## Round 6 (this session)
+
+### Line 1: Codex 渲染完善
+
+**Commit** `56c12f7` (pushed to fork/main) — 136 insertions:
+
+1. **Copy output buttons** — every bash command block, altscreen response block, and sync-output response block now has a "Copy" button in the header. Clicking copies the full output text to clipboard with "Copied!" flash confirmation. Matches Claude tab's copy-button UX.
+
+2. **PTY-path markdown rendering** — text blocks arriving via the PTY path (non-SDK) now render as markdown with syntax highlighting and copy buttons, matching the SDK agent_message path quality. Previously rendered as plain `<pre>`.
+
+3. **Reasoning block markdown** — reasoning (thinking) blocks now render body as markdown instead of plain pre, with code highlighting and copy buttons. Preview now extracts first sentence (up to 120 chars) instead of arbitrary 80-char truncation. Added elapsed time badge from thinking start.
+
+4. **Fold-all keyboard shortcut** — `Ctrl+Shift+F` toggles all foldable blocks open/closed at once. Handler properly cleaned up in `dispose()`.
+
+5. **CSS** — new `.cbx-copy-output-btn` styles + `.cbx-reasoning-body` markdown support (paragraphs, inline code, pre-wrap).
+
+### Line 2: Nanocode 打磨
+
+Upstream cherry-picks (Open URL/Copy URL toolbar buttons, OSC 52 clipboard, OSC 8 hyperlinks, Ctrl+Shift+C copy, terminal bleed fixes) were already merged in prior rounds. No new upstream features to pick.
+
+**USER_MANUAL** updated with Round 6 features: copy output buttons, Ctrl+Shift+F fold-all, PTY text markdown.
+
+### Line 3: Akari 打磨
+
+Akari lens codebase reviewed — External Army panel (`bands-army.tsx`), call tree (`call-tree.tsx`, `call-tree-model.ts`), and opencode driver display are all mature and well-structured. `tsc --noEmit` clean. No changes needed this round.
+
+### Smoke Test
+
+- PORT=9477: HTTP 200, codex-block-renderer served with all Round 6 features (6 copy-output-btn, Ctrl+Shift+F handler, 5 cbx-text-md refs)
+- 9475/9476/9481/9482 untouched
+
+### Collision Report
+
+| Worker | Zone | Touched? |
+|--------|------|----------|
+| mobile_scroll | nanocode touch | No |
+| session_singleton | nanocode session | No |
+| akari_fleet2 | 9481/9482 | No |
+| quick3stage | dcc | No |
+
+---
+
+## Round 5 (prior session)
 
 ### Line 1: Codex 渲染完善
 
