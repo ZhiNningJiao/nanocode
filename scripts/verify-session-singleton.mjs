@@ -204,6 +204,7 @@ async function main() {
   await updateTabClaudeSession(PORT_A, projA.id, tabA.id, sharedSessionId)
   await updateTabClaudeSession(PORT_B, projB.id, tabB.id, sharedSessionId)
   log(`Shared claudeSessionId: ${sharedSessionId}`)
+  const sessionKey_B = `${projB.id}:claude:${tabB.id}`
 
   // ── Test 1: First server acquires lock; second enters read-only ────────────
   console.log('\n── Test 1: first server = host, second = read-only ──')
@@ -242,9 +243,31 @@ async function main() {
       typeof m.event?.text === 'string' &&
       m.event.text.includes('只读模式')
     )
-    assert(true, 'read-only server rejected input with "只读模式" message')
+    assert(true, 'read-only server rejected WS input with "只读模式" message')
   } catch {
-    assert(false, 'read-only server rejected input (timeout)')
+    assert(false, 'read-only server rejected WS input (timeout)')
+  }
+
+  // ── Test 2b: Read-only server blocks the HTTP inject API too ───────────────
+  // The inject API (POST /api/sessions/:id/inject) is the watchdog/secretary-wake
+  // path — a SEPARATE entry point from the WS 'claude-input'. Without the
+  // readOnly guard it would spawn a second consumer on the read-only server.
+  console.log('\n── Test 2b: read-only server blocks HTTP inject ──')
+  try {
+    const injectUrl = `http://127.0.0.1:${PORT_B}/api/sessions/${encodeURIComponent(sessionKey_B)}/inject`
+    const injectResp = await fetch(injectUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'wake from read-only server', sendNow: false }),
+    })
+    const injectData = await injectResp.json()
+    assert(injectResp.status === 423, `read-only inject returns 423 Locked (got ${injectResp.status})`)
+    assert(injectData.ok === false, 'read-only inject reports ok:false')
+    assert(injectData.readOnly === true, 'read-only inject sets readOnly:true')
+    assert(Number(injectData.lockHolderPort) === PORT_A,
+      `read-only inject identifies host :${PORT_A} (got :${injectData.lockHolderPort})`)
+  } catch (err) {
+    assert(false, `read-only inject blocked check failed: ${err?.message || err}`)
   }
 
   // ── Test 3: Host disconnect → lock released → read-only promotes ──────────

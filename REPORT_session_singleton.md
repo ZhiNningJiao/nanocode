@@ -76,13 +76,27 @@ terminal/claude-session-controller.js  →  acquireSessionLock(sessionId, { pid:
 - `_hideReadOnlyBanner()` — 升级时移除 banner
 - CSS `.cbr-readonly-banner` — 蓝紫色条带，支持 light/dark 主题
 
+### 5. Inject-path bypass fix（第 20 次独立验证发现并修复）
+
+**发现的缺口**：原实现只在 WS `claude-input` 路径（`attachClaudeSession`）拦截只读输入，但 `POST /api/sessions/:id/inject`（crontab watchdog / secretary-wake 用的 HTTP 注入路径，`server/waker.js` 调用）是**另一个独立入口**，经 `injectClaudeMessage` → `dispatchClaudeTurn` 直接 spawn claude 消费者，**不检查 `cs.readOnly`**。后果：丢锁的只读服务器仍能通过 inject API spawn 第二个消费者——正是锁要根治的「两个秘书」冲突。
+
+**根因**：19 次重新验证全部只测 WS `claude-input` 路径，从未覆盖 inject API 路径，因此 19 次都没发现这个绕过点。
+
+**修复**：
+- `terminal/claude-session-controller.js` `injectClaudeMessage`：在 `dispatchClaudeTurn` 之前加 `cs.readOnly` 守卫，只读时返回 `{ ok:false, error:'read-only: session hosted by :<port>', readOnly:true, lockHolderPort }`，**不 broadcast user event、不 spawn 消费者**。host（`readOnly=false`）的合法 wake 路径不受影响。
+- `terminal/routes.js` inject 路由：识别 `result.readOnly` 返回 **423 Locked**（而非误返 404），让 watchdog 明确知道会话由他服务器托管、应改投 host，而不是误判会话不存在。
+
+**验证**：
+- 新增单测 `session-lock-dual-server.test.js` 第 5 例「read-only server blocks the inject API (no consumer spawned); host still wakes」：只读服务器 inject → 423 + `ok:false` + `readOnly:true` + `lockHolderPort=9477` + turns 不变；host inject → 200 + `ok:true` + turns 递增（合法 wake 路径完好）。
+- `scripts/verify-session-singleton.mjs` 新增 Test 2b：真实双服务器 9477/9478，只读服务器 inject → 423 / ok:false / readOnly:true / host=:9477，stderr 确认 `inject blocked — ... hosted by :9477 (read-only mode)`。断言从 8 升至 12，全过。
+
 ## 文件变更清单
 
 | 文件 | 状态 | 变更 |
 |---|---|---|
 | `terminal/session-lock.js` | 新增 | 跨进程会话锁模块（201 行） |
-| `terminal/claude-session-controller.js` | 修改 | acquire/release 集成、只读模式、升级、UI banner |
-| `terminal/routes.js` | 修改 | 传递 `port` opt 到 controller |
+| `terminal/claude-session-controller.js` | 修改 | acquire/release 集成、只读模式、升级、UI banner；**injectClaudeMessage 只读写守卫** |
+| `terminal/routes.js` | 修改 | 传递 `port` opt 到 controller；**inject 路由 423 Locked 分支** |
 | `server/index.js` | 修改 | 传递 `{ port: PORT }` 到 `createTerminalRoutes` |
 | `public/js/claude-block-renderer.js` | 修改 | 只读 banner 显示/隐藏 |
 | `public/style.css` | 修改 | banner 样式 |
@@ -100,16 +114,17 @@ terminal/claude-session-controller.js  →  acquireSessionLock(sessionId, { pid:
 
 ### 双服务器集成测试（`server/tests/session-lock-dual-server.test.js`）
 ```
-# tests 4  # pass 4  # fail 0
+# tests 5  # pass 5  # fail 0
 ```
 1. **首服务器获锁、次服务器只读** — 9477 获锁为 host，9478 收到「会话由 :9477 托管」banner
-2. **只读服务器阻止输入** — 9478 发 claude-input 被拦截，不 spawn 消费者（turns 不变），返回「只读模式」消息
+2. **只读服务器阻止 WS 输入** — 9478 发 claude-input 被拦截，不 spawn 消费者（turns 不变），返回「只读模式」消息
 3. **Host 断开 → 只读升级** — 9477 WS 关闭 → 锁文件删除 → 9478 再 attach → 升级为 host → 可发送消息 → 锁转 9478
 4. **不同会话不冲突** — 两个服务器各持自己的会话锁，互不干扰
+5. **只读服务器阻止 inject API + host 仍可 wake**（第 20 次验证新增）— 9478 POST inject → 423 + ok:false + readOnly:true + lockHolderPort=9477 + turns 不变；9477 inject → 200 + ok:true + turns 递增（合法 wake 路径完好）
 
 ### 全量回归
 ```
-# tests 652  # pass 652  # fail 0  (648 原有 + 4 新增)
+# tests 653  # pass 653  # fail 0  (648 原有 + 4 初始新增 + 1 inject 新增)
 ```
 
 ### 手工验证脚本（`scripts/verify-session-singleton.mjs`）
@@ -121,18 +136,24 @@ terminal/claude-session-controller.js  →  acquireSessionLock(sessionId, { pid:
   PASS  banner says hosted by :9477 (got :9477)
 
 ── Test 2: read-only server blocks input ──
-  PASS  read-only server rejected input with "只读模式" message
+  PASS  read-only server rejected WS input with "只读模式" message
+
+── Test 2b: read-only server blocks HTTP inject ──
+  PASS  read-only inject returns 423 Locked (got 423)
+  PASS  read-only inject reports ok:false
+  PASS  read-only inject sets readOnly:true
+  PASS  read-only inject identifies host :9477 (got :9477)
 
 ── Test 3: host disconnect → promotion ──
   PASS  lock file removed after host disconnects
   PASS  server B promoted to host
   PASS  lock now held by :9478 (got :9478)
 
-Results: 8/8 assertions passed
+Results: 12/12 assertions passed
 ALL ASSERTIONS PASSED — session singleton lock works.
 ```
 
-脚本起两个真实 server 实例（9477/9478，共享 temp HOME），用 HTTP API 建项目/tab，用 WebSocket 客户端验证完整端到端行为。
+脚本起两个真实 server 实例（9477/9478，共享 temp HOME），用 HTTP API 建项目/tab，用 WebSocket + HTTP inject 客户端验证完整端到端行为（含 inject 绕过点）。
 
 ## 部署说明
 
