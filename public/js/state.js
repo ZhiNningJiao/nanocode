@@ -5,7 +5,7 @@ export const state = {
   activeTabId: null,
   cliProvider: 'claude',
   fontSize: 14,
-  renderMode: 'terminal',
+  renderMode: 'block',
   codexRenderMode: 'terminal',
 }
 

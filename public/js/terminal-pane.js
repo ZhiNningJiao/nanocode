@@ -237,6 +237,14 @@ export class TerminalPane {
     // 1-3 s loading window, far better than a permanently poisoned gesture.
     if (mobile && !this._skipTouchScroll) {
       this._initTouchScroll(container)
+    } else if (mobile && this._skipTouchScroll) {
+      const screen = container.querySelector('.xterm-screen')
+      if (screen) screen.style.touchAction = 'pan-y'
+      const viewport = container.querySelector('.xterm-viewport')
+      if (viewport) {
+        viewport.style.touchAction = 'pan-y'
+        viewport.style.overscrollBehavior = 'contain'
+      }
     }
 
     // Initial fit
