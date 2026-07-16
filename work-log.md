@@ -510,3 +510,17 @@ commit 03beb00
 - 新观察（相对 R1）：fork/main 由 3 ahead → 4 ahead，新增 5945c5a `docs(opus_burn): handoff + FLAG`——opus_burn 交接文档落在仓内 `HANDOFF_opus_burn.md`（非 ~/codex_work/，任务书所指路径尚未出现），已 `git show` 只读读完：R4-R9 codex 块渲染全套（图片渲染/块导航/键盘可访问性/MCP markdown/连接恢复/命令计时），653/0，smoke 用 9477，不碰 9475/9476
 - 4 commit 均未并入 9476（本分支仍 3ffec41），属大改，按任务书「大改先等批」继续不动，留主人定夺是否并入 9476
 - 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；仅提交 work-log 记账，无 push 无部署
+
+## 2026-07-16 17:36 [nano_maint R3 — 三巡，状态不变，NOTHING-TO-DO]
+- 接班状态：HEAD 1ff1931（R1+R2 work-log 提交），工作树干净（仅未跟踪 .git.bak-migrate，前置遗留不动）
+- 健康巡检（本轮自带 curl，`tee -a run_nano_maint.log`）：
+  - 9475 = 200（未触碰，按红线不查进程细节）
+  - 9476 = 200（/api/health + /api/services + /api/sessions 均 200）
+- 前端报错巡检（Playwright headless 加载 http://localhost:9476/，networkidle+2.5s，脚本置于仓内以解析本地 node_modules）：
+  - title="Nanocode"，console error/warning = 0，pageerror = 0，failed request = 0
+- npm test（本轮自带，`tee -a run_nano_maint.log`）：`node --test server/tests/*.test.js` → 653 pass / 0 fail
+- run.log 自查：rg 失败关键字仅命中测试名子串（"returns error..."等合法用例）与首次 /tmp 脚本 ERR_MODULE_NOT_FOUND（已改仓内脚本复跑通过）+ 前端扫描 errors:0 输出；无真实失败
+- 待办扫描：~/codex_work/REVIEW_REQ_* / CHORE_* = 0；FLAG_* 仍为 6 月遗留空旗（按 handoff 跳过）
+- fork/main：仍 4 ahead（5945c5a/e68ed60/d3da9db/570c744，与 R2 一致，无新增）——opus_burn codex 块渲染大改未并入 9476，按任务书「大改先等批」继续不动，留主人定夺
+- 过程产物：run_nano_maint.log 已确认 gitignored（run-*.log），_fe_check.mjs 用后即删，不入库
+- 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；仅提交 work-log 记账，无 push 无部署
