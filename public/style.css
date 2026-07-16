@@ -8200,6 +8200,50 @@ body.workspace-active .landing-overlay { display: none; }
   background: color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
+/* ── Codex auto-linked paths and URLs ─────────────────────────── */
+.cbx-autolink-url {
+  color: var(--primary, #60a5fa);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  cursor: pointer;
+}
+.cbx-autolink-url:hover { text-decoration-style: solid; }
+.cbx-path-link {
+  color: var(--primary, #60a5fa);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  border-radius: 2px;
+}
+.cbx-path-link:hover {
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  text-decoration-style: solid;
+}
+
+/* ── Codex word-level diff highlights ────────────────────────── */
+.cbx-diff-word-del {
+  background: rgba(248, 113, 113, 0.3);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.cbx-diff-word-add {
+  background: rgba(74, 222, 128, 0.3);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ── Expandable collapsed diff sections ──────────────────────── */
+.cbx-diff-expandable {
+  cursor: pointer !important;
+  transition: background 0.15s;
+}
+.cbx-diff-expandable:hover {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.cbx-diff-expandable:hover .cbx-diff-text {
+  text-decoration: underline;
+}
+
 /* ── Mobile tweaks ──────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
