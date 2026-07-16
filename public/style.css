@@ -5718,6 +5718,8 @@ body.workspace-active .landing-overlay { display: none; }
 .service-actions { margin-left: auto; display: flex; gap: 4px; }
 .svc-btn { background: none; border: none; cursor: pointer; color: var(--fg-3, rgba(255,255,255,0.4)); font-size: 13px; padding: 2px 4px; border-radius: 3px; line-height: 1; }
 .svc-btn:hover { color: var(--fg, #fff); background: rgba(255,255,255,0.06); }
+.svc-btn-spin { animation: svc-spin 0.8s linear infinite; }
+@keyframes svc-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .services-add-form { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .services-add-form .settings-input { width: 90px; }
 .services-add-form .settings-input:nth-child(2) { width: 130px; }
@@ -7852,10 +7854,29 @@ body.workspace-active .landing-overlay { display: none; }
 .cbx-diff-info { color: var(--text-muted); font-style: italic; }
 
 .cbx-turn-sep {
-  height: 1px;
+  height: auto;
   margin: var(--s-2) 0;
-  background: linear-gradient(to right, transparent, var(--border), transparent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
+}
+.cbx-turn-sep::before, .cbx-turn-sep::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--border), transparent);
+}
+.cbx-turn-ts {
+  font-size: 10px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.cbx-bash-elapsed {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Thinking indicator (SDK mode) ────────────────────────────── */
