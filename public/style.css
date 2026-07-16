@@ -7730,6 +7730,63 @@ body.workspace-active .landing-overlay { display: none; }
 .cbx-block-sync[data-fold='line'] .cbx-altscreen-done { display: none; }
 .cbx-block-sync:not([data-fold]) .cbx-sync-body { display: block; }
 
+/* ── File change block (SDK event driven) ────────── */
+.cbx-block-filechange {
+  background: color-mix(in srgb, #d3a45a 6%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, #d3a45a 18%, transparent);
+  padding: var(--s-1) var(--s-3);
+}
+
+.cbx-filechange-card {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.cbx-filechange-icon {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+
+.cbx-filechange-icon.cbx-filechange-create { color: #5fb87a; }
+.cbx-filechange-icon.cbx-filechange-delete { color: #e26159; }
+.cbx-filechange-icon.cbx-filechange-update { color: #d3a45a; }
+
+.cbx-filechange-path {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cbx-filechange-kind {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #d3a45a 12%, transparent);
+  color: #d3a45a;
+  border: 1px solid color-mix(in srgb, #d3a45a 25%, transparent);
+  flex-shrink: 0;
+}
+
+/* ── Turn separator ──────────────────────────────── */
+.cbx-turn-sep {
+  height: 1px;
+  margin: var(--s-2) 0;
+  background: linear-gradient(to right, transparent, var(--border), transparent);
+  flex-shrink: 0;
+}
+
 /* ── Mobile tweaks ──────────────────────────────────────────────── */
 
 @media (max-width: 768px) {

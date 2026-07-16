@@ -454,6 +454,14 @@ export class CodexBlockRenderer {
     this._liveAgentItemId = null
     this._liveAgentText = ''
 
+    // SDK mode: when codex-event messages arrive, we render from structured
+    // events instead of PTY text. The driver also sends formatted PTY text
+    // (codexBroadcast) for the same events — suppress that to avoid duplicates.
+    this._sdkMode = false
+
+    // Track active SDK command blocks by item ID for proper finalization
+    this._sdkCommandBlocks = new Map()
+
     // Update/tip notice dedup — only show once per session
     this._shownUpdateNotice = false
 
@@ -668,6 +676,11 @@ export class CodexBlockRenderer {
       for (const line of lines) this._processLine(line.replace(/\r/g, ''))
       return
     }
+
+    // SDK mode: when codex-event messages drive rendering, suppress PTY text
+    // to avoid duplicate blocks. The driver sends formatted text for the same
+    // events (command_execution, file_change, turn boundaries) — skip it.
+    if (this._sdkMode) return
 
     // ── Sync output (ESC[?2026h/l) boundary detection ───────────────────────
     // Codex CLI uses DEC private mode 2026 for frame-level batching.
@@ -1431,6 +1444,33 @@ export class CodexBlockRenderer {
     this._scrollBottom()
   }
 
+  /** Render a file change block from SDK file_change events. */
+  _addFileChangeBlock(kind, filePath) {
+    const icon = kind === 'create' ? '+' : kind === 'delete' ? '−' : '✏'
+    const kindLabel = kind === 'create' ? 'created' : kind === 'delete' ? 'deleted' : 'modified'
+    const shortPath = filePath
+      .replace(/^\/storage\/home\/[^/]+\//, '~/')
+      .replace(/^\/home\/[^/]+\//, '~/')
+
+    const article = this._makeBlock('cbx-block-filechange')
+    article.innerHTML =
+      `<div class="cbx-filechange-card">` +
+      `<span class="cbx-filechange-icon cbx-filechange-${kind}">${icon}</span>` +
+      `<span class="cbx-filechange-path">${escHtml(shortPath)}</span>` +
+      `<span class="cbx-filechange-kind">${kindLabel}</span>` +
+      `</div>`
+    this._scroll.appendChild(article)
+    this._scrollBottom()
+  }
+
+  /** Render a visual turn separator. */
+  _addTurnSeparator() {
+    const el = document.createElement('div')
+    el.className = 'cbx-turn-sep'
+    this._scroll.appendChild(el)
+    this._scrollBottom()
+  }
+
   _appendTextLine(line) {
     // Clear status banner since we got actual text
     if (this._statusBannerEl) {
@@ -1522,13 +1562,115 @@ export class CodexBlockRenderer {
 
   _handleCodexEvent(event) {
     if (!event) return
-    // S5 (MES-14031): forward todo_list events to the tasks panel. The Codex
-    // SDK emits structured events for todo list updates; the driver forwards
-    // all raw events here. We extract todos from the recognized shapes and
-    // dispatch a nanocode:todo-update CustomEvent for the tasks panel.
+
+    // Enter SDK mode on first structured event — suppresses duplicate PTY text
+    this._sdkMode = true
+
+    // S5: forward todo_list events to the tasks panel
     _maybeDispatchTodoUpdate(event, this.tabId)
-    if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
-      this._finalizeAgentMessage(event.item.id)
+
+    switch (event.type) {
+      case 'item.started':
+        this._handleSdkItemStarted(event.item)
+        break
+      case 'item.completed':
+        this._handleSdkItemCompleted(event.item)
+        break
+      case 'item.updated':
+        // agent_message text updates are handled by codex-stream-text
+        break
+      case 'turn.completed':
+        this._finalizeCurrentBlock()
+        this._finalizeAgentMessage()
+        this._setThinking(false)
+        this._addTurnSeparator()
+        break
+      case 'turn.failed':
+        this._finalizeCurrentBlock()
+        this._finalizeAgentMessage()
+        this._setThinking(false)
+        this._addSystemBlock(`[Error: ${event.error?.message || 'Codex turn failed'}]`)
+        this._addTurnSeparator()
+        break
+      case 'error':
+        this._addSystemBlock(`[Error: ${event.message || 'Codex stream error'}]`)
+        break
+      case 'thread.started':
+        // informational — no visual rendering
+        break
+    }
+  }
+
+  _handleSdkItemStarted(item) {
+    if (!item) return
+
+    if (item.type === 'command_execution' && item.command) {
+      this._finalizeCurrentBlock()
+      this._finalizeAgentMessage()
+      this._startBashBlock(item.command)
+      // Track by item ID for completion matching
+      if (item.id) this._sdkCommandBlocks.set(item.id, this._currentBashBlock)
+      this._setThinking(true)
+    }
+
+    if (item.type === 'file_change') {
+      this._finalizeCurrentBlock()
+      this._finalizeAgentMessage()
+      const changes = item.changes || []
+      for (const c of changes) {
+        this._addFileChangeBlock(c.kind || 'update', c.path || '')
+      }
+    }
+
+    if (item.type === 'agent_message') {
+      // Text will stream via codex-stream-text deltas
+      this._setThinking(true)
+    }
+  }
+
+  _handleSdkItemCompleted(item) {
+    if (!item) return
+
+    if (item.type === 'agent_message') {
+      this._finalizeAgentMessage(item.id)
+      return
+    }
+
+    if (item.type === 'command_execution') {
+      // Restore the tracked bash block for this item ID
+      const tracked = item.id ? this._sdkCommandBlocks.get(item.id) : null
+      if (tracked) {
+        this._currentBashBlock = tracked
+        this._sdkCommandBlocks.delete(item.id)
+      }
+
+      if (this._currentBashBlock) {
+        // Add command output
+        if (item.aggregated_output) {
+          const lines = item.aggregated_output.split('\n')
+          for (const line of lines) {
+            if (line) this._appendToBashOutput(line)
+          }
+        }
+        // Finalize with exit code
+        const code = item.exit_code
+        if (code != null) {
+          const exitLine = code === 0 ? '✓ exit 0' : `✗ exit ${code}`
+          this._finalizeBashBlockWithExit(exitLine)
+        } else {
+          this._finalizeCurrentBlock()
+        }
+      }
+      this._setThinking(false)
+      return
+    }
+
+    if (item.type === 'file_change') {
+      const changes = item.changes || []
+      for (const c of changes) {
+        this._addFileChangeBlock(c.kind || 'update', c.path || '')
+      }
+      return
     }
   }
 
