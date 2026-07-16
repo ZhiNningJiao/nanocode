@@ -1647,3 +1647,19 @@ commit 03beb00
   - 9475 红线：未触碰。PID 304142 仍 LISTEN 9475，起于 Wed Jul 15 18:13:52（今日未重启）；9476 runtime .git 软链指向 nanocode 主仓 .git，rsync 只拷源码不动 .git/HEAD → 9475/9477 共享 HEAD 不受影响
   - 过程产物：run_nano_maint.log gitignored（*.log）；_fe_check.mjs 用后即删不入库；不开 PR；不动 9475
   - 状态板记账（本行）：fork/main 已推至 cd99061（含 merge），9476 已 rsync R8/R9 新前端并 live 验收，9475 不动
+
+## 2026-07-16 20:2x [nano_maint R69 — 主人下单全 worktree 特性考古：⚠️ 确认丢过 feature，产出 NANOCODE_FEATURE_AUDIT.md，只审计未合]
+  - 任务来源：任务书【主人下单 2026-07-16 20:0x — 全 worktree 特性考古，查丢没丢 feature】「nanocode 是不是丢过 feature？开了一堆 worktree，看看有哪些没合到 main」
+  - 入口复读：HANDOFF_opus_officer.md（officer 收线）+ HANDOFF_opus_burn.md（opus_burn R4-R9 已在 fork/main）均读
+  - 盘点：`git worktree list` = 21 个 wt-nano worktree；`git for-each-ref` 本地 46 + fork 远端 37 zhining/* = 去重后 **51 唯一分支**
+  - 方法：`git log --cherry-pick --right-only fork/main...<branch>` 按 patch-id 去等价（防把已 cherry-pick 进 main 的重复算"未合入"）；逐分支输出见 `~/codex_work/run_nano_maint.log`；cu>0 的分支再 `git grep <签名> fork/main` 进当前树核实"真丢失 vs 已被别处覆盖"
+  - 结果：51 分支中 10 个 cu>0。**⚠️ 真丢失 feature 2 个**：
+    (1) `zhining/nano-cc-parity-b1`(10 commit ~700L)：CLAUDE 标签页 CC-parity 全套（permission-mode 徽章+Shift+Tab、in-tab model picker chip、/rewind /plan /resume /permissions、slash 模糊匹配+union fallback+tiebreaker、TodoWrite 交互式 checklist+紧凑头、移动端 ≥44px 触控+面板满宽）；base 7/8 落后 286；CLAUDE tab 经核实仍活跃（tab-manager.js:24 import claude-block-renderer）；permission-mode badge/fuzzy threshold 在 main=0 → 确真丢
+    (2) `fork/zhining/plugins-notif`(1 commit 696L+测试)：Linear→ntfy 通知桥（important-post 推送+Linear 轮询+3 新 API+linear-notif.js 273L+test 276L）；fork-only base 6/22 落后 381；server/linear-notif.js 在 main 不存在 → 确真丢
+  - 零散小 fix 真丢 4 处：`nc01-land` c2140a4(worker TAB_TYPES 漏 meshy-aigw 1 行，main worker/index.js:255 确认无)、`nc220-persist` 6818d32+7765c38(history-replay 无 live block 10L + tmux-driver cs/state 5L，session 持久化本身已进 main)、`pre-rebase-backup` cf787d0(TTS replay 按钮 59L，main tts.js/tts-panel.js 无 replay)
+  - 已废弃/已覆盖（非丢失）：`agent-naming-and-ux`(与 main 无共同祖先的初始 codebuilder lineage，特性已重实现)、`pre-rebase-backup`(无共同祖先的历史快照，特性大多 post-rebase 重实现)、`nano-plugin-akari`(37 cherry-unique 全是 session-singleton 反复 re-verify doc，码已进 main；Round4 feat 由 opus-burn 在 codex 侧覆盖)、`nano-integration-0715/-v2`(被 union 取代的 doc/merge)、`nano-9476-integ-0716`(本分支领先 1 个 R68 work-log doc 非 feature)；其余 41 分支 cu=0 已全等价进 main
+  - runtime 独有 ~15 行（来自 REPORT_nano_9476_restore §43-49 + backups/runtime_wt_vs_union_20260716_162508.patch）：9476 重写 union 时有意未复位；style.css(11 行 mobile nowrap/Remote machines 注释/font-display swap/Prompt 注释) + app.js(2 行 旧名 import[已 stale] + notify WS 自动重连) + index.html(2 行 render-mode 单选)；真有价值仅 notify WS 重连 + render-mode 单选 2 处，低优先级可从 patch 取回
+  - 产出：`~/codex_work/NANOCODE_FEATURE_AUDIT.md`（全 51 分支表 + 真丢失详情 + 给秘书建议清单）；`~/codex_work/run_nano_maint.log`（逐分支 cherry-aware 输出 + 核实证据）
+  - 红线：⚠️ 只审计不擅自合（任务书步骤4「只审计不擅自合，批了再按并集原则合入」）；未 merge/cherry-pick/push；未碰 9475；npm test 门槛不变（待批合入时再跑）；本审计未改任何功能代码
+  - 给秘书建议：批了就合(高价值需解冲突)=cc-parity-b1 逐 commit cherry-pick + plugins-notif cherry-pick；顺手合(小 fix)=nc01-land 1 行 + nc220-persist 15 行；可选取回=TTS replay 按钮 + runtime notify WS 重连/render-mode 单选；可归档清理=agent-naming-and-ux/pre-rebase-backup/nano-integration-0715/-v2/nano-plugin-akari
+  - NOTHING-TO-DO（本轮为审计任务，无 bug 待修）；本行记账，不 push 不部署
