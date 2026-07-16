@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-16
 **Branch**: `zhining/nano-plugin-akari`
-**Commits**: 32fca57 (Round 1) + 6334638 (Round 2)
+**Commits**: 32fca57 (Round 1) + 6334638 (Round 2) + 04dac4e (Round 3)
 
 ---
 
@@ -57,10 +57,23 @@
 ```
 Round 1: 652 tests, 144 suites, 652 pass, 0 fail
 Round 2: 652 tests, 144 suites, 652 pass, 0 fail
+Round 3: 652 tests, 144 suites, 652 pass, 0 fail
 ```
 
 Smoke test on port 9477: health=ok, services respond.
 grep "FAIL|MISMATCH|NaN|Error|NOT FOUND" → clean (only test description text, no actual failures).
+
+## Round 3 (04dac4e)
+
+### Line 1: Codex Rendering
+10. **Diff line numbers** — Old/new side line number columns in the diff gutter for easier code review
+11. **Expandable truncated output** — Long command output (>80 lines) shows a "Show all N lines" button instead of hard truncation
+12. **Session stats bar** — Sticky top bar showing live block/command/file-change/turn counts
+13. **Timestamp badges** — Each block gets a HH:MM:SS timestamp, shown on hover (CSS `::after` pseudo-element)
+
+### Line 3: Akari Polish
+14. **Lane utilization gauge** — Visual progress bar with percentage label in the Concurrency section
+15. **Worker detail expansion** — Click any worker row to reveal lane ID, stage, last tool, error, branch details
 
 ## Files Changed
 
@@ -75,3 +88,8 @@ Round 2:
 - `public/js/codex-block-renderer.js` — hljs syntax highlight, tool icons, streaming cursor, error blocks, diff context collapse
 - `public/style.css` — streaming cursor, error block, diff collapse, mobile overflow fixes
 - `public/js/akari-panel.js` — External Army fleet summary + timestamp fix
+
+Round 3:
+- `public/js/codex-block-renderer.js` — diff line numbers, expandable output, session stats bar, timestamps
+- `public/style.css` — stats bar, timestamp badge, diff line numbers, show-all button, akari gauge + detail row
+- `public/js/akari-panel.js` — lane utilization gauge + worker detail expansion
