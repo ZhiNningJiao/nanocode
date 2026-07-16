@@ -234,6 +234,22 @@ function renderConcurrency(c) {
   grid.appendChild(stat('peak', c?.peak ?? '–'))
   grid.appendChild(stat('open lanes', c?.open_lanes ?? '–'))
   wrap.appendChild(grid)
+
+  // Lane utilization gauge
+  const running = Number(c?.running) || 0
+  const peak = Number(c?.peak) || 0
+  const openLanes = Number(c?.open_lanes) || 0
+  const total = running + openLanes
+  if (total > 0) {
+    const pct = Math.round((running / total) * 100)
+    const gauge = document.createElement('div')
+    gauge.className = 'akari-gauge'
+    gauge.innerHTML =
+      `<div class="akari-gauge-label">${pct}% utilized (${running}/${total})</div>` +
+      `<div class="akari-gauge-track"><div class="akari-gauge-fill" style="width:${pct}%"></div></div>`
+    wrap.appendChild(gauge)
+  }
+
   return wrap
 }
 
@@ -258,7 +274,7 @@ function renderWorkers(w) {
   const body = document.createElement('tbody')
   for (const wk of list) {
     const tr = document.createElement('tr')
-    if (wk.needs_attention) tr.className = 'akari-attention'
+    tr.className = wk.needs_attention ? 'akari-attention akari-expandable' : 'akari-expandable'
     tr.appendChild(td(wk.worker_id, 'akari-mono'))
     tr.appendChild(tdState(wk.state, wk.needs_attention))
     tr.appendChild(td(wk.model_id || '–', 'akari-mono'))
@@ -269,6 +285,28 @@ function renderWorkers(w) {
     const act = wk.current_activity || wk.last_tool || (wk.stage ? `stage:${wk.stage}` : '–')
     tr.appendChild(td(act, 'akari-marker'))
     body.appendChild(tr)
+
+    // Detail row (collapsed by default, click to expand)
+    const detailTr = document.createElement('tr')
+    detailTr.className = 'akari-detail-row'
+    detailTr.style.display = 'none'
+    const detailTd = document.createElement('td')
+    detailTd.colSpan = 8
+    detailTd.className = 'akari-detail-cell'
+    const details = [
+      wk.lane_id ? `lane: ${wk.lane_id}` : null,
+      wk.stage ? `stage: ${wk.stage}` : null,
+      wk.last_tool ? `last tool: ${wk.last_tool}` : null,
+      wk.error ? `error: ${wk.error}` : null,
+      wk.branch ? `branch: ${wk.branch}` : null,
+    ].filter(Boolean)
+    detailTd.textContent = details.length ? details.join(' · ') : 'No additional details'
+    detailTr.appendChild(detailTd)
+    body.appendChild(detailTr)
+
+    tr.addEventListener('click', () => {
+      detailTr.style.display = detailTr.style.display === 'none' ? '' : 'none'
+    })
   }
   tbl.appendChild(body)
   wrap.appendChild(scrollWrap(tbl))

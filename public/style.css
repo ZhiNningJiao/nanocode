@@ -5751,6 +5751,31 @@ body.workspace-active .landing-overlay { display: none; }
 .akari-state-dot.wait { background: #ffb300; }
 .akari-state-dot.bad { background: #f44336; }
 .akari-attention-text { color: var(--warning); }
+.akari-expandable { cursor: pointer; }
+.akari-expandable:hover td { background: var(--bg-hover); }
+.akari-detail-row td { padding: 0 !important; }
+.akari-detail-cell {
+  padding: 6px 8px !important;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.akari-gauge { margin-top: 6px; }
+.akari-gauge-label { font-size: 10px; color: var(--text-tertiary); margin-bottom: 2px; }
+.akari-gauge-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+.akari-gauge-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--success) 0%, var(--primary) 100%);
+  transition: width 0.3s ease;
+}
 
 /* managed (read-only) service rows — no edit/delete controls */
 .service-item.managed .service-actions { display: none; }
@@ -7984,6 +8009,75 @@ body.workspace-active .landing-overlay { display: none; }
 .cbx-diff-collapse .cbx-diff-gutter {
   color: var(--text-muted);
   font-weight: 400;
+}
+
+/* ── Session stats bar (block/command/file/turn counts) ───────── */
+.cbx-stats-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 3px var(--s-3);
+  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+.cbx-stats-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ── Block timestamp badge ───────────────────────────────────── */
+.cbx-block[data-ts]::after {
+  content: attr(data-ts);
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+.cbx-block { position: relative; }
+.cbx-block:hover[data-ts]::after { opacity: 0.6; }
+
+/* ── Diff line numbers ───────────────────────────────────────── */
+.cbx-diff-lno {
+  flex-shrink: 0;
+  width: 2.5em;
+  text-align: right;
+  padding-right: 4px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  user-select: none;
+  opacity: 0.6;
+}
+
+/* ── Show-all button for truncated command output ────────────── */
+.cbx-show-all-btn {
+  display: block;
+  width: 100%;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 4px 0;
+  margin-top: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.cbx-show-all-btn:hover {
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 /* ── Mobile tweaks ──────────────────────────────────────────────── */
