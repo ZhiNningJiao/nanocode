@@ -7399,6 +7399,15 @@ body.workspace-active .landing-overlay { display: none; }
   padding: 0;
 }
 
+/* Command timestamp */
+.cbx-bash-ts {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted, #666);
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
 /* Status badges */
 .cbx-bash-status {
   font-family: var(--font-mono);
