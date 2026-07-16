@@ -568,6 +568,9 @@ export class ClaudeBlockRenderer {
     // Track the "Connection lost" system block for in-place update (N34 dedup)
     this._connLostEl = null
 
+    // Persistent read-only banner (shown when another server hosts the session)
+    this._readonlyBannerEl = null
+
     // Track the in-progress compact block for in-place update
     this._compactProgressEl = null
 
@@ -1583,6 +1586,18 @@ export class ClaudeBlockRenderer {
         detail: { tabId: this.tabId },
       }))
     } else if (event.subtype === 'info') {
+      // Read-only mode banner: another server hosts this session.
+      if (event._readonly === true) {
+        this._showReadOnlyBanner(event._lockHolderPort)
+        this._addSystemBlock(`[${event.text}]`)
+        return
+      }
+      // Promotion: we are now the host, clear the read-only banner.
+      if (event._readonly === false && this._readonlyBannerEl) {
+        this._hideReadOnlyBanner()
+        this._addSystemBlock(`[${event.text}]`)
+        return
+      }
       this._addSystemBlock(`[${event.text}]`)
     } else if (event.subtype === 'resume-trigger') {
       // Server intercepted /resume and resolved the target session.
@@ -2228,6 +2243,29 @@ export class ClaudeBlockRenderer {
     const article = createUserBlock(text, { escHtml, attachPathAndUrlHandlers })
     this._scroll.appendChild(article)
     this._scrollBottom()
+  }
+
+  _showReadOnlyBanner(holderPort) {
+    if (this._readonlyBannerEl) {
+      const text = this._readonlyBannerEl.querySelector('.cbr-readonly-text')
+      if (text) text.textContent = `会话由 :${holderPort} 托管`
+      return
+    }
+    const banner = document.createElement('div')
+    banner.className = 'cbr-readonly-banner'
+    banner.innerHTML =
+      `<span class="cbr-readonly-icon">&#128274;</span>` +
+      `<span class="cbr-readonly-text">会话由 :${escHtml(String(holderPort))} 托管</span>` +
+      `<span class="cbr-readonly-hint">（只读模式）</span>`
+    this.container.insertBefore(banner, this.container.firstChild)
+    this._readonlyBannerEl = banner
+  }
+
+  _hideReadOnlyBanner() {
+    if (this._readonlyBannerEl) {
+      this._readonlyBannerEl.remove()
+      this._readonlyBannerEl = null
+    }
   }
 
   _appendSkillLoadBlock(text) {

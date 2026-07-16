@@ -35,6 +35,7 @@ export function createTerminalRoutes(store, opts = {}) {
     store,
     home,
     recentAgents,
+    port: opts?.port ?? null,
     // Test seam only: forwarded to createClaudeSdkDriver so send-now race
     // tests can inject a deterministic mock query. Undefined in production.
     testQueryImpl: opts?.testQueryImpl,
