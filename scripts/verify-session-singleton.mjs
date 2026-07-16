@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import WebSocket from 'ws'
+import { createStore } from '../server/store.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(__dirname, '..')
@@ -312,15 +313,39 @@ async function main() {
   }
 }
 
+// Remove the singleton-test projects this script created from the shared
+// cwd-relative store (data/nanocode.json). The lock dir is HOME-isolated, but
+// the data store is cwd-relative, so without this the script would leave
+// dead test projects behind on every run. Deterministic — does not depend
+// on server in-memory state (which may have diverged across the two servers).
+function cleanupStore() {
+  try {
+    const storeFile = path.join(repoRoot, 'data/nanocode.json')
+    if (!existsSync(storeFile)) return
+    const store = createStore(storeFile)
+    const testProjects = store.listProjects().filter((p) => p.name === 'singleton-test')
+    if (!testProjects.length) return
+    for (const p of testProjects) store.removeProject(p.id)
+    log(`Removed ${testProjects.length} singleton-test test project(s) from data/nanocode.json`)
+  } catch (err) {
+    log(`store cleanup failed (non-fatal): ${err?.message || err}`)
+  }
+}
+
 function cleanup(code) {
   log('Cleaning up...')
   for (const proc of servers) {
     try { proc.kill('SIGTERM') } catch {}
   }
-  if (tmpHome) {
-    try { rmSync(tmpHome, { recursive: true, force: true }) } catch {}
-  }
-  process.exit(code)
+  // Give the servers a moment to release the shared data file, then clean
+  // the test projects we created so the worktree store is left pristine.
+  setTimeout(() => {
+    cleanupStore()
+    if (tmpHome) {
+      try { rmSync(tmpHome, { recursive: true, force: true }) } catch {}
+    }
+    process.exit(code)
+  }, 200)
 }
 
 process.on('SIGINT', () => cleanup(130))
