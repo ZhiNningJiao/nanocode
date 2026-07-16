@@ -486,3 +486,27 @@ commit 03beb00
 - 热部署：kill 9475 → PORT=9475 重启 → `/api/health` 200
 - 前端验证：Playwright 实测 EN 模式所有 agent drawer 文本正确翻译，ZH 模式中文正常，0 console error
 - commit: 599d6f0，push fork zhining/nanocode-history-replay-fix
+
+## 2026-07-16 17:32 [nano_maint R1 — 接 Opus officer 班，9476/9475 巡检]
+- 任务：接手 nanocode GLM 维护线（HANDOFF_opus_officer.md），巡检 9475/9476 健康与前端报错，npm test 保持 0 fail
+- 接班：读 HANDOFF_opus_officer.md（178 FLAG 验收收线，9476 跑 zhining/nano-9476-integ-0716 HEAD 3ffec41，0 pending REVIEW_REQ/CHORE）；HANDOFF_opus_burn.md 尚未落地，按任务书跳过
+- 分支：zhining/nano-9476-integ-0716 @ 3ffec41，工作树干净（仅未跟踪 .git.bak-migrate）
+- 健康巡检：
+  - 9475 = 200（pid 304142，未触碰）
+  - 9476 = 200（pid 243001，本 worktree 起 `node server/index.js`）；/api/health + /api/services + /api/sessions 均 200
+  - 9476 服务态：nanocode up / akari up；mblend·dccpipeline·regression·TTS down（非 nanocode 维护面，预期）
+- 前端报错巡检（Playwright headless 加载 http://localhost:9476/，networkidle+2.5s）：
+  - console error/warning = 0，pageerror = 0，failed request = 0，title="Nanocode"
+- npm test：`node --test server/tests/*.test.js` → 653 pass / 0 fail（tee run_nano_maint.log）
+- 待办扫描：~/codex_work/REVIEW_REQ_* / CHORE_* = 0（FLAG_* 均为 6 月遗留空旗，非维护面，按 handoff 跳过）
+- 观察（非本轮动作，留主人定夺）：fork/main 领先本分支 3 commit（opus_burn R8/R9：e68ed60/d3da9db/570c744，连接恢复/命令计时/图片渲染/块导航/键盘可访问性/MCP markdown）——属大改，未并入 9476，按任务书「大改先等批」不动
+- 本轮无可修复 bug / 无 REVIEW_REQ/CHORE → 巡检即当轮所做，无 push 无部署
+- run.log：run_nano_maint.log（gitignored，run-*.log）；grep 无真实失败（仅测试名含 "Error" 子串）
+
+## 2026-07-16 17:33 [nano_maint R2 — 复巡 + 读 opus_burn 交接]
+- 复巡（R1 后约 1 分钟，状态未变）：9475=200 / 9476=200（/api/health+/api/services+/api/sessions 均 200，本轮自带 curl）
+- npm test 复跑（本轮自带，`tee -a run_nano_maint.log`）：653 pass / 0 fail
+- REVIEW_REQ_* / CHORE_* = 0（无新待办）
+- 新观察（相对 R1）：fork/main 由 3 ahead → 4 ahead，新增 5945c5a `docs(opus_burn): handoff + FLAG`——opus_burn 交接文档落在仓内 `HANDOFF_opus_burn.md`（非 ~/codex_work/，任务书所指路径尚未出现），已 `git show` 只读读完：R4-R9 codex 块渲染全套（图片渲染/块导航/键盘可访问性/MCP markdown/连接恢复/命令计时），653/0，smoke 用 9477，不碰 9475/9476
+- 4 commit 均未并入 9476（本分支仍 3ffec41），属大改，按任务书「大改先等批」继续不动，留主人定夺是否并入 9476
+- 本轮无可修复 bug / 无待办 → NOTHING-TO-DO；仅提交 work-log 记账，无 push 无部署
