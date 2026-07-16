@@ -181,6 +181,11 @@ function renderState(state) {
   el.appendChild(renderConcurrency(state.concurrency))
   el.appendChild(renderWorkers(state.workers))
   el.appendChild(renderLanes(state.lanes))
+
+  // External Army: cross-reference historian army data for non-akari agents
+  fetchExternalArmy().then(armyEl => {
+    if (armyEl && activePane) el.appendChild(armyEl)
+  })
 }
 
 function renderHealth(h) {
@@ -300,6 +305,64 @@ function renderLanes(l) {
     tr.appendChild(td(ln.at_main ? '✓' : ''))
     tr.appendChild(td(ln.occupant || '–'))
     tr.appendChild(td(ln.reserved ? '🔒' : ''))
+    body.appendChild(tr)
+  }
+  tbl.appendChild(body)
+  wrap.appendChild(scrollWrap(tbl))
+  return wrap
+}
+
+// ── External Army (historian cross-reference) ────────────────────────────────
+
+async function fetchExternalArmy() {
+  try {
+    const r = await fetch('/api/historian/state')
+    const state = await r.json()
+    const agents = state?.army?.agents
+    if (!Array.isArray(agents) || !agents.length) return null
+    return renderExternalArmy(agents, state.army?.updatedAt)
+  } catch {
+    return null
+  }
+}
+
+function renderExternalArmy(agents, updatedAt) {
+  const wrap = document.createElement('div')
+  wrap.className = 'rp-section akari-block'
+  const title = document.createElement('div')
+  title.className = 'rp-subtitle'
+  title.textContent = `External Army (${agents.length})`
+  wrap.appendChild(title)
+
+  if (updatedAt) {
+    const meta = document.createElement('div')
+    meta.className = 'rp-hint'
+    const age = Math.round((Date.now() - updatedAt) / 1000)
+    meta.textContent = `updated ${fmtSecs(age)}`
+    wrap.appendChild(meta)
+  }
+
+  const tbl = document.createElement('table')
+  tbl.className = 'akari-table'
+  tbl.appendChild(tableHead(['tag', 'status', 'last active', 'activity']))
+  const body = document.createElement('tbody')
+  for (const a of agents) {
+    const tr = document.createElement('tr')
+    if (a.stalled) tr.className = 'akari-attention'
+    tr.appendChild(td(a.tag || '?', 'akari-mono'))
+    const statusTd = document.createElement('td')
+    statusTd.className = 'akari-state'
+    const dot = document.createElement('span')
+    dot.className = `akari-state-dot ${a.flag ? 'idle' : a.stalled ? 'bad' : 'busy'}`
+    statusTd.appendChild(dot)
+    const span = document.createElement('span')
+    span.textContent = a.flag ? 'FLAG' : a.stalled ? 'STALL' : 'running'
+    statusTd.appendChild(span)
+    tr.appendChild(statusTd)
+    tr.appendChild(td(fmtSecs(a.last_active_s)))
+    const act = td((a.last_line || '').slice(0, 60), 'akari-marker')
+    act.title = a.last_line || ''
+    tr.appendChild(act)
     body.appendChild(tr)
   }
   tbl.appendChild(body)
