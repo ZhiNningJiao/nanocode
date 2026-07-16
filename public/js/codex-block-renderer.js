@@ -393,6 +393,127 @@ function _attachCopyHandlers(el) {
   })
 }
 
+// ── File path & URL auto-linking (ported from Claude block renderer) ─────────
+// Makes file paths clickable (open in explorer) and URLs clickable (open in tab).
+const CBX_PATH_RE = /(?:(?:\/(?:storage|home)\/[^\s,;:!?()\[\]"'<>]+)|(?:~\/[^\s,;:!?()\[\]"'<>]+)|(?<![:/])(?:[a-zA-Z][a-zA-Z0-9_.-]*(?:\/[a-zA-Z0-9_.+-]+)+\.[a-zA-Z]{2,10})(?=\s|$|[,;:!?()\[\]"'<>]))/g
+const CBX_URL_RE = /https?:\/\/[^\s"'<>[\]()]+[^\s"'<>[\]().,;:!?]/g
+
+function _attachPathAndUrlLinks(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      let p = node.parentElement
+      while (p && p !== root) {
+        const tag = p.tagName.toLowerCase()
+        if (tag === 'a' || tag === 'pre' || tag === 'code') return NodeFilter.FILTER_REJECT
+        p = p.parentElement
+      }
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+  const textNodes = []
+  let node
+  while ((node = walker.nextNode())) textNodes.push(node)
+
+  for (const textNode of textNodes) {
+    const text = textNode.nodeValue
+    if (!text) continue
+    if (!/https?:\/\//.test(text) && !/(\/storage\/|\/home\/|~\/|\w+\/\w+\.\w{1,10})/.test(text)) continue
+
+    const matches = []
+    let m
+    CBX_URL_RE.lastIndex = 0
+    CBX_PATH_RE.lastIndex = 0
+    while ((m = CBX_URL_RE.exec(text)) !== null) {
+      matches.push({ type: 'url', start: m.index, end: m.index + m[0].length, value: m[0] })
+    }
+    CBX_URL_RE.lastIndex = 0
+    while ((m = CBX_PATH_RE.exec(text)) !== null) {
+      if (m[0].length > 300) continue
+      matches.push({ type: 'path', start: m.index, end: m.index + m[0].length, value: m[0] })
+    }
+    CBX_PATH_RE.lastIndex = 0
+    if (!matches.length) continue
+
+    matches.sort((a, b) => a.start - b.start)
+    const deduped = []
+    let lastEnd = 0
+    for (const match of matches) {
+      if (match.start < lastEnd) continue
+      deduped.push(match)
+      lastEnd = match.end
+    }
+    if (!deduped.length) continue
+
+    const frag = document.createDocumentFragment()
+    let pos = 0
+    for (const match of deduped) {
+      if (match.start > pos) frag.appendChild(document.createTextNode(text.slice(pos, match.start)))
+      if (match.type === 'url') {
+        const a = document.createElement('a')
+        a.href = match.value
+        a.target = '_blank'
+        a.rel = 'noopener noreferrer'
+        a.textContent = match.value
+        a.className = 'cbx-autolink-url'
+        frag.appendChild(a)
+      } else {
+        const span = document.createElement('span')
+        span.className = 'cbx-path-link'
+        span.textContent = match.value
+        span.title = 'Open in explorer: ' + match.value
+        span.dataset.path = match.value
+        span.addEventListener('click', (e) => {
+          e.stopPropagation()
+          document.dispatchEvent(new CustomEvent('nanocode:open-in-explorer', {
+            detail: { path: match.value },
+            bubbles: true,
+          }))
+        })
+        frag.appendChild(span)
+      }
+      pos = match.end
+    }
+    if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)))
+    textNode.parentNode.replaceChild(frag, textNode)
+  }
+}
+
+// ── Word-level inline diff highlighting ──────────────────────────────────────
+// For adjacent removed/added line pairs, compute word-level diffs and wrap
+// changed words in <span class="cbx-diff-word-*"> for highlight.
+function _wordDiff(oldLine, newLine) {
+  const oldWords = oldLine.split(/(\s+)/)
+  const newWords = newLine.split(/(\s+)/)
+  // Simple LCS on words
+  const m = oldWords.length, n = newWords.length
+  if (m > 200 || n > 200) return null // too long, skip
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = oldWords[i] === newWords[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const oldMarks = new Uint8Array(m) // 1 = changed
+  const newMarks = new Uint8Array(n)
+  let i = 0, j = 0
+  while (i < m || j < n) {
+    if (i < m && j < n && oldWords[i] === newWords[j]) { i++; j++ }
+    else if (j < n && (i >= m || dp[i][j + 1] >= dp[i + 1][j])) { newMarks[j] = 1; j++ }
+    else { oldMarks[i] = 1; i++ }
+  }
+  const renderSide = (words, marks, cls) => {
+    let html = ''
+    for (let k = 0; k < words.length; k++) {
+      html += marks[k] ? `<span class="${cls}">${escHtml(words[k])}</span>` : escHtml(words[k])
+    }
+    return html
+  }
+  return {
+    oldHtml: renderSide(oldWords, oldMarks, 'cbx-diff-word-del'),
+    newHtml: renderSide(newWords, newMarks, 'cbx-diff-word-add'),
+  }
+}
+
 // ── LCS-based line diff (ported from Claude block renderer) ──────────────────
 function _computeLineDiff(oldText, newText) {
   const oldLines = oldText.split('\n')
@@ -711,6 +832,11 @@ export class CodexBlockRenderer {
 
   sendRaw(data) {
     if (data === '\x03') {
+      // Ctrl+C: POST interrupt API (matches Claude tab behavior)
+      if (this.projectId && this.tabId) {
+        fetch(`/api/projects/${this.projectId}/tabs/${this.tabId}/interrupt`, { method: 'POST' })
+          .catch(() => {})
+      }
       this._addSystemBlock('[Interrupted]')
       this._send({ type: 'input', data })
     }
@@ -1727,6 +1853,32 @@ export class CodexBlockRenderer {
     if (diffHtml) {
       const header = article.querySelector('.cbx-filechange-header')
       _attachFoldToggle(header, article)
+      // Attach expand handlers for collapsed context sections
+      const diffData = this._lastDiffData
+      if (diffData) {
+        article.querySelectorAll('.cbx-diff-expandable').forEach(el => {
+          el.style.cursor = 'pointer'
+          el.addEventListener('click', (e) => {
+            e.stopPropagation()
+            const start = parseInt(el.dataset.start, 10)
+            const end = parseInt(el.dataset.end, 10)
+            if (isNaN(start) || isNaN(end)) return
+            const lines = []
+            for (let k = start; k < end; k++) {
+              const entry = diffData.diffResult[k]
+              const ln = diffData.lineNums[k]
+              if (!entry) continue
+              const oldN = ln?.old != null ? ln.old : ''
+              const newN = ln?.new != null ? ln.new : ''
+              lines.push(`<div class="cbx-diff-line cbx-diff-equal"><span class="cbx-diff-lno">${oldN}</span><span class="cbx-diff-lno">${newN}</span><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">${escHtml(entry.line)}</span></div>`)
+            }
+            const frag = document.createRange().createContextualFragment(lines.join(''))
+            el.parentNode.insertBefore(frag, el)
+            el.remove()
+          })
+        })
+        this._lastDiffData = null
+      }
     }
 
     this._scroll.appendChild(article)
@@ -1743,18 +1895,16 @@ export class CodexBlockRenderer {
       const lines = oldContent.split('\n').slice(0, 50)
       return lines.map(l => `<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
     }
-    // Modified: LCS-based diff with context collapse (3 lines around changes)
-    // Now with line numbers for old/new sides
+    // Modified: LCS-based diff with context collapse + word-level highlights
     const diffResult = _computeLineDiff(oldContent, newContent)
     const CTX = 3
-    // Mark which lines are within CTX of a change
     const show = new Uint8Array(diffResult.length)
     for (let i = 0; i < diffResult.length; i++) {
       if (diffResult[i].type !== 'equal') {
         for (let j = Math.max(0, i - CTX); j <= Math.min(diffResult.length - 1, i + CTX); j++) show[j] = 1
       }
     }
-    // Track line numbers for old/new sides
+    // Track line numbers
     let oldLine = 1, newLine = 1
     const lineNums = diffResult.map(entry => {
       const r = { old: null, new: null }
@@ -1763,31 +1913,57 @@ export class CodexBlockRenderer {
       else if (entry.type === 'added') { r.new = newLine++ }
       return r
     })
+    // Pre-compute word-level diffs for adjacent removed/added pairs
+    const wordDiffs = new Map()
+    for (let i = 0; i < diffResult.length - 1; i++) {
+      if (diffResult[i].type === 'removed' && diffResult[i + 1].type === 'added') {
+        const wd = _wordDiff(diffResult[i].line, diffResult[i + 1].line)
+        if (wd) { wordDiffs.set(i, wd.oldHtml); wordDiffs.set(i + 1, wd.newHtml) }
+      }
+    }
     const result = []
     let rendered = 0
-    let skipped = 0
+    let skippedStart = -1
+    let skippedCount = 0
+    const _flushSkipped = () => {
+      if (skippedCount <= 0) return
+      // data-start/data-end encode the range of hidden diff entries for expand
+      result.push(
+        `<div class="cbx-diff-line cbx-diff-collapse cbx-diff-expandable" ` +
+        `data-start="${skippedStart}" data-end="${skippedStart + skippedCount}" ` +
+        `title="Click to expand">` +
+        `<span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span>` +
+        `<span class="cbx-diff-gutter">\u22EF</span>` +
+        `<span class="cbx-diff-text">${skippedCount} unchanged lines</span></div>`)
+      skippedStart = -1
+      skippedCount = 0
+    }
     for (let i = 0; i < diffResult.length; i++) {
       if (rendered >= 200) {
+        _flushSkipped()
         result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">\u2026 ${diffResult.length - i} more lines</span></div>`)
         break
       }
-      if (!show[i]) { skipped++; continue }
-      if (skipped > 0) {
-        result.push(`<div class="cbx-diff-line cbx-diff-collapse"><span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span><span class="cbx-diff-gutter">\u22EF</span><span class="cbx-diff-text">${skipped} unchanged lines</span></div>`)
-        skipped = 0
+      if (!show[i]) {
+        if (skippedCount === 0) skippedStart = i
+        skippedCount++
+        continue
       }
+      _flushSkipped()
       const entry = diffResult[i]
       const ln = lineNums[i]
       const cls = entry.type === 'added' ? 'cbx-diff-added' : entry.type === 'removed' ? 'cbx-diff-removed' : 'cbx-diff-equal'
       const gutter = entry.type === 'added' ? '+' : entry.type === 'removed' ? '-' : ' '
       const oldN = ln.old != null ? ln.old : ''
       const newN = ln.new != null ? ln.new : ''
-      result.push(`<div class="cbx-diff-line ${cls}"><span class="cbx-diff-lno">${oldN}</span><span class="cbx-diff-lno">${newN}</span><span class="cbx-diff-gutter">${gutter}</span><span class="cbx-diff-text">${escHtml(entry.line)}</span></div>`)
+      // Use word-level highlight if available, otherwise plain escHtml
+      const textHtml = wordDiffs.has(i) ? wordDiffs.get(i) : escHtml(entry.line)
+      result.push(`<div class="cbx-diff-line ${cls}"><span class="cbx-diff-lno">${oldN}</span><span class="cbx-diff-lno">${newN}</span><span class="cbx-diff-gutter">${gutter}</span><span class="cbx-diff-text">${textHtml}</span></div>`)
       rendered++
     }
-    if (skipped > 0) {
-      result.push(`<div class="cbx-diff-line cbx-diff-collapse"><span class="cbx-diff-lno"></span><span class="cbx-diff-lno"></span><span class="cbx-diff-gutter">\u22EF</span><span class="cbx-diff-text">${skipped} unchanged lines</span></div>`)
-    }
+    _flushSkipped()
+    // Store diffResult + lineNums on a closure for expand clicks
+    this._lastDiffData = { diffResult, lineNums }
     return result.join('')
   }
 
@@ -1882,6 +2058,8 @@ export class CodexBlockRenderer {
   // ── Utility blocks ────────────────────────────────────────────────────────────
 
   _makeBlock(extraClasses = '') {
+    // Finalize auto-linking on previous text blocks before creating a new block
+    this._finalizePreviousTextBlocks()
     const article = document.createElement('article')
     article.className = `cbx-block ${extraClasses}`.trim()
     // Timestamp badge
@@ -1891,6 +2069,18 @@ export class CodexBlockRenderer {
     this._stats.blocks++
     this._updateStatsBar()
     return article
+  }
+
+  /** Apply auto-linking to text blocks that are no longer being appended to. */
+  _finalizePreviousTextBlocks() {
+    if (!this._scroll) return
+    const last = this._scroll.lastElementChild
+    if (last && last.classList.contains('cbx-block-text') && !last.classList.contains('cbx-live')
+        && !last._linksAttached) {
+      last._linksAttached = true
+      const md = last.querySelector('.cbx-text-md')
+      if (md) _attachPathAndUrlLinks(md)
+    }
   }
 
   _addSystemBlock(msg) {
@@ -1960,10 +2150,22 @@ export class CodexBlockRenderer {
       case 'turn.started':
         this._setThinking(true)
         break
+      case 'rate_limit':
+        this._handleRateLimit(event)
+        break
       case 'thread.started':
         // informational — no visual rendering
         break
     }
+  }
+
+  /** Show a rate-limit warning with retry countdown (mirrors Claude tab). */
+  _handleRateLimit(event) {
+    const info = event.rate_limit_info || {}
+    const msg = info.retryAfterMs
+      ? `Rate limited \u2014 retry in ${(info.retryAfterMs / 1000).toFixed(0)}s`
+      : 'Rate limit warning'
+    this._addSystemBlock(`[${msg}]`)
   }
 
   _handleSdkItemStarted(item) {
@@ -2142,6 +2344,7 @@ export class CodexBlockRenderer {
     this._renderLiveAgentMarkdown(false)
     _attachCopyHandlers(this._liveAgentBlock)
     _highlightCodeBlocks(this._liveAgentBlock)
+    _attachPathAndUrlLinks(this._liveAgentBlock)
     this._liveAgentBlock.classList.remove('cbx-live')
     this._liveAgentBlock = null
     this._liveAgentItemId = null
