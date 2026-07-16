@@ -85,11 +85,17 @@ Switch via **Settings > Session > Render Mode**:
 When the Codex SDK driver is active, codex tabs use **structured event rendering** instead of raw PTY text:
 
 - **Agent messages**: Rendered as markdown with code blocks, syntax highlighting, and **copy buttons** on each code fence
-- **Command execution**: Foldable blocks showing the command, live "running..." status, and exit code (green checkmark or red X)
-- **File changes**: Diff blocks with **LCS-based diffing** (same quality as Claude tab) showing added/removed/unchanged lines
+- **Command execution**: Foldable blocks showing the command, live "running..." status, exit code (green checkmark or red X), and **HH:MM:SS timestamps**. Successful commands (exit 0) **auto-fold** to save screen space
+- **File changes**: Diff blocks with **LCS-based diffing** (same quality as Claude tab) showing added/removed/unchanged lines with **line numbers** and context collapse
+- **Reasoning blocks**: Collapsible thinking summaries -- shows a preview when folded, full text when expanded
+- **MCP tool calls**: Blocks for external tool invocations via Model Context Protocol, showing tool name, server, arguments, and success/error status
+- **Web search**: Visual indicator when Codex performs web searches
+- **Usage/token display**: End-of-turn token usage (input, output, cached, reasoning tokens) shown below each turn separator
 - **Thinking indicator**: Animated dot with elapsed timer showing how long Codex has been processing
-- **Turn separators**: Visual dividers between conversation turns
+- **Turn separators**: Visual dividers between conversation turns with a notification event for the alert system
+- **Smart auto-scroll**: Auto-scrolling pauses when you scroll up to read earlier output, and resumes when you click the scroll-to-bottom button or send new input
 - **Fold states**: Click any block header to cycle between full/header/line views (persisted in localStorage)
+- **Session stats bar**: Live counters for total blocks, commands, file changes, and turns
 
 ---
 

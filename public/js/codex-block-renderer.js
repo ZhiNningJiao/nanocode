@@ -563,9 +563,13 @@ export class CodexBlockRenderer {
       `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">` +
       `<polyline points="6 9 12 15 18 9"/></svg>`
     this._scrollBtn.addEventListener('click', () => {
+      this._userScrolledUp = false
       this._scroll.scrollTo({ top: this._scroll.scrollHeight, behavior: 'smooth' })
     })
     container.appendChild(this._scrollBtn)
+
+    // Smart auto-scroll: track when user scrolls away from bottom
+    this._userScrolledUp = false
 
     let _scrollRafPending = false
     this._scroll.addEventListener('scroll', () => {
@@ -573,6 +577,9 @@ export class CodexBlockRenderer {
       _scrollRafPending = true
       requestAnimationFrame(() => {
         _scrollRafPending = false
+        const s = this._scroll
+        const atBottom = s.scrollHeight - s.scrollTop - s.clientHeight < 40
+        this._userScrolledUp = !atBottom
         this._updateScrollBtn()
       })
     }, { passive: true })
@@ -686,6 +693,8 @@ export class CodexBlockRenderer {
     // Reset response block tracking: new turn always starts a fresh block
     this._lastResponseBlockEl = null
     this._lastResponseBlockTs = 0
+    // Resume auto-scroll on new input
+    this._userScrolledUp = false
   }
 
   sendRaw(data) {
@@ -1852,7 +1861,12 @@ export class CodexBlockRenderer {
         this._finalizeAgentMessage()
         this._removeThinkingBlock()
         this._setThinking(false)
+        this._maybeAddUsageBlock(event)
         this._addTurnSeparator()
+        // Dispatch turn-complete for notification system
+        document.dispatchEvent(new CustomEvent('nanocode:turn-complete', {
+          detail: { tabId: this.tabId },
+        }))
         break
       case 'turn.failed':
         this._finalizeCurrentBlock()
@@ -1860,10 +1874,14 @@ export class CodexBlockRenderer {
         this._removeThinkingBlock()
         this._setThinking(false)
         this._addSystemBlock(`[Error: ${event.error?.message || 'Codex turn failed'}]`)
+        this._maybeAddUsageBlock(event)
         this._addTurnSeparator()
         break
       case 'error':
         this._addSystemBlock(`[Error: ${event.message || 'Codex stream error'}]`)
+        break
+      case 'turn.started':
+        this._setThinking(true)
         break
       case 'thread.started':
         // informational — no visual rendering
@@ -1897,6 +1915,27 @@ export class CodexBlockRenderer {
       // Text will stream via codex-stream-text deltas
       this._setThinking(true)
       this._showThinkingBlock()
+    }
+
+    if (item.type === 'reasoning') {
+      this._setThinking(true)
+      this._showThinkingBlock()
+    }
+
+    if (item.type === 'mcp_tool_call') {
+      this._finalizeCurrentBlock()
+      this._finalizeAgentMessage()
+      this._removeThinkingBlock()
+      this._addMcpToolBlock(item)
+      this._setThinking(true)
+    }
+
+    if (item.type === 'web_search') {
+      this._finalizeCurrentBlock()
+      this._finalizeAgentMessage()
+      this._removeThinkingBlock()
+      this._addSystemBlock(`\uD83C\uDF10 Web search: ${item.query || ''}`)
+      this._setThinking(true)
     }
   }
 
@@ -1943,6 +1982,21 @@ export class CodexBlockRenderer {
       for (const c of changes) {
         this._addFileChangeBlock(c.kind || 'update', c.path || '', c)
       }
+      return
+    }
+
+    if (item.type === 'reasoning') {
+      this._removeThinkingBlock()
+      // Show reasoning text as a collapsible thinking block
+      if (item.text) {
+        this._addReasoningBlock(item.text)
+      }
+      return
+    }
+
+    if (item.type === 'mcp_tool_call') {
+      this._finalizeMcpToolBlock(item)
+      this._setThinking(false)
       return
     }
   }
@@ -2048,6 +2102,107 @@ export class CodexBlockRenderer {
     this._thinkingBlockEl = null
   }
 
+  /** Render a reasoning (thinking) summary as a collapsible block. */
+  _addReasoningBlock(text) {
+    const article = this._makeBlock('cbx-block-reasoning')
+    article.setAttribute('data-fold', 'header')
+    const preview = text.length > 80 ? text.slice(0, 80) + '\u2026' : text
+    article.innerHTML =
+      `<div class="cbx-reasoning-card">` +
+      `<div class="cbx-reasoning-header">` +
+      `<span class="cbx-reasoning-icon">\uD83D\uDCA1</span>` +
+      `<span class="cbx-reasoning-label">Thinking</span>` +
+      `<span class="cbx-reasoning-preview">${escHtml(preview)}</span>` +
+      `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
+      `</button>` +
+      `</div>` +
+      `<pre class="cbx-reasoning-body"></pre>` +
+      `</div>`
+    article.querySelector('.cbx-reasoning-body').textContent = text
+    const header = article.querySelector('.cbx-reasoning-header')
+    _attachFoldToggle(header, article)
+    this._scroll.appendChild(article)
+    this._scrollBottom()
+  }
+
+  /** Render an MCP tool call block (started state). */
+  _addMcpToolBlock(item) {
+    const article = this._makeBlock('cbx-block-mcp')
+    article.setAttribute('data-fold', getFoldLevel())
+    const toolName = item.tool || 'tool'
+    const serverName = item.server || ''
+    article.innerHTML =
+      `<div class="cbx-mcp-card">` +
+      `<div class="cbx-mcp-header">` +
+      `<span class="cbx-mcp-icon">\uD83D\uDD27</span>` +
+      `<span class="cbx-mcp-tool">${escHtml(toolName)}</span>` +
+      (serverName ? `<span class="cbx-mcp-server">${escHtml(serverName)}</span>` : '') +
+      `<span class="cbx-bash-status cbx-bash-running">running\u2026</span>` +
+      `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
+      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
+      `</button>` +
+      `</div>` +
+      `<pre class="cbx-mcp-body"></pre>` +
+      `</div>`
+    if (item.arguments) {
+      try {
+        article.querySelector('.cbx-mcp-body').textContent = typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments, null, 2)
+      } catch { /* ignore */ }
+    }
+    const header = article.querySelector('.cbx-mcp-header')
+    _attachFoldToggle(header, article)
+    this._scroll.appendChild(article)
+    this._scrollBottom()
+    // Track by item ID
+    if (item.id) this._sdkCommandBlocks.set(item.id, { article, type: 'mcp' })
+  }
+
+  /** Finalize an MCP tool call block with result/error. */
+  _finalizeMcpToolBlock(item) {
+    const tracked = item.id ? this._sdkCommandBlocks.get(item.id) : null
+    if (tracked && tracked.type === 'mcp') {
+      this._sdkCommandBlocks.delete(item.id)
+      const statusEl = tracked.article.querySelector('.cbx-bash-status')
+      if (item.error) {
+        if (statusEl) {
+          statusEl.className = 'cbx-bash-status cbx-bash-err'
+          statusEl.textContent = '\u2717 error'
+        }
+        const body = tracked.article.querySelector('.cbx-mcp-body')
+        if (body) body.textContent += '\n\nError: ' + (item.error.message || JSON.stringify(item.error))
+      } else {
+        if (statusEl) {
+          statusEl.className = 'cbx-bash-status cbx-bash-ok'
+          statusEl.textContent = '\u2713 done'
+        }
+        // Auto-fold on success
+        tracked.article.setAttribute('data-fold', 'header')
+      }
+    }
+  }
+
+  /** Render a usage/token/cost block from turn.completed event (mirrors Claude tab). */
+  _maybeAddUsageBlock(event) {
+    if (!event) return
+    const usage = event.usage
+    if (!usage) return
+    const parts = []
+    if (usage.input_tokens != null) parts.push(`in ${usage.input_tokens.toLocaleString()}`)
+    if (usage.output_tokens != null) parts.push(`out ${usage.output_tokens.toLocaleString()}`)
+    // SDK uses cached_input_tokens; Claude uses cache_read_input_tokens — handle both
+    const cached = usage.cached_input_tokens ?? usage.cache_read_input_tokens
+    if (cached != null) parts.push(`cached ${cached.toLocaleString()}`)
+    if (usage.reasoning_output_tokens != null) parts.push(`reasoning ${usage.reasoning_output_tokens.toLocaleString()}`)
+    if (event.cost_usd != null) parts.push(`$${Number(event.cost_usd).toFixed(4)}`)
+    if (parts.length) {
+      const article = this._makeBlock('cbx-block-usage')
+      article.innerHTML = `<p class="cbx-usage">${escHtml(parts.join(' \u00b7 '))}</p>`
+      this._scroll.appendChild(article)
+      this._scrollBottom()
+    }
+  }
+
   _updateStatsBar() {
     if (!this._statsBar) return
     const s = this._stats
@@ -2058,7 +2213,9 @@ export class CodexBlockRenderer {
       `<span class="cbx-stats-item" title="Turns">↻ ${s.turns}</span>`
   }
 
-  _scrollBottom() {
+  _scrollBottom({ force = false } = {}) {
+    // Smart auto-scroll: if user has scrolled up to read, don't force-scroll
+    if (!force && this._userScrolledUp) return
     requestAnimationFrame(() => {
       this._scroll.scrollTop = this._scroll.scrollHeight
       this._updateScrollBtn()

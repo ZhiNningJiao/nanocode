@@ -8042,6 +8042,90 @@ body.workspace-active .landing-overlay { display: none; }
   gap: 2px;
 }
 
+/* ── Codex reasoning block (thinking summary) ──────────────── */
+.cbx-reasoning-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.cbx-reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  cursor: pointer;
+  user-select: none;
+}
+.cbx-reasoning-icon { font-size: 0.85rem; flex-shrink: 0; }
+.cbx-reasoning-label { font-weight: 600; font-size: 0.8rem; flex-shrink: 0; }
+.cbx-reasoning-preview {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cbx-reasoning-body {
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text-muted);
+  max-height: 300px;
+  overflow-y: auto;
+}
+.cbx-block-reasoning[data-fold="header"] .cbx-reasoning-body { display: none; }
+.cbx-block-reasoning[data-fold="header"] .cbx-reasoning-preview { display: inline; }
+.cbx-block-reasoning[data-fold="full"] .cbx-reasoning-preview { display: none; }
+
+/* ── Codex MCP tool call block ─────────────────────────────── */
+.cbx-mcp-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.cbx-mcp-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  cursor: pointer;
+  user-select: none;
+}
+.cbx-mcp-icon { font-size: 0.85rem; flex-shrink: 0; }
+.cbx-mcp-tool { font-weight: 600; font-size: 0.82rem; font-family: var(--font-mono); }
+.cbx-mcp-server { font-size: 0.72rem; color: var(--text-muted); }
+.cbx-mcp-body {
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.cbx-block-mcp[data-fold="header"] .cbx-mcp-body { display: none; }
+
+/* ── Codex usage bar (end-of-turn token counts) ─────────────── */
+.cbx-block-usage {
+  background: transparent;
+  padding: 0 var(--s-2) !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+.cbx-usage {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin: 0;
+  padding: var(--s-1) 0;
+  border-top: 1px solid var(--border);
+}
+
 /* ── Block timestamp badge ───────────────────────────────────── */
 .cbx-block[data-ts]::after {
   content: attr(data-ts);
