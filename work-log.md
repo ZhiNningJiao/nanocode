@@ -2508,3 +2508,18 @@ commit 03beb00
 - fork/main vs HEAD 漂移：`git rev-list --left-right --count fork/main...HEAD` = `0	1`（fork/main 落后 HEAD 1 = R120 doc）；1 未推 < CLAUDE.md 里程碑阈值 3 → 本轮不推送（与 R120 先例一致：阈值 3+ 才推）；无 runtime 变更 → 不 rsync
 - 过程产物：run_nano_maint.log 在 repo 内 gitignored（tee -a 追加 npm test 完整原始输出，不入库）；git status 仅 `?? .git.bak-migrate`（迁移残留 pre-existing 非本轮产物）；未碰 9475；未 rsync（无 runtime 变更）；未 push（1<3 阈值）
 - NOTHING-TO-DO：任务书 20:2x 全部实质指令 R70 已落地、R71-R120 五十轮巡检确认；本轮第 51 轮新会话独立复验全绿（R70 git 真实 7 commit ancestor 非假过 / npm test 663/0 strict-grep clean / 9476 端点活 + 6 关键文件 LIVE==DISK md5 MATCH / R70 内容签名 fork/main 树全在 / 9475 不动 R70 新端点 404 + linear-notif ABSENT / 审计 ARCHIVED 7 标记 5 分支仅标记未删 / fork/main 0 落后-1领先 未推未到里程碑 / 无 REVIEW_REQ/CHORE/新 bug）；常驻维护线本轮无新活，结束该轮
+
+## 2026-07-16 23:30 [nano_maint R122 — 常驻巡检：R70 交付后状态确认（第 52 轮），新会话接班独立复验（逐项实跑，非抄 R121）]
+- 接班：读 HANDOFF_opus_officer.md（officer 178 FLAG/56 轮交接，9476 跑 integ-0716）+ NANOCODE_FEATURE_AUDIT.md（R70 执行回填 4 项全 DONE commit b95a2b7/1e52a7d/1463383/73806b5/13fe319/523a33c+bfa69cd + push bfa69cd + 9476 rsync live 验收；归档 5 分支标记均在）；任务书 19:5x/20:0x/20:2x 秘书批示合并清单 R70 已执行；FLAG_nano_maint_recover(0B，R70 20:46 立)在
+- 独立复验（逐项实跑，非抄 R121）：
+  - **R70 git 真实性**：`git merge-base --is-ancestor <c> fork/main` → b95a2b7/1e52a7d/1463383/73806b5/13fe319/523a33c + bfa69cd 全 ANCESTOR ✅ 7 commit 真 ancestor fork/main 非假过
+  - **fork/main 漂移**：`git rev-list --left-right --count fork/main...HEAD` = `0	2`（fork/main 0 ahead / HEAD 2 ahead = R120 bcbbceb + R121 f2b87e2 两未推 doc）；`git merge-base --is-ancestor fork/main HEAD`=true 0 漂移 ✅（注：R121 自述"0 1"实为 2，纯 doc 计数小误差不影响结论）
+  - **npm test**：`npm test 2>&1 | tee -a run_nano_maint.log` → tests 663 / pass 663 / fail 0 / cancelled 0 / skipped 0 / todo 0，duration 3371ms ✅（独立实跑）；strict-grep `rg "^not ok" run_nano_maint.log`=exit1 零命中 + `rg "^# fail [1-9]|RESULT: FAIL|Traceback"`=空 clean ✅
+  - **9476 健康**：GET /=200 ✅、GET /api/services=200 ✅；POST /api/notify/linear-important=400（路由活，400=缺 body 校验非端点缺）/ linear-poll=200 / test-ntfy=200 ✅ R70 notify 端点活
+  - **R70 内容签名 fork/main 树**：linear-notif.js(cat-file -e)=YES、linear-notif.test.js=YES、meshy-aigw(worker/index.js grep=1)、permission-mode(index.html+terminal-view.js grep 命中)、TTS replay(tts.js+index.html grep 命中)、TodoWrite(claude-block-renderer.js grep 命中) 全在 ✅ 非假过
+  - **9475 不动**：POST /api/notify/linear-important=404 / linear-poll=404 / test-ntfy=404（R70 新端点全缺）✅；origin/main 树 server/linear-notif.js ABSENT + worker/index.js meshy-aigw grep=0 ✅ 稳定口 R70 新特性未染；GET /api/services=200（9475 自身服务正常）
+  - **审计 ARCHIVED 标记**：`grep -c ARCHIVED-DO-NOT-MERGE NANOCODE_FEATURE_AUDIT.md`=7 ✅；5 旧 lineage 分支全 EXISTS 仅标记未删（agent-naming-and-ux/pre-rebase-backup-20260602T061305Z/nano-integration-0715/nano-integration-0715-v2/nano-plugin-akari）✅ 秘书 20:2x 第 5 项已落（未跑 branch -D）
+  - 待办扫描：`~/codex_work/REVIEW_REQ_*`/`CHORE_*`=0；无主人在 9476 上新反馈 bug
+- fork/main 推送决策：本轮加 R122 doc 后未推达 3（R120+R121+R122）= CLAUDE.md 里程碑阈值「3+ 未推 commit → push」+ 秘书 19:5x 批「直接推 fork/main」→ 执行 `git push fork zhining/nano-9476-integ-0716:main`；无 runtime 变更 → 不 rsync
+- 过程产物：run_nano_maint.log 在 repo 内 gitignored（tee -a 追加 npm test 完整原始输出，不入库）；git status 仅 `?? .git.bak-migrate`（迁移残留 pre-existing 非本轮产物）；未碰 9475；未 rsync（无 runtime 变更）
+- NOTHING-TO-DO：任务书 20:2x 全部实质指令 R70 已落地、R71-R121 五十一轮巡检确认；本轮第 52 轮新会话独立复验全绿（R70 git 真实 7 commit ancestor 非假过 / npm test 663/0 strict-grep clean / 9476 端点活 + notify 路由活 / R70 内容签名 fork/main 树全在 / 9475 不动 R70 新端点 404 + linear-notif ABSENT / 审计 ARCHIVED 7 标记 5 分支仅标记未删 / fork/main 0 漂移 / 无 REVIEW_REQ/CHORE/新 bug）；3 未推 doc 达里程碑推 fork/main；常驻维护线本轮无新活，结束该轮
