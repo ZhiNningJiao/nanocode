@@ -5718,6 +5718,8 @@ body.workspace-active .landing-overlay { display: none; }
 .service-actions { margin-left: auto; display: flex; gap: 4px; }
 .svc-btn { background: none; border: none; cursor: pointer; color: var(--fg-3, rgba(255,255,255,0.4)); font-size: 13px; padding: 2px 4px; border-radius: 3px; line-height: 1; }
 .svc-btn:hover { color: var(--fg, #fff); background: rgba(255,255,255,0.06); }
+.svc-btn-spin { animation: svc-spin 0.8s linear infinite; }
+@keyframes svc-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .services-add-form { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .services-add-form .settings-input { width: 90px; }
 .services-add-form .settings-input:nth-child(2) { width: 130px; }
@@ -7852,10 +7854,29 @@ body.workspace-active .landing-overlay { display: none; }
 .cbx-diff-info { color: var(--text-muted); font-style: italic; }
 
 .cbx-turn-sep {
-  height: 1px;
+  height: auto;
   margin: var(--s-2) 0;
-  background: linear-gradient(to right, transparent, var(--border), transparent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
+}
+.cbx-turn-sep::before, .cbx-turn-sep::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--border), transparent);
+}
+.cbx-turn-ts {
+  font-size: 10px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.cbx-bash-elapsed {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Thinking indicator (SDK mode) ────────────────────────────── */
@@ -8560,3 +8581,60 @@ body.workspace-active .landing-overlay { display: none; }
 }
 .tab-health-dot.ah-warn { background: #d4a017; }
 .tab-health-dot.ah-err  { background: #e04040; box-shadow: 0 0 3px rgba(224,64,64,0.6); }
+
+/* ── R9: Block navigation highlight ──────────────────────────── */
+.cbx-nav-highlight {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  animation: cbx-nav-flash 0.8s ease-out;
+}
+@keyframes cbx-nav-flash {
+  0% { outline-color: var(--primary); }
+  100% { outline-color: transparent; }
+}
+
+/* ── R9: Inline images in tool results ───────────────────────── */
+.cbx-inline-img-wrap {
+  margin: 8px 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: inline-block;
+  background: var(--surface-2);
+}
+.cbx-inline-img {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 4px;
+  display: block;
+  cursor: zoom-in;
+}
+.cbx-inline-img:hover {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ── R9: Keyboard-accessible fold headers ────────────────────── */
+[tabindex="0"].cbx-bash-header:focus-visible,
+[tabindex="0"].cbx-altscreen-header:focus-visible,
+[tabindex="0"].cbx-reasoning-header:focus-visible,
+[tabindex="0"].cbx-mcp-header:focus-visible,
+[tabindex="0"].cbx-filegroup-header:focus-visible,
+[tabindex="0"].cbx-filechange-header:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* ── R9: MCP result markdown rendering ───────────────────────── */
+.cbx-mcp-body p { margin: 0.3em 0; }
+.cbx-mcp-body code {
+  background: var(--surface-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+.cbx-mcp-body pre {
+  white-space: pre-wrap;
+  margin: 0;
+}

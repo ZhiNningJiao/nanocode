@@ -49,10 +49,20 @@ function _attachFoldToggle(headerEl, article) {
   if (!headerEl) return
   let _touchHandled = false
 
+  // Keyboard accessibility: make fold headers focusable and operable via Enter/Space
+  headerEl.setAttribute('tabindex', '0')
+  headerEl.setAttribute('role', 'button')
+  const _syncAria = () => {
+    headerEl.setAttribute('aria-expanded', article.getAttribute('data-fold') === 'full' ? 'true' : 'false')
+  }
+  _syncAria()
+
   const _doToggle = (e) => {
     if (e.target.closest('a') || e.target.tagName === 'A') return
+    if (e.target.closest('button') && !e.target.closest('.cbx-fold-btn')) return
     const cur = article.getAttribute('data-fold') || 'full'
     article.setAttribute('data-fold', cur === 'full' ? 'header' : 'full')
+    _syncAria()
     e.stopPropagation()
   }
 
@@ -68,6 +78,13 @@ function _attachFoldToggle(headerEl, article) {
   headerEl.addEventListener('click', (e) => {
     if (_touchHandled) { _touchHandled = false; return }
     _doToggle(e)
+  })
+
+  headerEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      _doToggle(e)
+    }
   })
 }
 
@@ -718,6 +735,7 @@ export class CodexBlockRenderer {
     this._reconnectAttempts = 0
     this._reconnectTimer = null
     this._pingInterval = null
+    this._connLostEl = null          // in-place connection-lost block (avoid spam)
 
     // Raw PTY buffer — accumulate until we see a newline boundary
     this._ptybuf = ''
@@ -804,6 +822,11 @@ export class CodexBlockRenderer {
       if (e.ctrlKey && !e.shiftKey && e.key === 'g') {
         e.preventDefault()
         this._toggleSearch()
+      }
+      // Alt+↑/↓ = jump between blocks
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault()
+        this._navigateBlocks(e.key === 'ArrowUp' ? -1 : 1)
       }
     }
     document.addEventListener('keydown', this._foldAllHandler)
@@ -894,6 +917,11 @@ export class CodexBlockRenderer {
 
     this._ws.onopen = () => {
       this._reconnectAttempts = 0
+      // Clear connection-lost banner on successful reconnect
+      if (this._connLostEl) {
+        this._connLostEl.remove()
+        this._connLostEl = null
+      }
       this.onStatusChange(true)
       const { cols, rows } = this._dimensions()
       this._send({
@@ -949,7 +977,14 @@ export class CodexBlockRenderer {
       if (!this._exited) {
         const delay = Math.min(BACKOFF_BASE * 2 ** this._reconnectAttempts, BACKOFF_MAX)
         this._reconnectAttempts++
-        this._addSystemBlock(`[Connection lost. Reconnecting in ${(delay / 1000).toFixed(1)}s…]`)
+        const msg = `Connection lost. Reconnecting in ${(delay / 1000).toFixed(1)}s… (attempt ${this._reconnectAttempts})`
+        // Update in-place instead of appending new blocks on each attempt
+        if (this._connLostEl) {
+          const span = this._connLostEl.querySelector('.cbx-system-text')
+          if (span) span.textContent = `[${msg}]`
+        } else {
+          this._connLostEl = this._addSystemBlock(`[${msg}]`, true)
+        }
         clearTimeout(this._reconnectTimer)
         this._reconnectTimer = setTimeout(() => this._connect(), delay)
       }
@@ -1687,6 +1722,7 @@ export class CodexBlockRenderer {
       `<span class="cbx-bash-cmd-text">${cmdHtml}</span>` +
       `<span class="cbx-bash-ts">${ts}</span>` +
       `<span class="cbx-bash-status cbx-bash-running">running…</span>` +
+      `<span class="cbx-bash-elapsed"></span>` +
       `<button class="cbx-copy-output-btn" type="button" title="Copy output" aria-label="Copy output">Copy</button>` +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
@@ -1717,11 +1753,20 @@ export class CodexBlockRenderer {
     this._scroll.appendChild(article)
     this._scrollBottom()
 
+    // Elapsed timer for running commands
+    const startTime = Date.now()
+    const elapsedEl = article.querySelector('.cbx-bash-elapsed')
+    const elapsedTimer = setInterval(() => {
+      const sec = ((Date.now() - startTime) / 1000) | 0
+      if (elapsedEl) elapsedEl.textContent = sec > 0 ? `${sec}s` : ''
+    }, 1000)
+
     this._currentBashBlock = {
       article,
       cmd,
       outputEl: article.querySelector('.cbx-bash-output'),
       outputLines: [],
+      elapsedTimer,
     }
   }
 
@@ -1766,7 +1811,8 @@ export class CodexBlockRenderer {
 
   _finalizeBashBlockWithExit(exitLine) {
     if (!this._currentBashBlock) return
-    const { article } = this._currentBashBlock
+    const { article, elapsedTimer } = this._currentBashBlock
+    if (elapsedTimer) clearInterval(elapsedTimer)
     const statusEl = article.querySelector('.cbx-bash-status')
 
     const isError = /\u2717|[Ee]rror|exit\s+[1-9]/.test(exitLine)
@@ -1799,7 +1845,8 @@ export class CodexBlockRenderer {
   _finalizeCurrentBlock() {
     this._flushFileChangeGroup()
     if (!this._currentBashBlock) return
-    const { article } = this._currentBashBlock
+    const { article, elapsedTimer } = this._currentBashBlock
+    if (elapsedTimer) clearInterval(elapsedTimer)
     const statusEl = article.querySelector('.cbx-bash-status')
     if (statusEl && statusEl.classList.contains('cbx-bash-running')) {
       statusEl.classList.remove('cbx-bash-running')
@@ -1929,12 +1976,13 @@ export class CodexBlockRenderer {
 
   _buildSimpleDiff(oldContent, newContent, kind) {
     if (kind === 'create') {
-      const lines = newContent.split('\n').slice(0, 50)
+      const allLines = newContent.split('\n')
+      const lines = allLines.slice(0, 200)
       return lines.map(l => `<div class="cbx-diff-line cbx-diff-added"><span class="cbx-diff-gutter">+</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
-        + (newContent.split('\n').length > 50 ? `<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… ${newContent.split('\n').length - 50} more lines</span></div>` : '')
+        + (allLines.length > 200 ? `<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… ${allLines.length - 200} more lines</span></div>` : '')
     }
     if (kind === 'delete') {
-      const lines = oldContent.split('\n').slice(0, 50)
+      const lines = oldContent.split('\n').slice(0, 200)
       return lines.map(l => `<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
     }
     // Modified: LCS-based diff with context collapse + word-level highlights
@@ -2009,12 +2057,15 @@ export class CodexBlockRenderer {
     return result.join('')
   }
 
-  /** Render a visual turn separator. */
+  /** Render a visual turn separator with timestamp. */
   _addTurnSeparator() {
     this._stats.turns++
     this._updateStatsBar()
     const el = document.createElement('div')
     el.className = 'cbx-turn-sep'
+    const now = new Date()
+    const ts = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+    el.innerHTML = `<span class="cbx-turn-ts">${ts}</span>`
     this._scroll.appendChild(el)
     this._scrollBottom()
   }
@@ -2125,7 +2176,7 @@ export class CodexBlockRenderer {
     }
   }
 
-  _addSystemBlock(msg) {
+  _addSystemBlock(msg, returnEl = false) {
     const isError = /\[Error|error|failed|lost/i.test(msg)
     const cls = isError ? 'cbx-block-system cbx-block-error' : 'cbx-block-system'
     if (isError) {
@@ -2133,9 +2184,10 @@ export class CodexBlockRenderer {
       this._updateStatsBar()
     }
     const article = this._makeBlock(cls)
-    article.innerHTML = `<p class="cbx-system">${escHtml(msg)}</p>`
+    article.innerHTML = `<p class="cbx-system"><span class="cbx-system-text">${escHtml(msg)}</span></p>`
     this._scroll.appendChild(article)
     this._scrollBottom()
+    if (returnEl) return article
   }
 
   _appendUserBlock(text) {
@@ -2288,6 +2340,11 @@ export class CodexBlockRenderer {
             if (line) this._currentBashBlock.outputLines.push(line)
           }
           this._renderBashOutput()
+        }
+        // Render any inline images from command output content
+        if (item.content) {
+          const card = this._currentBashBlock.article.querySelector('.cbx-bash-card') || this._currentBashBlock.article
+          this._renderImageContent(item.content, card)
         }
         // Finalize with exit code
         const code = item.exit_code
@@ -2515,6 +2572,23 @@ export class CodexBlockRenderer {
           statusEl.className = 'cbx-bash-status cbx-bash-ok'
           statusEl.textContent = '\u2713 done'
         }
+        // Render result as markdown if it looks like text, or show images
+        const body = tracked.article.querySelector('.cbx-mcp-body')
+        if (body && item.result) {
+          const resultText = typeof item.result === 'string' ? item.result : JSON.stringify(item.result, null, 2)
+          try {
+            const html = _renderCbxMarkdown(resultText)
+            if (html) {
+              body.innerHTML = html
+              _highlightCodeBlocks(body)
+              _attachCopyHandlers(body)
+            }
+          } catch { /* keep existing textContent */ }
+        }
+        // Render images from result content array
+        if (item.content || item.result?.content) {
+          this._renderImageContent(item.content || item.result?.content, tracked.article.querySelector('.cbx-mcp-card') || tracked.article)
+        }
         // Auto-fold on success
         tracked.article.setAttribute('data-fold', 'header')
       }
@@ -2719,6 +2793,64 @@ export class CodexBlockRenderer {
     } else {
       this._scroll.appendChild(wrapper)
     }
+  }
+
+  // ── Block navigation (Alt+↑/↓) ────────────────────────────────────────────
+
+  _navigateBlocks(direction) {
+    const blocks = [...this._scroll.querySelectorAll('.cbx-block')]
+    if (!blocks.length) return
+
+    // Find the block currently closest to the viewport top
+    const scrollRect = this._scroll.getBoundingClientRect()
+    const viewportMid = scrollRect.top + scrollRect.height * 0.3
+    let currentIdx = 0
+    for (let i = 0; i < blocks.length; i++) {
+      if (blocks[i].getBoundingClientRect().top <= viewportMid) currentIdx = i
+    }
+
+    const targetIdx = Math.max(0, Math.min(blocks.length - 1, currentIdx + direction))
+    const target = blocks[targetIdx]
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // Brief highlight to show which block was jumped to
+    target.classList.add('cbx-nav-highlight')
+    setTimeout(() => target.classList.remove('cbx-nav-highlight'), 800)
+    // Focus the header if it has tabindex for keyboard-first UX
+    const header = target.querySelector('[tabindex="0"]')
+    if (header) header.focus({ preventScroll: true })
+  }
+
+  // ── Image rendering ──────────────────────────────────────────────────────────
+
+  /** Render inline images from SDK item content (base64 or URL sources). */
+  _renderImageContent(content, parentEl) {
+    if (!Array.isArray(content)) return false
+    let hasImages = false
+    for (const part of content) {
+      if (part.type === 'image' || part.type === 'image_url') {
+        const wrap = document.createElement('div')
+        wrap.className = 'cbx-inline-img-wrap'
+        const img = document.createElement('img')
+        img.className = 'cbx-inline-img'
+        img.loading = 'lazy'
+        img.alt = part.alt || 'Tool output image'
+        if (part.source?.type === 'base64' && part.source.data) {
+          img.src = `data:${part.source.media_type || 'image/png'};base64,${part.source.data}`
+        } else if (part.image_url?.url) {
+          img.src = part.image_url.url
+        } else if (part.url) {
+          img.src = part.url
+        } else if (typeof part.data === 'string') {
+          img.src = `data:${part.media_type || 'image/png'};base64,${part.data}`
+        }
+        if (img.src) {
+          wrap.appendChild(img)
+          parentEl.appendChild(wrap)
+          hasImages = true
+        }
+      }
+    }
+    return hasImages
   }
 
   _scrollBottom({ force = false } = {}) {

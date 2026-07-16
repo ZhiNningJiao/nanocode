@@ -1,12 +1,63 @@
 # REPORT: opus_burn — T2 3h Sprint
 
 **Date**: 2026-07-16
-**Branch**: `zhining/codex-render-polish` (nanocode) + `zhining/lens-external-army` (akari)
-**Commits**: Rounds 1-6 (prior) + Round 7 (this session)
+**Branch**: `zhining/opus-burn-r8` (nanocode, continuation) + `zhining/lens-external-army` (akari)
+**Commits**: Rounds 1-8 (prior) + Round 9 (this session)
 
 ---
 
-## Round 7 (this session)
+## Round 9 (this session — T2 reset continuation)
+
+### Line 1: Codex Rendering
+
+**Commit** `d3da9db` — 165 insertions:
+
+1. **Inline image rendering** — SDK tool outputs (MCP tools, command execution) that contain images (base64 or URL) are now rendered inline as `<img>` tags. Supports `source.type=base64`, `image_url.url`, plain `url`, and raw `data` fields. Images are lazy-loaded, constrained to max 400px height, and wrapped in a subtle bordered card with zoom-in cursor on hover.
+
+2. **Block navigation shortcuts** (Alt+Up/Down) — New keyboard shortcut to jump between top-level blocks. Determines current block by viewport position (30% from top), scrolls target into view with smooth behavior, applies a brief highlight flash (0.8s outline animation), and focuses the header for keyboard-first workflow.
+
+3. **Keyboard-accessible fold headers** — All fold headers now have `tabindex="0"`, `role="button"`, and `aria-expanded` attribute that syncs with fold state. Enter/Space keys toggle fold. Focus-visible outline styled for all header types (bash, altscreen, reasoning, MCP, filegroup, filechange). Click handler now correctly excludes non-fold buttons (copy, etc.).
+
+4. **MCP result markdown rendering** — MCP tool call results (on successful completion) are now rendered as markdown with syntax highlighting and copy buttons instead of raw JSON. Images in MCP result `content` arrays are also rendered inline.
+
+5. **CSS** — `.cbx-nav-highlight` (flash outline), `.cbx-inline-img-wrap`/`.cbx-inline-img` (image cards), `:focus-visible` rules for all fold header types, `.cbx-mcp-body` markdown support (paragraphs, inline code, pre-wrap).
+
+### Line 2: Nanocode Polish
+
+**USER_MANUAL** updated with R9 features: image rendering, Alt+Up/Down block navigation, Enter/Space on fold headers, MCP result markdown. Keyboard & Navigation Tips section also updated.
+
+Upstream (origin/main) fully cherry-picked in prior rounds — no new upstream features.
+
+### Line 3: Akari
+
+No changes this round. Akari lens and dispatch codebases remain mature from prior rounds.
+
+### Smoke Test
+
+- PORT=9477: HTTP 200, all R9 features served (JS: 2 cbx-inline-img, 2 _navigateBlocks, 1 aria-expanded, 3 _renderImageContent; CSS: 1 cbx-nav-highlight, 3 cbx-inline-img, 2 cbx-nav-flash, 8 focus-visible)
+- npm test: 653/0 pass
+- 9475/9476/9481/9482 untouched
+
+### Collision Report
+
+| Worker | Zone | Touched? |
+|--------|------|----------|
+| mobile_scroll | nanocode touch | No |
+| session_singleton | nanocode session | No |
+| akari_fleet2 | 9481/9482 | No |
+| quick3stage | dcc | No |
+
+---
+
+## Round 8 (prior session — pre-reset)
+
+### Line 1: Codex Rendering
+
+**Commit** `570c744` — connection recovery, command timers, turn timestamps, akari poll UX.
+
+---
+
+## Round 7 (prior session)
 
 ### Line 1: Codex 渲染完善
 
