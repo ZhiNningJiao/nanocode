@@ -2,11 +2,59 @@
 
 **Date**: 2026-07-16
 **Branch**: `zhining/codex-render-polish` (nanocode) + `zhining/lens-external-army` (akari)
-**Commits**: Rounds 1-5 (prior) + Round 6 (this session)
+**Commits**: Rounds 1-6 (prior) + Round 7 (this session)
 
 ---
 
-## Round 6 (this session)
+## Round 7 (this session)
+
+### Line 1: Codex 渲染完善
+
+**Commit** `8936e28` (pushed to fork/main) — 260 insertions:
+
+1. **File path & URL auto-linking** — agent message blocks and PTY text blocks now auto-detect file paths (`/home/...`, `~/...`, `src/foo/bar.ts`) and URLs (`https://...`). File paths are clickable and dispatch `nanocode:open-in-explorer`; URLs open in new tabs. Matches Claude tab's `attachPathAndUrlHandlers` UX. Auto-linking is applied when text blocks are finalized (new block starts) and on agent message completion.
+
+2. **Word-level inline diff highlighting** — adjacent removed/added line pairs in file_change diff blocks now show word-level highlights. Uses LCS on word tokens to compute changed spans, rendered as `.cbx-diff-word-del` (red bg) and `.cbx-diff-word-add` (green bg) inline spans. Makes it easy to see exactly what changed within a line.
+
+3. **Expandable collapsed diff context** — the "N unchanged lines" collapsers in diff blocks are now clickable. Clicking reveals the hidden equal lines in-place with proper line numbers. Hover shows underline + blue highlight hint. Data attributes (`data-start`/`data-end`) store the diff range for lazy expansion.
+
+4. **Rate-limit event handling** — new `rate_limit` event case in the SDK event switch. Shows countdown: "Rate limited — retry in 45s". Mirrors Claude tab's `_handleRateLimit()`.
+
+5. **Interrupt → POST API** — Ctrl+C in codex tab now POSTs to `/api/projects/.../interrupt` (was only sending raw PTY byte). Matches Claude tab behavior for proper server-side interrupt.
+
+6. **CSS** — new `.cbx-autolink-url`, `.cbx-path-link` (clickable links), `.cbx-diff-word-del`/`.cbx-diff-word-add` (word-level highlights), `.cbx-diff-expandable` (hover hint for collapsed sections).
+
+### Line 2: Nanocode 打磨
+
+Upstream (origin/main) has 25 commits not on our branch — all previously evaluated in Rounds 4-6. The key cherry-picks (Open URL/Copy URL toolbar, OSC 52/8, terminal bleed fixes) were already merged. No new upstream features to pick.
+
+### Line 3: Akari 打磨
+
+Comprehensive survey via Explore agent confirms `zhining/lens-external-army` is mature:
+- `tsc --noEmit` clean in both `packages/lens` and `packages/dispatch`
+- External Army panel (`bands-army.tsx`) properly consumes all `ExternalArmyEntry` fields (tag, iter, last_active_s, last_line, stalled, flag) with correct null checks and fallbacks
+- Call tree labels and opencode driver display are well-structured
+- No TODOs/FIXMEs in recently changed files
+- No changes needed this round
+
+### Smoke Test
+
+- PORT=9477: HTTP 200, all Round 7 features served (10 cbx-autolink/path-link/diff-word/expandable refs in JS, 8 in CSS)
+- npm test: 653/0 pass
+- 9475/9476/9481/9482 untouched
+
+### Collision Report
+
+| Worker | Zone | Touched? |
+|--------|------|----------|
+| mobile_scroll | nanocode touch | No |
+| session_singleton | nanocode session | No |
+| akari_fleet2 | 9481/9482 | No |
+| quick3stage | dcc | No |
+
+---
+
+## Round 6 (prior session)
 
 ### Line 1: Codex 渲染完善
 
