@@ -49,10 +49,20 @@ function _attachFoldToggle(headerEl, article) {
   if (!headerEl) return
   let _touchHandled = false
 
+  // Keyboard accessibility: make fold headers focusable and operable via Enter/Space
+  headerEl.setAttribute('tabindex', '0')
+  headerEl.setAttribute('role', 'button')
+  const _syncAria = () => {
+    headerEl.setAttribute('aria-expanded', article.getAttribute('data-fold') === 'full' ? 'true' : 'false')
+  }
+  _syncAria()
+
   const _doToggle = (e) => {
     if (e.target.closest('a') || e.target.tagName === 'A') return
+    if (e.target.closest('button') && !e.target.closest('.cbx-fold-btn')) return
     const cur = article.getAttribute('data-fold') || 'full'
     article.setAttribute('data-fold', cur === 'full' ? 'header' : 'full')
+    _syncAria()
     e.stopPropagation()
   }
 
@@ -68,6 +78,13 @@ function _attachFoldToggle(headerEl, article) {
   headerEl.addEventListener('click', (e) => {
     if (_touchHandled) { _touchHandled = false; return }
     _doToggle(e)
+  })
+
+  headerEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      _doToggle(e)
+    }
   })
 }
 
@@ -805,6 +822,11 @@ export class CodexBlockRenderer {
       if (e.ctrlKey && !e.shiftKey && e.key === 'g') {
         e.preventDefault()
         this._toggleSearch()
+      }
+      // Alt+↑/↓ = jump between blocks
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault()
+        this._navigateBlocks(e.key === 'ArrowUp' ? -1 : 1)
       }
     }
     document.addEventListener('keydown', this._foldAllHandler)
@@ -2319,6 +2341,11 @@ export class CodexBlockRenderer {
           }
           this._renderBashOutput()
         }
+        // Render any inline images from command output content
+        if (item.content) {
+          const card = this._currentBashBlock.article.querySelector('.cbx-bash-card') || this._currentBashBlock.article
+          this._renderImageContent(item.content, card)
+        }
         // Finalize with exit code
         const code = item.exit_code
         if (code != null) {
@@ -2545,6 +2572,23 @@ export class CodexBlockRenderer {
           statusEl.className = 'cbx-bash-status cbx-bash-ok'
           statusEl.textContent = '\u2713 done'
         }
+        // Render result as markdown if it looks like text, or show images
+        const body = tracked.article.querySelector('.cbx-mcp-body')
+        if (body && item.result) {
+          const resultText = typeof item.result === 'string' ? item.result : JSON.stringify(item.result, null, 2)
+          try {
+            const html = _renderCbxMarkdown(resultText)
+            if (html) {
+              body.innerHTML = html
+              _highlightCodeBlocks(body)
+              _attachCopyHandlers(body)
+            }
+          } catch { /* keep existing textContent */ }
+        }
+        // Render images from result content array
+        if (item.content || item.result?.content) {
+          this._renderImageContent(item.content || item.result?.content, tracked.article.querySelector('.cbx-mcp-card') || tracked.article)
+        }
         // Auto-fold on success
         tracked.article.setAttribute('data-fold', 'header')
       }
@@ -2749,6 +2793,64 @@ export class CodexBlockRenderer {
     } else {
       this._scroll.appendChild(wrapper)
     }
+  }
+
+  // ── Block navigation (Alt+↑/↓) ────────────────────────────────────────────
+
+  _navigateBlocks(direction) {
+    const blocks = [...this._scroll.querySelectorAll('.cbx-block')]
+    if (!blocks.length) return
+
+    // Find the block currently closest to the viewport top
+    const scrollRect = this._scroll.getBoundingClientRect()
+    const viewportMid = scrollRect.top + scrollRect.height * 0.3
+    let currentIdx = 0
+    for (let i = 0; i < blocks.length; i++) {
+      if (blocks[i].getBoundingClientRect().top <= viewportMid) currentIdx = i
+    }
+
+    const targetIdx = Math.max(0, Math.min(blocks.length - 1, currentIdx + direction))
+    const target = blocks[targetIdx]
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // Brief highlight to show which block was jumped to
+    target.classList.add('cbx-nav-highlight')
+    setTimeout(() => target.classList.remove('cbx-nav-highlight'), 800)
+    // Focus the header if it has tabindex for keyboard-first UX
+    const header = target.querySelector('[tabindex="0"]')
+    if (header) header.focus({ preventScroll: true })
+  }
+
+  // ── Image rendering ──────────────────────────────────────────────────────────
+
+  /** Render inline images from SDK item content (base64 or URL sources). */
+  _renderImageContent(content, parentEl) {
+    if (!Array.isArray(content)) return false
+    let hasImages = false
+    for (const part of content) {
+      if (part.type === 'image' || part.type === 'image_url') {
+        const wrap = document.createElement('div')
+        wrap.className = 'cbx-inline-img-wrap'
+        const img = document.createElement('img')
+        img.className = 'cbx-inline-img'
+        img.loading = 'lazy'
+        img.alt = part.alt || 'Tool output image'
+        if (part.source?.type === 'base64' && part.source.data) {
+          img.src = `data:${part.source.media_type || 'image/png'};base64,${part.source.data}`
+        } else if (part.image_url?.url) {
+          img.src = part.image_url.url
+        } else if (part.url) {
+          img.src = part.url
+        } else if (typeof part.data === 'string') {
+          img.src = `data:${part.media_type || 'image/png'};base64,${part.data}`
+        }
+        if (img.src) {
+          wrap.appendChild(img)
+          parentEl.appendChild(wrap)
+          hasImages = true
+        }
+      }
+    }
+    return hasImages
   }
 
   _scrollBottom({ force = false } = {}) {
