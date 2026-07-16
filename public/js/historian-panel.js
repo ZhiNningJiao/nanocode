@@ -275,6 +275,18 @@ function renderArmyStatus(army) {
     return wrap
   }
 
+  // Fleet summary counts
+  const running = agents.filter(a => !a.stalled && !a.flag).length
+  const stalled = agents.filter(a => a.stalled).length
+  const flagged = agents.filter(a => a.flag).length
+  const summaryGrid = document.createElement('div')
+  summaryGrid.className = 'rp-stats-grid'
+  summaryGrid.appendChild(stat('running', String(running)))
+  summaryGrid.appendChild(stat('stalled', String(stalled)))
+  summaryGrid.appendChild(stat('flagged', String(flagged)))
+  summaryGrid.appendChild(stat('total', String(agents.length)))
+  wrap.appendChild(summaryGrid)
+
   if (army.updatedAt) {
     const meta = document.createElement('div')
     meta.className = 'rp-hint'

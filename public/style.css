@@ -7905,6 +7905,48 @@ body.workspace-active .landing-overlay { display: none; }
 .cbx-text-md h2 { font-size: 1.05em; }
 .cbx-text-md h3 { font-size: 0.95em; }
 
+/* ── Codex copy button (mirrors Claude tab .cbr-copy-btn) ─────── */
+.cbx-code-wrap {
+  position: relative;
+  margin: 0.5em 0;
+}
+.cbx-code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px var(--s-2);
+  background: color-mix(in srgb, var(--bg-tertiary) 70%, transparent);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: 0.72rem;
+}
+.cbx-code-wrap pre {
+  margin-top: 0 !important;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm) !important;
+}
+.cbx-copy-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  cursor: pointer;
+  padding: 2px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.cbx-copy-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+/* ── Thinking elapsed timer ───────────────────────────────────── */
+.cbx-thinking-elapsed {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
 /* ── Mobile tweaks ──────────────────────────────────────────────── */
 
 @media (max-width: 768px) {

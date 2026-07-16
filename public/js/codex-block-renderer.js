@@ -334,10 +334,74 @@ function _renderCbxMarkdown(text, { streaming = false } = {}) {
     if (window.marked && window.DOMPurify) {
       let html = window.DOMPurify.sanitize(window.marked.parse(renderText))
       html = html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ')
+      // Inject copy buttons into code blocks (matching Claude tab UX)
+      html = html.replace(
+        /<pre><code(?:\s+class="language-(\w+)")?>/g,
+        (_, lang) => {
+          const langLabel = lang ? `<span class="cbr-code-lang">${escHtml(lang)}</span>` : ''
+          return `<div class="cbx-code-wrap"><div class="cbx-code-header">${langLabel}<button class="cbx-copy-btn" aria-label="Copy code">Copy</button></div><pre><code${lang ? ` class="language-${lang}"` : ''}>`
+        }
+      )
+      html = html.replace(/<\/code><\/pre>/g, '</code></pre></div>')
       return html
     }
   } catch { /* fall through */ }
   return `<pre class="cbx-text-pre">${escHtml(renderText)}</pre>`
+}
+
+// ── Copy button handlers (mirrors Claude tab UX) ─────────────────────────────
+function _attachCopyHandlers(el) {
+  el.querySelectorAll('.cbx-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const pre = btn.closest('.cbx-code-wrap')?.querySelector('pre')
+      const text = pre ? pre.textContent : el.textContent
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.textContent
+        btn.textContent = 'Copied!'
+        setTimeout(() => { btn.textContent = orig }, 1500)
+      }).catch(() => {})
+    })
+  })
+}
+
+// ── LCS-based line diff (ported from Claude block renderer) ──────────────────
+function _computeLineDiff(oldText, newText) {
+  const oldLines = oldText.split('\n')
+  const newLines = newText.split('\n')
+  if (oldLines.length > 500 || newLines.length > 500) {
+    return [
+      ...oldLines.map((line) => ({ type: 'removed', line })),
+      ...newLines.map((line) => ({ type: 'added', line })),
+    ]
+  }
+  const m = oldLines.length
+  const n = newLines.length
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (oldLines[i] === newLines[j]) {
+        dp[i][j] = dp[i + 1][j + 1] + 1
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1])
+      }
+    }
+  }
+  const result = []
+  let i = 0, j = 0
+  while (i < m || j < n) {
+    if (i < m && j < n && oldLines[i] === newLines[j]) {
+      result.push({ type: 'equal', line: oldLines[i] })
+      i++; j++
+    } else if (j < n && (i >= m || dp[i][j + 1] >= dp[i + 1][j])) {
+      result.push({ type: 'added', line: newLines[j] })
+      j++
+    } else {
+      result.push({ type: 'removed', line: oldLines[i] })
+      i++
+    }
+  }
+  return result
 }
 
 // ── Pattern detection ─────────────────────────────────────────────────────────
@@ -507,6 +571,7 @@ export class CodexBlockRenderer {
     this._liveAgentText = ''
     this._liveAgentRenderTimer = null  // throttle markdown re-render during streaming
     this._thinkingBlockEl = null       // SDK thinking indicator block
+    this._thinkingStartTime = 0         // timestamp for elapsed timer
 
     // SDK mode: when codex-event messages arrive, we render from structured
     // events instead of PTY text. The driver also sends formatted PTY text
@@ -1545,23 +1610,19 @@ export class CodexBlockRenderer {
       const lines = oldContent.split('\n').slice(0, 50)
       return lines.map(l => `<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(l)}</span></div>`).join('')
     }
-    // Modified: simple line-by-line comparison
-    const oldLines = oldContent.split('\n')
-    const newLines = newContent.split('\n')
+    // Modified: LCS-based diff (same algorithm as Claude tab)
+    const diffResult = _computeLineDiff(oldContent, newContent)
     const result = []
-    const maxLines = Math.min(Math.max(oldLines.length, newLines.length), 100)
-    for (let i = 0; i < maxLines; i++) {
-      const o = i < oldLines.length ? oldLines[i] : undefined
-      const n = i < newLines.length ? newLines[i] : undefined
-      if (o === n) {
-        result.push(`<div class="cbx-diff-line cbx-diff-equal"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">${escHtml(o)}</span></div>`)
-      } else {
-        if (o !== undefined) result.push(`<div class="cbx-diff-line cbx-diff-removed"><span class="cbx-diff-gutter">-</span><span class="cbx-diff-text">${escHtml(o)}</span></div>`)
-        if (n !== undefined) result.push(`<div class="cbx-diff-line cbx-diff-added"><span class="cbx-diff-gutter">+</span><span class="cbx-diff-text">${escHtml(n)}</span></div>`)
+    let rendered = 0
+    for (const entry of diffResult) {
+      if (rendered >= 200) {
+        result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… ${diffResult.length - rendered} more lines</span></div>`)
+        break
       }
-    }
-    if (Math.max(oldLines.length, newLines.length) > 100) {
-      result.push(`<div class="cbx-diff-line cbx-diff-info"><span class="cbx-diff-gutter"> </span><span class="cbx-diff-text">… truncated</span></div>`)
+      const cls = entry.type === 'added' ? 'cbx-diff-added' : entry.type === 'removed' ? 'cbx-diff-removed' : 'cbx-diff-equal'
+      const gutter = entry.type === 'added' ? '+' : entry.type === 'removed' ? '-' : ' '
+      result.push(`<div class="cbx-diff-line ${cls}"><span class="cbx-diff-gutter">${gutter}</span><span class="cbx-diff-text">${escHtml(entry.line)}</span></div>`)
+      rendered++
     }
     return result.join('')
   }
@@ -1841,6 +1902,7 @@ export class CodexBlockRenderer {
       this._liveAgentRenderTimer = null
     }
     this._renderLiveAgentMarkdown(false)
+    _attachCopyHandlers(this._liveAgentBlock)
     this._liveAgentBlock.classList.remove('cbx-live')
     this._liveAgentBlock = null
     this._liveAgentItemId = null
@@ -1849,17 +1911,30 @@ export class CodexBlockRenderer {
 
   _showThinkingBlock() {
     if (this._thinkingBlockEl) return
+    this._thinkingStartTime = Date.now()
     const el = document.createElement('div')
     el.className = 'cbx-thinking-block'
     el.innerHTML =
       `<span class="cbx-thinking-dot"></span>` +
-      `<span class="cbx-thinking-label">Thinking…</span>`
+      `<span class="cbx-thinking-label">Thinking…</span>` +
+      `<span class="cbx-thinking-elapsed"></span>`
     this._scroll.appendChild(el)
     this._thinkingBlockEl = el
+    // Update elapsed timer every second
+    this._thinkingTimer = setInterval(() => {
+      if (!this._thinkingBlockEl) return
+      const elapsed = ((Date.now() - this._thinkingStartTime) / 1000) | 0
+      const elEl = this._thinkingBlockEl.querySelector('.cbx-thinking-elapsed')
+      if (elEl) elEl.textContent = elapsed > 0 ? `${elapsed}s` : ''
+    }, 1000)
     this._scrollBottom()
   }
 
   _removeThinkingBlock() {
+    if (this._thinkingTimer) {
+      clearInterval(this._thinkingTimer)
+      this._thinkingTimer = null
+    }
     if (!this._thinkingBlockEl) return
     this._thinkingBlockEl.remove()
     this._thinkingBlockEl = null

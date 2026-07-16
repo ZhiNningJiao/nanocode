@@ -71,7 +71,7 @@ You'll see the nanocode workstation with:
 | Type | Engine | Render Mode |
 |------|--------|-------------|
 | Claude | `claude` CLI | Block (rich text, default) or Terminal (PTY raw) |
-| Codex | Codex SDK | Terminal (default) or Block (experimental) |
+| Codex | Codex SDK | Terminal (default) or Block (SDK-driven, see below) |
 | Fable5/OpenCode | `opencode` CLI | Block (default) or Terminal (TUI raw) |
 
 ### Render Modes
@@ -79,6 +79,17 @@ You'll see the nanocode workstation with:
 Switch via **Settings > Session > Render Mode**:
 - **Block mode**: Rich text rendering with foldable sections, copy buttons, markdown formatting. Best for reading long outputs on mobile.
 - **Terminal mode**: Raw PTY output via xterm.js canvas. Best for TUI applications (opencode, vim, htop).
+
+### Codex Block Rendering (SDK Mode)
+
+When the Codex SDK driver is active, codex tabs use **structured event rendering** instead of raw PTY text:
+
+- **Agent messages**: Rendered as markdown with code blocks, syntax highlighting, and **copy buttons** on each code fence
+- **Command execution**: Foldable blocks showing the command, live "running..." status, and exit code (green checkmark or red X)
+- **File changes**: Diff blocks with **LCS-based diffing** (same quality as Claude tab) showing added/removed/unchanged lines
+- **Thinking indicator**: Animated dot with elapsed timer showing how long Codex has been processing
+- **Turn separators**: Visual dividers between conversation turns
+- **Fold states**: Click any block header to cycle between full/header/line views (persisted in localStorage)
 
 ---
 
