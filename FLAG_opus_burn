@@ -2,4 +2,5 @@ opus_burn DONE 2026-07-16
 Round 1: 32fca57 — copy buttons, LCS diff, thinking timer, historian fleet summary, akari External Army, USER_MANUAL
 Round 2: 6334638 — hljs syntax highlight, tool icons, streaming cursor, error blocks, diff context collapse, mobile overflow, akari fleet summary
 Round 3: 04dac4e — diff line numbers, expandable output, session stats bar, timestamps, akari lane gauge + worker detail
-652/652 tests pass. Smoke 9477 ok.
+Round 4: f72cca2 — keyboard nav (j/k/G/F), block search (Ctrl+Shift+F), usage/token display, akari sortable table + poll indicator
+653/653 tests pass. Smoke 9475 ok.
