@@ -147,7 +147,7 @@ const {
   handleTabsWs,
   setAgentHealthMonitor,
   handleRemoteSshWs,
-} = createTerminalRoutes(store)
+} = createTerminalRoutes(store, { port: PORT })
 
 // ─── Token auth middleware ─────────────────────────────────────────────────
 // Setting: nanocode_auth_token (string). Default '' = auth disabled.
