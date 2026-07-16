@@ -7972,6 +7972,23 @@ body.workspace-active .landing-overlay { display: none; }
   color: var(--primary);
   border-color: var(--primary);
 }
+.cbx-copy-output-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  margin-left: auto;
+  transition: color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+.cbx-copy-output-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
 
 /* ── Thinking elapsed timer ───────────────────────────────────── */
 .cbx-thinking-elapsed {
@@ -8071,11 +8088,21 @@ body.workspace-active .landing-overlay { display: none; }
   padding: 8px 10px;
   font-size: 0.78rem;
   line-height: 1.45;
-  white-space: pre-wrap;
   word-wrap: break-word;
   color: var(--text-muted);
   max-height: 300px;
   overflow-y: auto;
+}
+.cbx-reasoning-body pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.cbx-reasoning-body p { margin: 0.3em 0; }
+.cbx-reasoning-body code {
+  background: var(--bg-secondary, rgba(255,255,255,0.05));
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.85em;
 }
 .cbx-block-reasoning[data-fold="header"] .cbx-reasoning-body { display: none; }
 .cbx-block-reasoning[data-fold="header"] .cbx-reasoning-preview { display: inline; }
