@@ -1,95 +1,59 @@
 # REPORT: opus_burn — T2 3h Sprint
 
 **Date**: 2026-07-16
-**Branch**: `zhining/nano-plugin-akari`
-**Commits**: 32fca57 (Round 1) + 6334638 (Round 2) + 04dac4e (Round 3)
+**Branch**: `zhining/codex-render-polish` (nanocode) + `zhining/lens-external-army` (akari)
+**Commits**: Rounds 1-3 (prior) + Round 4 (this session)
 
 ---
 
-## Line 1: Codex Rendering (SDK Event Stream -> Block Renderer)
+## Round 4 (this session)
 
-**Goal**: Bring Codex block rendering to parity with Claude tab experience.
+### Line 1: Codex 渲染完善
 
-### Round 1 (32fca57):
-1. **Copy buttons on code blocks** — Markdown-rendered code fences get Copy buttons matching Claude tab UX
-2. **LCS-based diff** — Proper Longest Common Subsequence algorithm for file change diffs
-3. **Thinking timer** — Live elapsed timer (3s, 12s...) on thinking block
+**Finding**: fork/main already has full SDK event-driven block rendering from Rounds 2-3:
+- command_execution tool blocks with fold + expandable output + Show All
+- file_change diff blocks with LCS line-number diff + context collapse
+- thinking block with elapsed timer
+- markdown streaming with cursor + hljs + copy buttons
+- turn separators + stats bar
+- `_sdkMode` PTY suppression
+- tool icons per command type
 
-### Round 2 (6334638):
-4. **Syntax highlighting** — `hljs.highlightElement()` applied to finalized code blocks when highlight.js is loaded, matching Claude tab's syntax coloring
-5. **Tool icons for command blocks** — Command binary detection maps to contextual icons (git=⎇, npm=📦, node=⬡, python=🐍, cargo=🦀, docker=🐳, curl=🌐, etc.) replacing the generic `$` icon
-6. **Streaming cursor** — Blinking caret (`cbx-cursor`) at the end of live agent message text during streaming, removed on finalization
-7. **Error block styling** — System blocks containing error/failed/lost keywords get red-tinted background + border (`.cbx-block-error`)
-8. **Diff context collapse** — Modified file diffs now show only changed lines + 3 lines context, with "⋯ N unchanged lines" collapse rows for cleaner presentation
-9. **Mobile code overflow fix** — `overflow-x: auto` + `-webkit-overflow-scrolling: touch` on code blocks and diff containers at `@media (max-width: 768px)`
+**Round 4 additions** (commit `ec19638`, pushed to fork/main):
+1. **Batch SDK output render** — was per-line DOM render, now batched
+2. **Auto-fold exit 0** — successful commands auto-fold to header
+3. **Command timestamps** — HH:MM:SS on bash block headers
 
-### Architecture preserved:
-- SDK mode (`_sdkMode = true`) still suppresses duplicate PTY text
-- `extractCodexTodos` export unchanged (S5 todo dispatch)
-- No server-side changes — all rendering improvements are frontend-only
+Tests: 653/0 all pass.
 
----
+### Line 2: Nanocode 打磨
 
-## Line 2: Nanocode Polish
+Historian, waker, usage panel, right-panel IA, sessions, tasks, i18n — all on fork/main. Upstream cherry-picks too divergent. Minor CSS/codex improvements bundled with Line 1.
 
-### Round 1 (32fca57):
-- `public/js/historian-panel.js` — Fleet summary stats grid (running/stalled/flagged/total)
-- `docs/USER_MANUAL.md` — Codex SDK rendering documentation update
+### Line 3: Akari 打磨
 
-### Round 2:
-- Verified all upstream features (Open URL / Copy URL toolbar buttons, OSC 52 clipboard, OSC 8 hyperlinks, mobile composer fixes, terminal bleed fixes) are already integrated. No additional adoption needed.
+Branch: `zhining/lens-external-army` (local, no push access)
 
----
+3 commits converging WIP changes:
 
-## Line 3: Akari Polish
+1. `af48d188c` — **fix(assembly+agent-loop)**: orphan tool_result → USER message. Idless tool blocks now assemble as user(), not orphan tool_result. 7 agent-loop feedback blocks fixed. 4 new tests. All 17 pre-commit gates pass.
 
-### Round 1 (32fca57):
-- `public/js/akari-panel.js` — External Army section with agent fleet table
+2. `4afc03649` — **feat(tools)**: grep glob inclusion/exclusion (391 lines) + 197-line test suite. Tool trait extended.
 
-### Round 2 (6334638):
-- **Fleet summary row** — External Army now shows running/stalled/flagged/total counts at top (matching historian panel pattern)
-- **Timestamp fix** — "updated Xs ago" suffix added for clarity
+3. `bdd57f5b7` — **docs(agents)**: simplify contributor guide (-101/+40 lines).
 
----
+Build: `cargo check` clean, `tsc --noEmit` clean.
 
-## Test Results
+### Smoke Test
 
-```
-Round 1: 652 tests, 144 suites, 652 pass, 0 fail
-Round 2: 652 tests, 144 suites, 652 pass, 0 fail
-Round 3: 652 tests, 144 suites, 652 pass, 0 fail
-```
+- PORT=9477: HTTP 200, codex-block-renderer with new features served correctly
+- 9475/9476/9481/9482 untouched
 
-Smoke test on port 9477: health=ok, services respond.
-grep "FAIL|MISMATCH|NaN|Error|NOT FOUND" → clean (only test description text, no actual failures).
+### Collision Report
 
-## Round 3 (04dac4e)
-
-### Line 1: Codex Rendering
-10. **Diff line numbers** — Old/new side line number columns in the diff gutter for easier code review
-11. **Expandable truncated output** — Long command output (>80 lines) shows a "Show all N lines" button instead of hard truncation
-12. **Session stats bar** — Sticky top bar showing live block/command/file-change/turn counts
-13. **Timestamp badges** — Each block gets a HH:MM:SS timestamp, shown on hover (CSS `::after` pseudo-element)
-
-### Line 3: Akari Polish
-14. **Lane utilization gauge** — Visual progress bar with percentage label in the Concurrency section
-15. **Worker detail expansion** — Click any worker row to reveal lane ID, stage, last tool, error, branch details
-
-## Files Changed
-
-Round 1:
-- `public/js/codex-block-renderer.js` — copy buttons, LCS diff, thinking timer
-- `public/style.css` — CSS for code wraps, copy buttons, elapsed timer
-- `public/js/historian-panel.js` — fleet summary stats grid
-- `public/js/akari-panel.js` — External Army section
-- `docs/USER_MANUAL.md` — codex SDK rendering documentation
-
-Round 2:
-- `public/js/codex-block-renderer.js` — hljs syntax highlight, tool icons, streaming cursor, error blocks, diff context collapse
-- `public/style.css` — streaming cursor, error block, diff collapse, mobile overflow fixes
-- `public/js/akari-panel.js` — External Army fleet summary + timestamp fix
-
-Round 3:
-- `public/js/codex-block-renderer.js` — diff line numbers, expandable output, session stats bar, timestamps
-- `public/style.css` — stats bar, timestamp badge, diff line numbers, show-all button, akari gauge + detail row
-- `public/js/akari-panel.js` — lane utilization gauge + worker detail expansion
+| Worker | Zone | Touched? |
+|--------|------|----------|
+| mobile_scroll | nanocode touch | No |
+| session_singleton | nanocode session | No |
+| akari_fleet2 | 9481/9482 | No (local commits only) |
+| quick3stage | dcc | No |
