@@ -1470,12 +1470,15 @@ export class CodexBlockRenderer {
 
     const cmdHtml = `<code class="cbx-bash-cmd">${escHtml(cmd)}</code>`
     const icon = _cmdIcon(cmd)
+    const now = new Date()
+    const ts = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
 
     article.innerHTML =
       `<div class="cbx-bash-card">` +
       `<div class="cbx-bash-header">` +
       `<span class="cbx-bash-icon">${escHtml(icon)}</span>` +
       `<span class="cbx-bash-cmd-text">${cmdHtml}</span>` +
+      `<span class="cbx-bash-ts">${ts}</span>` +
       `<span class="cbx-bash-status cbx-bash-running">running…</span>` +
       `<button class="cbx-fold-btn" type="button" title="Toggle fold" aria-label="Toggle fold">` +
       `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>` +
@@ -1553,6 +1556,10 @@ export class CodexBlockRenderer {
       if (isSuccess) {
         statusEl.className = 'cbx-bash-status cbx-bash-ok'
         statusEl.textContent = '✓ exit 0'
+        // Auto-fold successful commands to save screen space (like claude tab)
+        if (article.getAttribute('data-fold') === 'full') {
+          article.setAttribute('data-fold', 'header')
+        }
       } else {
         statusEl.className = 'cbx-bash-status cbx-bash-err'
         statusEl.textContent = `✗ exit ${exitCode}`
@@ -1910,12 +1917,13 @@ export class CodexBlockRenderer {
       }
 
       if (this._currentBashBlock) {
-        // Add command output
+        // Add command output — batch all lines then render once (not per-line)
         if (item.aggregated_output) {
           const lines = item.aggregated_output.split('\n')
           for (const line of lines) {
-            if (line) this._appendToBashOutput(line)
+            if (line) this._currentBashBlock.outputLines.push(line)
           }
+          this._renderBashOutput()
         }
         // Finalize with exit code
         const code = item.exit_code
