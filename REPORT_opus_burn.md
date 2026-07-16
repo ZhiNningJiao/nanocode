@@ -1,7 +1,8 @@
-# REPORT: opus_burn — T2 3h Sprint (Round 2)
+# REPORT: opus_burn — T2 3h Sprint
 
 **Date**: 2026-07-16
 **Branch**: `zhining/nano-plugin-akari`
+**Commits**: 32fca57 (Round 1) + 6334638 (Round 2)
 
 ---
 
@@ -9,63 +10,68 @@
 
 **Goal**: Bring Codex block rendering to parity with Claude tab experience.
 
-### Changes (all in `public/js/codex-block-renderer.js` + `public/style.css`):
+### Round 1 (32fca57):
+1. **Copy buttons on code blocks** — Markdown-rendered code fences get Copy buttons matching Claude tab UX
+2. **LCS-based diff** — Proper Longest Common Subsequence algorithm for file change diffs
+3. **Thinking timer** — Live elapsed timer (3s, 12s...) on thinking block
 
-1. **Copy buttons on code blocks** — Markdown-rendered agent messages now inject copy buttons into `<pre><code>` fences, matching Claude tab's UX pattern. CSS classes `.cbx-code-wrap`, `.cbx-code-header`, `.cbx-copy-btn` added. Copy handlers attached on message finalization via `_attachCopyHandlers()`.
-
-2. **LCS-based diff for file changes** — Replaced the simple positional line-by-line diff with a proper Longest Common Subsequence (LCS) algorithm, ported from Claude's `computeLineDiff()`. Now correctly identifies moved/reordered lines and produces minimal diffs. Handles files up to 500 lines with DP; falls back to full remove+add for larger files. Max 200 lines rendered per diff block.
-
-3. **Thinking indicator with elapsed timer** — The "Thinking..." block now shows a live elapsed timer (updated every second: `3s`, `12s`, etc.) so users know how long Codex has been processing. Timer is cleaned up properly in `_removeThinkingBlock()`.
-
-4. **CSS polish** — Added styles for:
-   - `.cbx-code-wrap` / `.cbx-code-header` — code block header with language label
-   - `.cbx-copy-btn` — copy button matching Claude's styling
-   - `.cbx-thinking-elapsed` — monospace elapsed timer aligned right
+### Round 2 (6334638):
+4. **Syntax highlighting** — `hljs.highlightElement()` applied to finalized code blocks when highlight.js is loaded, matching Claude tab's syntax coloring
+5. **Tool icons for command blocks** — Command binary detection maps to contextual icons (git=⎇, npm=📦, node=⬡, python=🐍, cargo=🦀, docker=🐳, curl=🌐, etc.) replacing the generic `$` icon
+6. **Streaming cursor** — Blinking caret (`cbx-cursor`) at the end of live agent message text during streaming, removed on finalization
+7. **Error block styling** — System blocks containing error/failed/lost keywords get red-tinted background + border (`.cbx-block-error`)
+8. **Diff context collapse** — Modified file diffs now show only changed lines + 3 lines context, with "⋯ N unchanged lines" collapse rows for cleaner presentation
+9. **Mobile code overflow fix** — `overflow-x: auto` + `-webkit-overflow-scrolling: touch` on code blocks and diff containers at `@media (max-width: 768px)`
 
 ### Architecture preserved:
 - SDK mode (`_sdkMode = true`) still suppresses duplicate PTY text
 - `extractCodexTodos` export unchanged (S5 todo dispatch)
-- No server-side changes needed — all rendering improvements are frontend-only
+- No server-side changes — all rendering improvements are frontend-only
 
 ---
 
 ## Line 2: Nanocode Polish
 
-### Historian fleet summary
-`public/js/historian-panel.js` — Added a **fleet summary stats grid** at the top of the Army table showing:
-- running / stalled / flagged / total agent counts
-- Provides at-a-glance fleet health without reading the full table
+### Round 1 (32fca57):
+- `public/js/historian-panel.js` — Fleet summary stats grid (running/stalled/flagged/total)
+- `docs/USER_MANUAL.md` — Codex SDK rendering documentation update
 
-### USER_MANUAL update
-`docs/USER_MANUAL.md` — Updated Codex rendering documentation:
-- Changed "Block (experimental)" to "Block (SDK-driven)"
-- Added new "Codex Block Rendering (SDK Mode)" section documenting: markdown with copy buttons, command blocks, LCS diffing, thinking timer, turn separators, fold states
+### Round 2:
+- Verified all upstream features (Open URL / Copy URL toolbar buttons, OSC 52 clipboard, OSC 8 hyperlinks, mobile composer fixes, terminal bleed fixes) are already integrated. No additional adoption needed.
 
 ---
 
 ## Line 3: Akari Polish
 
-### External Army section
-`public/js/akari-panel.js` — Added **External Army** section to the akari inspector panel:
-- Cross-references `army_status.json` data via `/api/historian/state`
-- Shows agent fleet table: tag, status (running/STALL/FLAG with colored dots), last active time, activity
-- Graceful degradation: section simply doesn't appear if historian data is unavailable
-- Uses existing akari table styling (`.akari-table`, `.akari-state-dot`)
+### Round 1 (32fca57):
+- `public/js/akari-panel.js` — External Army section with agent fleet table
+
+### Round 2 (6334638):
+- **Fleet summary row** — External Army now shows running/stalled/flagged/total counts at top (matching historian panel pattern)
+- **Timestamp fix** — "updated Xs ago" suffix added for clarity
 
 ---
 
 ## Test Results
 
 ```
-652 tests, 144 suites, 652 pass, 0 fail
+Round 1: 652 tests, 144 suites, 652 pass, 0 fail
+Round 2: 652 tests, 144 suites, 652 pass, 0 fail
 ```
 
-Smoke test on port 9477: health=ok, services=ok, akari=up.
+Smoke test on port 9477: health=ok, services respond.
+grep "FAIL|MISMATCH|NaN|Error|NOT FOUND" → clean (only test description text, no actual failures).
 
 ## Files Changed
 
+Round 1:
 - `public/js/codex-block-renderer.js` — copy buttons, LCS diff, thinking timer
 - `public/style.css` — CSS for code wraps, copy buttons, elapsed timer
 - `public/js/historian-panel.js` — fleet summary stats grid
 - `public/js/akari-panel.js` — External Army section
 - `docs/USER_MANUAL.md` — codex SDK rendering documentation
+
+Round 2:
+- `public/js/codex-block-renderer.js` — hljs syntax highlight, tool icons, streaming cursor, error blocks, diff context collapse
+- `public/style.css` — streaming cursor, error block, diff collapse, mobile overflow fixes
+- `public/js/akari-panel.js` — External Army fleet summary + timestamp fix
