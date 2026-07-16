@@ -114,11 +114,6 @@ const LAZY_PLUGINS = {
     render: (m, pane) => m.renderAkariPane(pane),
     reset: (m) => m.resetAkariLoadState(),
   },
-  historian: {
-    key: 'historian-panel', imp: () => import('./historian-panel.js'),
-    render: (m, pane) => m.renderHistorianPane(pane),
-    reset: (m) => m.resetHistorianLoadState(),
-  },
 }
 
 const DOMAIN_KEY = 'rightPanel:domain'
