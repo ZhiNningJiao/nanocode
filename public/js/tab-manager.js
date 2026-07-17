@@ -567,6 +567,18 @@ export class TabManager {
         btn.appendChild(chip)
       }
 
+      // Per-tab model override badge: shows the tab's active model so the
+      // choice is visible in the tab strip (root fix for the cross-tab /model
+      // sync bug — the override lives on the tab, not the global setting).
+      // Applies to claude/codex tabs; absent = follows the global default.
+      if (tab.modelOverride) {
+        const mChip = document.createElement('span')
+        mChip.className = 'tab-chip-model'
+        mChip.textContent = tab.modelOverride
+        mChip.title = `model: ${tab.modelOverride} (this tab)`
+        btn.appendChild(mChip)
+      }
+
       const close = document.createElement('span')
       close.className = 'tab-chip-close'
       close.textContent = '×'

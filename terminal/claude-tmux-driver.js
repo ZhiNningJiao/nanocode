@@ -368,8 +368,8 @@ function buildOptions(cs, cwd, store, home) {
     configDir,
     cwd,
     claudeConfigDir: configDir,
-    model: store.getSetting('claude_model') || undefined,
-    effort: store.getSetting('claude_effort') || undefined,
+    model: cs.claudeModelOverride || store.getSetting('claude_model') || undefined,
+    effort: cs.claudeEffortOverride || store.getSetting('claude_effort') || undefined,
     // 需求8: forward the resolved persona prompt so the bridge's SDK driver
     // injects it via appendSystemPrompt each turn (keeps persona active).
     appendSystemPrompt: cs.personaPrompt || undefined,
@@ -518,8 +518,8 @@ export function createClaudeTmuxDriver({ store, home, claudeBroadcast, broadcast
           // /model switch reaches long-lived bridges (which otherwise froze
           // --model at launch). The bridge rebuilds its streaming session with
           // --resume when these change between turns.
-          model: store.getSetting('claude_model') || null,
-          effort: store.getSetting('claude_effort') || null,
+          model: cs.claudeModelOverride || store.getSetting('claude_model') || null,
+          effort: cs.claudeEffortOverride || store.getSetting('claude_effort') || null,
           // Same live-sync for the permission mode so a Shift+Tab plan-mode
           // toggle (CC parity) reaches long-lived bridges too. Value is the
           // resolved SDK PermissionMode (default/acceptEdits/bypassPermissions/plan).

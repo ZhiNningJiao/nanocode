@@ -255,6 +255,21 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     if (cs) cs.allowTeamFailover = !!allow
   }
 
+  // Per-tab model/effort override setter (root fix for cross-tab /model sync).
+  // Called by PATCH /api/projects/:id/tabs/:tabId/model after the tab metadata
+  // is persisted. Updates the LIVE in-memory cs so the next turn honors the new
+  // model without waiting for a WS reconnect to re-hydrate cs from the tab.
+  // modelOverride/effortOverride are strings ('' / null = follow global default).
+  function setTabModelOverride(projectId, tabId, { modelOverride, effortOverride } = {}) {
+    const cCs = claudeSessions.get(sessionKeyFor(projectId, tabId))
+    if (cCs) {
+      if (modelOverride !== undefined) cCs.claudeModelOverride = modelOverride || null
+      if (effortOverride !== undefined) cCs.claudeEffortOverride = effortOverride || null
+    }
+    const xCs = codexSessions.get(codexSessionKeyFor(projectId, tabId))
+    if (xCs && modelOverride !== undefined) xCs.codexModelOverride = modelOverride || null
+  }
+
   // Manually move the current conversation to another team NOW: copy the
   // transcript into the target team's projects dir, switch the tab + live cs to
   // that team's CLAUDE_CONFIG_DIR, and upgrade the model to that team's default
@@ -548,8 +563,8 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     cs.busy = true
     cs.currentProc = null
 
-    const claudeModel = store.getSetting('claude_model') || ''
-    const claudeEffort = store.getSetting('claude_effort') || ''
+    const claudeModel = cs.claudeModelOverride || store.getSetting('claude_model') || ''
+    const claudeEffort = cs.claudeEffortOverride || store.getSetting('claude_effort') || ''
     const cacheTtl = store.getSetting('claude_cache_ttl') || ''
     const globalPerm = store.getSetting('global_permission') || 'full-auto'
     const tabLabel = cs.tabLabel || ''
@@ -737,8 +752,8 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     }
     cs.turnCount++
 
-    const claudeModel = store.getSetting('claude_model') || ''
-    const claudeEffort = store.getSetting('claude_effort') || ''
+    const claudeModel = cs.claudeModelOverride || store.getSetting('claude_model') || ''
+    const claudeEffort = cs.claudeEffortOverride || store.getSetting('claude_effort') || ''
     const cacheTtl = store.getSetting('claude_cache_ttl') || ''
     const globalPerm = store.getSetting('global_permission') || 'full-auto'
     const tabLabel = cs.tabLabel || ''
@@ -1181,6 +1196,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // child tabs). When true, a 429 triggers switch-team + copy transcript +
         // resume on the other org's quota. See terminal/team-failover.js.
         allowTeamFailover: !!tab?.allowTeamFailover,
+        // Per-tab model/effort override (root fix for cross-tab /model sync): the
+        // user's /model choice is persisted on the tab (modelOverride/effortOverride)
+        // — NOT the global setting — so sibling claude tabs keep their own model.
+        // Drivers read cs.claudeModelOverride || global setting; null/'' falls back
+        // to the global default (the settings page still controls the default).
+        claudeModelOverride: tab?.modelOverride || null,
+        claudeEffortOverride: tab?.effortOverride || null,
         cwd: (tab?.claudeSessionCwd && typeof tab.claudeSessionCwd === 'string' && tab.claudeSessionCwd.trim()) ? tab.claudeSessionCwd.trim() : project.cwd,
         currentProc: null,
         tabLabel: tab?.label || '',
@@ -1343,14 +1365,19 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // session-resume mechanism instead.
         // ── /model interception ──────────────────────────────────────────────
         // claude --print (non-interactive) ignores /model. Intercept here and
-        // update the claude_model setting directly so the next turn picks it up.
+        // persist the choice on the TAB (modelOverride) — not the global
+        // claude_model setting — so sibling claude tabs keep their own model
+        // (root fix for the cross-tab /model sync bug). The next turn reads
+        // cs.claudeModelOverride || global; the live cs is updated in place so
+        // the next turn picks it up without a reconnect.
         if (msg.text.trim().startsWith('/model')) {
           const parts = msg.text.trim().split(/\s+/)
           const doneEvent = { type: 'result', subtype: 'success' }
           try { ws.send(JSON.stringify({ type: 'claude-event', event: doneEvent })) } catch {}
           if (parts.length >= 2) {
             const newModel = parts[1]
-            store.setSetting('claude_model', newModel)
+            store.updateTabMetadata?.(projectId, tabId, { modelOverride: newModel })
+            if (cs) cs.claudeModelOverride = newModel
             const infoEvent = {
               type: 'system',
               subtype: 'info',
@@ -1358,7 +1385,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
             }
             try { ws.send(JSON.stringify({ type: 'claude-event', event: infoEvent })) } catch {}
           } else {
-            const currentModel = store.getSetting('claude_model') || '(CLI default)'
+            const currentModel = (cs && cs.claudeModelOverride) || store.getSetting('claude_model') || '(CLI default)'
             const infoEvent = {
               type: 'system',
               subtype: 'info',
@@ -1474,6 +1501,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       cs = {
         sessionKey,
         codexThreadId: tab?.codexThreadId || null,
+        // Per-tab model override (root fix for cross-tab /model sync + codex
+        // /model never reaching the SDK): persisted on the tab, not the global
+        // codex_model setting, so sibling codex tabs keep their own model. The
+        // driver reads cs.codexModelOverride || global codex_model each turn.
+        codexModelOverride: tab?.modelOverride || null,
         clients: new Set(),
         scrollback: '',
         eventHistory: [],
@@ -1985,6 +2017,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
   return {
     setAllowTeamFailover,
+    setTabModelOverride,
     switchTeam,
     claudeSessions,
     claudeSessionOwners,

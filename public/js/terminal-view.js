@@ -1601,18 +1601,27 @@ function setupChatInput() {
   async function showModelPicker() {
     dismissModelPicker()
 
-    // Fetch current settings from server to pre-highlight active model/effort.
-    // Gracefully degrade to empty string if the fetch fails (no pre-highlight).
+    // Per-tab model: the active tab's modelOverride/effortOverride take priority
+    // over the global claude_model/claude_effort default (root fix for the
+    // cross-tab /model sync bug — the choice is persisted on the tab, not the
+    // global setting, so sibling claude tabs keep their own model).
+    const activeTab = (typeof tabManager !== 'undefined' && tabManager && tabManager.tabs)
+      ? (tabManager.tabs.find((t) => t.id === tabManager.activeId) || null)
+      : null
     let curModel = ''
     let curEffort = ''
     try {
       const res = await fetch('/api/settings')
       if (res.ok) {
         const s = await res.json()
-        curModel = s.claude_model || ''
-        curEffort = s.claude_effort || ''
+        // tab override wins; global is the default
+        curModel = (activeTab && activeTab.modelOverride) ? activeTab.modelOverride : (s.claude_model || '')
+        curEffort = (activeTab && activeTab.effortOverride) ? activeTab.effortOverride : (s.claude_effort || '')
       }
     } catch (_) { /* ignore — picker still works, just no pre-highlight */ }
+    // If the fetch failed, fall back to the in-memory tab override alone.
+    if (!curModel && activeTab && activeTab.modelOverride) curModel = activeTab.modelOverride
+    if (!curEffort && activeTab && activeTab.effortOverride) curEffort = activeTab.effortOverride
 
     const picker = document.createElement('div')
     picker.className = 'cbr-model-picker'
@@ -1701,28 +1710,25 @@ function setupChatInput() {
     async function applyModelAndEffort(chosenModel, chosenEffort) {
       dismissModelPicker()
       try {
-        // Update both settings via REST API (same path app.js uses for the settings panel)
-        await fetch('/api/settings', {
-          method: 'PUT',
+        // Persist the choice on the active TAB (modelOverride/effortOverride),
+        // NOT the global claude_model/claude_effort setting — root fix for the
+        // cross-tab /model sync bug (sibling claude tabs kept syncing together
+        // because the old picker wrote the global setting). The server updates
+        // the live cs + broadcasts tabs; the next turn reads tab override || global.
+        const tabId = tabManager ? tabManager.activeId : null
+        if (!currentProjectId || !tabId) throw new Error('no active claude tab')
+        const r = await fetch(`/api/projects/${currentProjectId}/tabs/${tabId}/model`, {
+          method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: 'claude_model', value: chosenModel.id }),
+          body: JSON.stringify({ modelOverride: chosenModel.id, effortOverride: chosenEffort.id }),
         })
-        await fetch('/api/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: 'claude_effort', value: chosenEffort.id }),
-        })
-        // Update local serverSettings cache so the picker reflects new values immediately
-        if (typeof serverSettings !== 'undefined') {
-          serverSettings.claude_model = chosenModel.id
-          serverSettings.claude_effort = chosenEffort.id
-        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
         // Show confirmation as a system info message rendered inline
         const confirmEl = document.createElement('div')
         confirmEl.className = 'cbr-model-picker-confirm'
         const modelLabel = chosenModel.label || '(CLI default)'
         const effortLabel = chosenEffort.id ? ` · effort: ${chosenEffort.label}` : ''
-        confirmEl.textContent = `Model set to ${modelLabel}${effortLabel}. Takes effect on next message.`
+        confirmEl.textContent = `Model set to ${modelLabel}${effortLabel} (this tab). Takes effect on next message.`
         _appendToScroll(confirmEl)
         setTimeout(() => confirmEl.remove(), 5000)
       } catch (err) {
@@ -1744,26 +1750,30 @@ function setupChatInput() {
     }
   }
 
-  // ── Codex /model: persist codex_model via REST ───────────────────────────
-  // The codex SDK driver reads store.getSetting('codex_model') each turn and
-  // passes it as threadOptions.model (codex-sdk-driver.js). The SDK calls
-  // thread.runStreamed() — a direct API call that BYPASSES the codex CLI REPL,
-  // so a literal "/model <name>" prompt is just text to the model and never
-  // switches anything. Intercept /model on codex tabs and persist codex_model
-  // through the same /api/settings PUT the claude picker uses; the next SDK
-  // turn picks it up. (Root fix for (a): /model never reached the setting.)
+  // ── Codex /model: persist a per-tab model override ─────────────────────
+  // The codex SDK driver reads cs.codexModelOverride (populated from the tab's
+  // modelOverride) || global codex_model each turn and passes it as
+  // threadOptions.model. The SDK calls thread.runStreamed() — a direct API call
+  // that BYPASSES the codex CLI REPL, so a literal "/model <name>" prompt is
+  // just text to the model and never switches anything. Intercept /model on
+  // codex tabs and persist a per-tab modelOverride (NOT the global codex_model
+  // setting) so sibling codex tabs keep their own model — root fix for (a)
+  // plus the cross-tab /model sync bug.
   async function applyCodexModel(model) {
     const value = (model || '').trim()
     try {
-      await fetch('/api/settings', {
-        method: 'PUT',
+      const tabId = tabManager ? tabManager.activeId : null
+      if (!currentProjectId || !tabId) throw new Error('no active codex tab')
+      const r = await fetch(`/api/projects/${currentProjectId}/tabs/${tabId}/model`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'codex_model', value }),
+        body: JSON.stringify({ modelOverride: value }),
       })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const confirmEl = document.createElement('div')
       confirmEl.className = 'cbr-model-picker-confirm'
       const label = value || '(CLI default)'
-      confirmEl.textContent = `Codex model set to ${label}. Takes effect on next message.`
+      confirmEl.textContent = `Codex model set to ${label} (this tab). Takes effect on next message.`
       _appendToScroll(confirmEl)
       setTimeout(() => confirmEl.remove(), 5000)
     } catch (err) {
@@ -1787,7 +1797,11 @@ function setupChatInput() {
         fetch('/api/settings').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
         fetch('/api/codex/config').then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ])
-      curModel = sRes.codex_model || ''
+      const activeTab = (typeof tabManager !== 'undefined' && tabManager && tabManager.tabs)
+        ? (tabManager.tabs.find((t) => t.id === tabManager.activeId) || null)
+        : null
+      // tab override wins; global codex_model is the default
+      curModel = (activeTab && activeTab.modelOverride) ? activeTab.modelOverride : (sRes.codex_model || '')
       configModel = cRes?.model || null
     } catch { /* picker still works, just no prefill */ }
 

@@ -617,9 +617,13 @@ if (codexRenderModeSaveBtn) {
 
 // N43-R9: Codex model save handler. The codex SDK driver bypasses the CLI
 // REPL, so "/model <name>" typed in a codex tab is intercepted by
-// terminal-view.js (sendInput → applyCodexModel) and persisted as the
-// `codex_model` setting via PUT /api/settings; the driver reads it next turn.
-// The Team & Model pane in plugins-panel.js uses the same `codex_model` key.
+// terminal-view.js (sendInput → applyCodexModel) and persisted as a per-tab
+// `modelOverride` via PATCH /api/projects/:id/tabs/:tabId/model (NOT the
+// global codex_model setting — root fix for the cross-tab /model sync bug).
+// The driver reads cs.codexModelOverride || global codex_model each turn.
+// The Team & Model pane in plugins-panel.js still writes the global
+// codex_model key, which now acts as the per-tab default (tabs with no
+// modelOverride follow it).
 
 // ─── Fable5 / opencode render mode save (需求11-C) ───────────────────────────
 
