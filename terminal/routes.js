@@ -1521,5 +1521,6 @@ export function createTerminalRoutes(store, opts = {}) {
     handleTabsWs,
     setAgentHealthMonitor: sessionController.setAgentHealthMonitor,
     handleRemoteSshWs: remoteSsh.handleRemoteSshWs,
+    sessionController,
   }
 }
