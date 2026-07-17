@@ -375,6 +375,19 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     codexBroadcastEvent,
     codexBroadcastStreamText,
     rerunTurn: (...args) => dispatchCodexTurn(...args),
+    home,
+    onBundledCodexFallback: (cs) => {
+      // Surface once per session: the SDK is about to use its bundled 0.137
+      // codex (no override + no user CLI), which can't run gpt-5.6-sol. Tell the
+      // user how to fix it so /model switches don't silently 400.
+      codexBroadcast(
+        cs,
+        '[codex] No codex_path_override set and ~/.local/lib/npm-global/bin/codex not found; '
+          + 'falling back to bundled SDK codex 0.137, which cannot run gpt-5.6-sol. '
+          + 'Install codex 0.144+ (npm i -g @openai/codex under a user-owned prefix) '
+          + 'or set codex_path_override to a 0.144+ binary.\n',
+      )
+    },
   })
 
   // ── opencode block-mode (Fable5 / opencode tabs, Block render mode) ──────────

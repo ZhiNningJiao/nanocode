@@ -1,6 +1,18 @@
 import { Codex as DefaultCodex } from '@openai/codex-sdk'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 const TURN_SEPARATOR = '────────────\n'
+
+// When codex_path_override is unset, the SDK driver defaults to the user's
+// locally-installed codex CLI (resilient to /usr package removal). This is the
+// path the主人 reinstalled: ~/.local/lib/npm-global/bin/codex (0.144+, supports
+// gpt-5.6-sol). If that file is missing too, we fall back to the SDK's bundled
+// codex (0.137) and warn once per session — 0.137 can't run gpt-5.6-sol.
+function userInstalledCodexPath(home) {
+  return join(home || homedir(), '.local', 'lib', 'npm-global', 'bin', 'codex')
+}
 
 function ensureTrailingNewline(text) {
   if (!text) return ''
@@ -80,6 +92,8 @@ export function createCodexSdkDriver({
   codexBroadcastStreamText = () => {},
   rerunTurn,
   CodexImpl = DefaultCodex,
+  home,
+  onBundledCodexFallback = () => {},
 }) {
   async function runCodexTurn(cs, prompt, sessionKey, cwd) {
     const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : ''
@@ -101,8 +115,22 @@ export function createCodexSdkDriver({
     const sandboxMode = store.getSetting('codex_sandbox_mode') || 'danger-full-access'
     const pathOverride = store.getSetting('codex_path_override') || ''
 
+    // Resolve the codex binary the SDK will actually spawn:
+    //   1. explicit codex_path_override (user-chosen) — always wins
+    //   2. default to the user-installed CLI at ~/.local/lib/npm-global/bin/codex
+    //      (0.144+, supports gpt-5.6-sol) — only if that file exists
+    //   3. otherwise pass no override → SDK uses its bundled 0.137 codex, which
+    //      can't run gpt-5.6-sol; warn once per session via the callback so the
+    //      UI can surface "version too old".
+    const userCodexPath = userInstalledCodexPath(home)
+    const effectiveOverride = pathOverride || (existsSync(userCodexPath) ? userCodexPath : '')
+    if (!pathOverride && !effectiveOverride && !cs._codexBundledFallbackWarned) {
+      cs._codexBundledFallbackWarned = true
+      onBundledCodexFallback(cs)
+    }
+
     const codexOptions = {}
-    if (pathOverride) codexOptions.codexPathOverride = pathOverride
+    if (effectiveOverride) codexOptions.codexPathOverride = effectiveOverride
 
     const threadOptions = {
       workingDirectory: cwd,

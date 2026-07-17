@@ -1744,6 +1744,124 @@ function setupChatInput() {
     }
   }
 
+  // ── Codex /model: persist codex_model via REST ───────────────────────────
+  // The codex SDK driver reads store.getSetting('codex_model') each turn and
+  // passes it as threadOptions.model (codex-sdk-driver.js). The SDK calls
+  // thread.runStreamed() — a direct API call that BYPASSES the codex CLI REPL,
+  // so a literal "/model <name>" prompt is just text to the model and never
+  // switches anything. Intercept /model on codex tabs and persist codex_model
+  // through the same /api/settings PUT the claude picker uses; the next SDK
+  // turn picks it up. (Root fix for (a): /model never reached the setting.)
+  async function applyCodexModel(model) {
+    const value = (model || '').trim()
+    try {
+      await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'codex_model', value }),
+      })
+      const confirmEl = document.createElement('div')
+      confirmEl.className = 'cbr-model-picker-confirm'
+      const label = value || '(CLI default)'
+      confirmEl.textContent = `Codex model set to ${label}. Takes effect on next message.`
+      _appendToScroll(confirmEl)
+      setTimeout(() => confirmEl.remove(), 5000)
+    } catch (err) {
+      const errEl = document.createElement('div')
+      errEl.className = 'cbr-model-picker-confirm cbr-model-picker-error'
+      errEl.textContent = `Failed to set codex model: ${err.message}`
+      _appendToScroll(errEl)
+      setTimeout(() => errEl.remove(), 5000)
+    }
+    chatInput.focus()
+  }
+
+  // Bare /model on a codex tab → echo the current codex_model and offer a
+  // free-form input (no hardcoded whitelist — any model name the user types,
+  // e.g. gpt-5.6-sol, is accepted). Mirrors the claude picker's shell/CSS.
+  async function showCodexModelPicker() {
+    let curModel = ''
+    let configModel = null
+    try {
+      const [sRes, cRes] = await Promise.all([
+        fetch('/api/settings').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+        fetch('/api/codex/config').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ])
+      curModel = sRes.codex_model || ''
+      configModel = cRes?.model || null
+    } catch { /* picker still works, just no prefill */ }
+
+    dismissModelPicker()
+
+    const picker = document.createElement('div')
+    picker.className = 'cbr-model-picker cbr-model-picker--codex'
+    _modelPickerEl = picker
+
+    const header = document.createElement('div')
+    header.className = 'cbr-model-picker-header'
+    header.textContent = 'Codex model'
+    picker.appendChild(header)
+
+    const cur = document.createElement('div')
+    cur.className = 'cbr-model-picker-hint'
+    const curLabel = curModel || '(CLI default)'
+    const cfgHint = configModel ? ` · config.toml: ${configModel}` : ''
+    cur.textContent = `Current: ${curLabel}${cfgHint}`
+    picker.appendChild(cur)
+
+    const inputRow = document.createElement('div')
+    inputRow.className = 'cbr-model-picker-cancel-row'
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'rp-input'
+    input.placeholder = 'e.g. gpt-5.6-sol'
+    input.value = curModel
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        const v = input.value.trim()
+        applyCodexModel(v)
+        dismissModelPicker()
+      }
+    })
+    const setBtn = document.createElement('button')
+    setBtn.className = 'cbr-queue-btn'
+    setBtn.textContent = 'Set'
+    setBtn.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      const v = input.value.trim()
+      applyCodexModel(v)
+      dismissModelPicker()
+    })
+    inputRow.appendChild(input)
+    inputRow.appendChild(setBtn)
+    picker.appendChild(inputRow)
+
+    const cancelRow = document.createElement('div')
+    cancelRow.className = 'cbr-model-picker-cancel-row'
+    const clearBtn = document.createElement('button')
+    clearBtn.className = 'cbr-queue-btn'
+    clearBtn.textContent = 'Use CLI default'
+    clearBtn.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      applyCodexModel('')
+      dismissModelPicker()
+    })
+    const cancelBtn = document.createElement('button')
+    cancelBtn.className = 'cbr-queue-btn cbr-queue-cancel'
+    cancelBtn.textContent = 'Cancel'
+    cancelBtn.addEventListener('mousedown', (e) => { e.preventDefault(); dismissModelPicker(); chatInput.focus() })
+    cancelRow.appendChild(clearBtn)
+    cancelRow.appendChild(cancelBtn)
+    picker.appendChild(cancelRow)
+
+    if (!_appendToScroll(picker)) {
+      _modelPickerEl = null
+    } else {
+      setTimeout(() => input.focus(), 0)
+    }
+  }
+
   function sendInput() {
     const text = chatInput.value
     if (!text) return
@@ -1757,6 +1875,33 @@ function setupChatInput() {
       chatInput.focus()
       showModelPicker()
       return
+    }
+
+    // Codex tab: /model <name> persists codex_model; bare /model opens a picker
+    // that echoes the current value. The SDK driver bypasses the CLI REPL, so
+    // without this interception "/model gpt-5.6-sol" is sent to the model as
+    // plain text and never switches the model. (Root fix for (a).)
+    if (isCodexTab) {
+      const trimmed = text.trim()
+      const withArg = trimmed.match(/^\/model\s+(\S.*)$/)
+      if (withArg) {
+        chatInput.value = ''
+        autoResize()
+        hideSuggestions()
+        hideSlashCommands()
+        chatInput.focus()
+        applyCodexModel(withArg[1].trim())
+        return
+      }
+      if (trimmed.match(/^\/model\s*$/)) {
+        chatInput.value = ''
+        autoResize()
+        hideSuggestions()
+        hideSlashCommands()
+        chatInput.focus()
+        showCodexModelPicker()
+        return
+      }
     }
 
     // When Claude is busy: silently add to client-side pending queue.

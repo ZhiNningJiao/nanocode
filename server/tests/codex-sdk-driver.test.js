@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createCodexSdkDriver } from '../../terminal/codex-sdk-driver.js'
 
 function createDeferred() {
@@ -317,5 +320,126 @@ describe('codex sdk driver', () => {
       '────────────\n',
       '[Queue cleared (1 pending message discarded after interrupt).]\n',
     ])
+  })
+
+  // ── Cut 2: codex binary resolution & model passthrough ───────────────────
+  // When codex_path_override is unset, the driver defaults to the
+  // user-installed CLI at ~/.local/lib/npm-global/bin/codex (0.144+, supports
+  // gpt-5.6-sol). If that file is missing too, it falls back to the SDK's
+  // bundled 0.137 codex and warns once per session via onBundledCodexFallback.
+
+  function minimalPlan() {
+    return [{ events: [{ type: 'thread.started', thread_id: 't-x' }, { type: 'turn.completed', usage: {} }] }]
+  }
+
+  function baseClientState() {
+    return { codexThreadId: null, busy: false, turnCount: 0, queue: [], clients: new Set(), scrollback: '' }
+  }
+
+  it('defaults codexPathOverride to the user-installed CLI and passes codex_model through', async () => {
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    const fallbackCalls = []
+    const home = mkdtempSync(join(tmpdir(), 'codex-home-'))
+    const codexBin = join(home, '.local', 'lib', 'npm-global', 'bin')
+    mkdirSync(codexBin, { recursive: true })
+    writeFileSync(join(codexBin, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
+    try {
+      const store = {
+        getSetting(key) {
+          if (key === 'codex_model') return 'gpt-5.6-sol'
+          return null
+        },
+      }
+      const FakeCodex = createCodexImplFactory(minimalPlan(), calls)
+      const driver = createCodexSdkDriver({
+        store,
+        codexBroadcast: () => {},
+        codexBroadcastEvent: () => {},
+        rerunTurn: () => {},
+        CodexImpl: FakeCodex,
+        home,
+        onBundledCodexFallback: () => { fallbackCalls.push('fallback') },
+      })
+      const cs = baseClientState()
+      await driver.runCodexTurn(cs, 'hi', 'p:codex:t', '/tmp/w')
+
+      assert.equal(fallbackCalls.length, 0, 'bundled fallback must NOT fire when user CLI exists')
+      assert.equal(calls.codexOptions.length, 1)
+      assert.equal(calls.codexOptions[0].codexPathOverride, join(codexBin, 'codex'))
+      assert.equal(calls.threadCalls[0].options.model, 'gpt-5.6-sol')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('falls back to bundled codex and warns exactly once when the user-installed CLI is missing', async () => {
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    const fallbackCalls = []
+    const home = mkdtempSync(join(tmpdir(), 'codex-home-'))
+    // NOTE: ~/.local/lib/npm-global/bin/codex intentionally NOT created
+    try {
+      const store = { getSetting() { return null } }
+      const FakeCodex = createCodexImplFactory([
+        ...minimalPlan(),
+        { events: [{ type: 'turn.completed', usage: {} }] },
+      ], calls)
+      const driver = createCodexSdkDriver({
+        store,
+        codexBroadcast: () => {},
+        codexBroadcastEvent: () => {},
+        rerunTurn: () => {},
+        CodexImpl: FakeCodex,
+        home,
+        onBundledCodexFallback: (csArg) => { fallbackCalls.push(csArg) },
+      })
+      const cs = baseClientState()
+      await driver.runCodexTurn(cs, 'hi', 'p:codex:t', '/tmp/w')
+
+      assert.equal(fallbackCalls.length, 1, 'bundled fallback must fire on first turn')
+      assert.equal(fallbackCalls[0], cs, 'callback must receive the client state')
+      assert.equal(calls.codexOptions.length, 1)
+      assert.equal(calls.codexOptions[0].codexPathOverride, undefined, 'no override when user CLI missing')
+
+      await driver.runCodexTurn(cs, 'again', 'p:codex:t', '/tmp/w')
+      assert.equal(fallbackCalls.length, 1, 'bundled fallback must fire only once per session')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('honors an explicit codex_path_override even when the user-installed CLI exists', async () => {
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    const fallbackCalls = []
+    const home = mkdtempSync(join(tmpdir(), 'codex-home-'))
+    const codexBin = join(home, '.local', 'lib', 'npm-global', 'bin')
+    mkdirSync(codexBin, { recursive: true })
+    writeFileSync(join(codexBin, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
+    try {
+      const store = {
+        getSetting(key) {
+          if (key === 'codex_path_override') return '/custom/codex'
+          if (key === 'codex_model') return 'gpt-5.6-sol'
+          return null
+        },
+      }
+      const FakeCodex = createCodexImplFactory(minimalPlan(), calls)
+      const driver = createCodexSdkDriver({
+        store,
+        codexBroadcast: () => {},
+        codexBroadcastEvent: () => {},
+        rerunTurn: () => {},
+        CodexImpl: FakeCodex,
+        home,
+        onBundledCodexFallback: () => { fallbackCalls.push('fallback') },
+      })
+      const cs = baseClientState()
+      await driver.runCodexTurn(cs, 'hi', 'p:codex:t', '/tmp/w')
+
+      assert.equal(fallbackCalls.length, 0, 'explicit override must not trigger bundled fallback')
+      assert.equal(calls.codexOptions[0].codexPathOverride, '/custom/codex')
+      assert.equal(calls.threadCalls[0].options.model, 'gpt-5.6-sol')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })
