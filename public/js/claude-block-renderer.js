@@ -1587,9 +1587,15 @@ export class ClaudeBlockRenderer {
         detail: { tabId: this.tabId },
       }))
     } else if (event.subtype === 'info') {
-      // Read-only mode banner: another server hosts this session.
+      // Read-only mode banner: another server or tab hosts this session.
       if (event._readonly === true) {
-        this._showReadOnlyBanner(event._lockHolderPort)
+        if (event._displacedTo) {
+          // In-process displacement (cross-project twin guard): another tab
+          // in the same server took ownership of this session.
+          this._showReadOnlyBanner(event._lockHolderPort, event._displacedTo)
+        } else {
+          this._showReadOnlyBanner(event._lockHolderPort)
+        }
         this._addSystemBlock(`[${event.text}]`)
         return
       }
@@ -2251,17 +2257,20 @@ export class ClaudeBlockRenderer {
     this._scrollBottom()
   }
 
-  _showReadOnlyBanner(holderPort) {
+  _showReadOnlyBanner(holderPort, displacedTo) {
+    const hintText = displacedTo
+      ? `会话已迁移到「${escHtml(String(displacedTo.tabLabel || '新 tab'))}」`
+      : `会话由 :${escHtml(String(holderPort))} 托管`
     if (this._readonlyBannerEl) {
       const text = this._readonlyBannerEl.querySelector('.cbr-readonly-text')
-      if (text) text.textContent = `会话由 :${holderPort} 托管`
+      if (text) text.textContent = hintText
       return
     }
     const banner = document.createElement('div')
     banner.className = 'cbr-readonly-banner'
     banner.innerHTML =
       `<span class="cbr-readonly-icon">&#128274;</span>` +
-      `<span class="cbr-readonly-text">会话由 :${escHtml(String(holderPort))} 托管</span>` +
+      `<span class="cbr-readonly-text">${hintText}</span>` +
       `<span class="cbr-readonly-hint">（只读模式）</span>`
     this.container.insertBefore(banner, this.container.firstChild)
     this._readonlyBannerEl = banner

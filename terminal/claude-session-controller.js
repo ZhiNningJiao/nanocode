@@ -27,6 +27,19 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   const codexSessions = new Map()
   const replaySeeds = new Map()
 
+  // ── In-process session ownership (cross-project twin guard) ──────────────
+  // The file lock (session-lock.js) only prevents cross-PROCESS duplicates:
+  // two tabs in the SAME process (same pid+port) both pass the re-entrant
+  // lock check (acquireSessionLock returns acquired=true for same pid+port)
+  // and each thinks it is the host — a "twin consumer" that competes for the
+  // same Claude session jsonl. This registry tracks which cs owns each
+  // claudeSessionId WITHIN this process, so a cross-project resume that would
+  // create a twin instead migrates ownership: the old tab becomes read-only
+  // (can see output, cannot send input), the new tab becomes the active host.
+  // The displaced tab is promoted back when the host's last client disconnects.
+  // Map: claudeSessionId -> sessionKey
+  const claudeSessionOwners = new Map()
+
   const TAB_LAUNCHERS = {
     bash: () => 'exec bash -l',
     claude: () => {
@@ -136,12 +149,103 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     return `${projectId}:codex:${tabId}`
   }
 
+  // ── In-process ownership helpers (cross-project twin guard) ─────────────
+  // Claim ownership of cs.claudeSessionId for this sessionKey. If another cs
+  // in this process already owns it, migrate ownership: demote the old host to
+  // read-only (notifies its clients with a displacement banner) and this cs
+  // takes over as the active host. Idempotent for the same sessionKey.
+  function claimClaudeSessionOwnership(cs, sessionKey, projectId, tabId, tabLabel) {
+    const sid = cs.claudeSessionId
+    if (!sid) return
+    const existing = claudeSessionOwners.get(sid)
+    if (existing && existing !== sessionKey) {
+      // Twin detected: another tab in this process owns this session.
+      // Migrate ownership: demote the old host, this cs takes over.
+      const oldCs = claudeSessions.get(existing)
+      if (oldCs && !oldCs.readOnly) {
+        oldCs.readOnly = true
+        oldCs._displacedBy = { projectId, tabId, tabLabel: tabLabel || '' }
+        oldCs.lockHolder = null
+        // The displaced tab no longer holds the cross-process file lock — the
+        // new host does. Without this, the displaced tab's ws-close handler
+        // would release the lock (because _lockHeld stays true) even though
+        // the new host still has connected clients → cross-process twin.
+        oldCs._lockHeld = false
+        const banner = {
+          type: 'system',
+          subtype: 'info',
+          text: `会话已迁移到「${tabLabel || '新 tab'}」，本 tab 转为只读模式`,
+          _readonly: true,
+          _displacedTo: { projectId, tabId, tabLabel: tabLabel || '' },
+        }
+        const bannerMsg = JSON.stringify({ type: 'claude-event', event: banner })
+        for (const client of oldCs.clients) {
+          if (client.readyState === 1) try { client.send(bannerMsg) } catch {}
+        }
+        console.log(`[claude:ownership] ${existing}: displaced by ${sessionKey} for session ${sid}`)
+      }
+      claudeSessionOwners.set(sid, sessionKey)
+    } else if (!existing) {
+      claudeSessionOwners.set(sid, sessionKey)
+    }
+    // If existing === sessionKey, this cs is already the owner — no-op.
+  }
+
+  // Release ownership of cs.claudeSessionId when the last client disconnects.
+  // If this cs was the host, promote a displaced tab back to host so the
+  // session is never left without an active consumer.
+  function releaseClaudeSessionOwnership(cs, sessionKey) {
+    const sid = cs.claudeSessionId
+    if (!sid) return
+    const owner = claudeSessionOwners.get(sid)
+    if (owner !== sessionKey) return // not the owner (was displaced or unowned)
+    claudeSessionOwners.delete(sid)
+    // Promote a displaced tab back to host (most recently displaced wins).
+    for (const [otherKey, otherCs] of claudeSessions) {
+      if (otherKey !== sessionKey && otherCs.claudeSessionId === sid && otherCs.readOnly && otherCs._displacedBy) {
+        otherCs.readOnly = false
+        otherCs._displacedBy = null
+        otherCs._justPromoted = true
+        claudeSessionOwners.set(sid, otherKey)
+        // Re-acquire the cross-process file lock for the promoted tab. The
+        // outgoing host's ws-close handler just released it (above), so the
+        // lock file is free. Without this the promoted tab would keep a stale
+        // _lockHeld=true pointing at a deleted lock file, allowing another
+        // nanocode server to silently grab the lock → cross-process twin.
+        otherCs._lockHeld = false
+        const result = acquireSessionLock(otherCs.claudeSessionId, { pid: process.pid, port }, home)
+        if (result.acquired) {
+          otherCs._lockHeld = true
+        } else {
+          // Lost the lock to another live process — stay read-only.
+          otherCs.readOnly = true
+          otherCs.lockHolder = result.holder
+          otherCs._justPromoted = false
+        }
+        const promoteEvent = { type: 'system', subtype: 'info', text: '会话已恢复为可编辑模式', _readonly: false }
+        const promoteMsg = JSON.stringify({ type: 'claude-event', event: promoteEvent })
+        for (const client of otherCs.clients) {
+          if (client.readyState === 1) try { client.send(promoteMsg) } catch {}
+        }
+        console.log(`[claude:ownership] ${otherKey}: promoted back to host for session ${sid}`)
+        break
+      }
+    }
+  }
+
   function setClaudeSessionId(projectId, tabId, claudeSessionId, { resetTurnCount = false } = {}) {
-    const cs = claudeSessions.get(sessionKeyFor(projectId, tabId))
+    const sessionKey = sessionKeyFor(projectId, tabId)
+    const cs = claudeSessions.get(sessionKey)
     if (!cs) return
+    // Release ownership of the old sessionId before switching.
+    if (cs.claudeSessionId && cs.claudeSessionId !== claudeSessionId) {
+      releaseClaudeSessionOwnership(cs, sessionKey)
+    }
     cs.claudeSessionId = claudeSessionId
     if (resetTurnCount) cs.turnCount = 0
     if (resetTurnCount) cs._replayUserTextCounts = new Map()
+    // Claim ownership of the new sessionId (may displace another tab).
+    claimClaudeSessionOwnership(cs, sessionKey, projectId, tabId, cs.tabLabel || '')
   }
 
   // team-failover opt-in toggle for a live session (secretary sessions). Applies
@@ -1080,6 +1184,12 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
       replaySeeds.delete(sessionKey)
       claudeSessions.set(sessionKey, cs)
+      // ── In-process ownership claim (cross-project twin guard) ────────────
+      // For a NEW cs, claim ownership of its claudeSessionId. If another tab
+      // in this process already owns this session (cross-project resume), the
+      // old host is demoted to read-only and this cs takes over. This runs
+      // BEFORE the file lock below so the in-process owner is authoritative.
+      claimClaudeSessionOwnership(cs, sessionKey, projectId, tabId, tab?.label || '')
     }
 
     // ── Session singleton lock ──────────────────────────────────────────────
@@ -1125,15 +1235,28 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       try { ws.send(JSON.stringify({ type: 'busy-state', busy: !!cs.busy })) } catch {}
     }
 
-    // Read-only banner: if another server owns this session, tell the client.
+    // Read-only banner: if another server or tab owns this session, tell the
+    // client. Two cases: cross-process (lockHolder port) and in-process
+    // displacement (_displacedBy — another tab in this process took ownership).
     if (cs.readOnly && ws.readyState === 1) {
-      const holderPort = cs.lockHolder?.port
-      const bannerEvent = {
-        type: 'system',
-        subtype: 'info',
-        text: `会话由 :${holderPort} 托管（只读模式）`,
-        _readonly: true,
-        _lockHolderPort: holderPort,
+      let bannerEvent
+      if (cs._displacedBy) {
+        bannerEvent = {
+          type: 'system',
+          subtype: 'info',
+          text: `会话已迁移到「${cs._displacedBy.tabLabel || '新 tab'}」，本 tab 转为只读模式`,
+          _readonly: true,
+          _displacedTo: cs._displacedBy,
+        }
+      } else {
+        const holderPort = cs.lockHolder?.port
+        bannerEvent = {
+          type: 'system',
+          subtype: 'info',
+          text: `会话由 :${holderPort} 托管（只读模式）`,
+          _readonly: true,
+          _lockHolderPort: holderPort,
+        }
       }
       try { ws.send(JSON.stringify({ type: 'claude-event', event: bannerEvent })) } catch {}
     }
@@ -1318,6 +1441,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       if (cs.clients.size === 0 && cs._lockHeld) {
         releaseSessionLock(cs.claudeSessionId, { pid: process.pid, port }, home)
         cs._lockHeld = false
+      }
+      // Release in-process ownership when the last client disconnects, so a
+      // displaced tab can promote back to host on its next attach. Without
+      // this, a host tab that is closed would leave the session permanently
+      // ownerless and the displaced tab stuck in read-only forever.
+      if (cs.clients.size === 0) {
+        releaseClaudeSessionOwnership(cs, sessionKey)
       }
     })
   }
@@ -1837,12 +1967,14 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
     }
     claudeSessions.clear()
+    claudeSessionOwners.clear()
   }
 
   return {
     setAllowTeamFailover,
     switchTeam,
     claudeSessions,
+    claudeSessionOwners,
     codexSessions,
     handleInterrupt,
     handleReset,
