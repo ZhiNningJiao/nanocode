@@ -2477,6 +2477,25 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   opacity: 0.85;
 }
 
+/* Per-tab model override badge (root fix for cross-tab /model sync). */
+.tab-chip-model {
+  display: inline-flex;
+  align-items: center;
+  max-width: 110px;
+  padding: 1px 5px;
+  margin-left: 4px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .tab-chip-add {
   display: inline-flex;
   align-items: center;

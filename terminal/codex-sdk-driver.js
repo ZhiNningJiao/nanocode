@@ -110,7 +110,11 @@ export function createCodexSdkDriver({
     cs.currentProc = null
     cs.turnCount = (cs.turnCount || 0) + 1
 
-    const codexModel = store.getSetting('codex_model') || ''
+    // Per-tab model override (root fix for cross-tab /model sync + codex /model
+    // never reaching the SDK): cs.codexModelOverride is populated from the tab's
+    // modelOverride at attach; the frontend /model picker writes the tab (not the
+    // global codex_model setting) so sibling codex tabs keep their own model.
+    const codexModel = cs.codexModelOverride || store.getSetting('codex_model') || ''
     const codexEffort = store.getSetting('codex_effort') || ''
     const sandboxMode = store.getSetting('codex_sandbox_mode') || 'danger-full-access'
     const pathOverride = store.getSetting('codex_path_override') || ''

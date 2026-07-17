@@ -460,6 +460,49 @@ export function createTerminalRoutes(store, opts = {}) {
   })
 
   /**
+   * PATCH /api/projects/:id/tabs/:tabId/model
+   * Set the per-tab model (and optionally effort) override. Root fix for the
+   * cross-tab /model sync bug: the choice is persisted on the TAB (modelOverride
+   * / effortOverride) — not the global claude_model/codex_model setting — so
+   * sibling tabs keep their own model. Drivers read tab override || global.
+   * Body: { modelOverride?: string, effortOverride?: string }
+   * ('' or null clears the override → the tab follows the global default.)
+   */
+  router.patch('/api/projects/:id/tabs/:tabId/model', (req, res) => {
+    const project = store.getProject(req.params.id)
+    if (!project) return res.status(404).json({ error: 'project not found' })
+    const tab = store.getTab ? store.getTab(req.params.id, req.params.tabId) : null
+    if (!tab) return res.status(404).json({ error: 'tab not found' })
+    if (tab.type !== 'claude' && tab.type !== 'codex') {
+      return res.status(400).json({ error: 'model override only supported on claude/codex tabs' })
+    }
+    const body = req.body || {}
+    const patch = {}
+    if (Object.prototype.hasOwnProperty.call(body, 'modelOverride')) {
+      const m = typeof body.modelOverride === 'string' ? body.modelOverride.trim() : ''
+      patch.modelOverride = m || null
+    }
+    // effortOverride only applies to claude (codex effort is a separate setting);
+    // accepted on any tab but only read by claude drivers.
+    if (Object.prototype.hasOwnProperty.call(body, 'effortOverride')) {
+      const e = typeof body.effortOverride === 'string' ? body.effortOverride.trim() : ''
+      patch.effortOverride = e || null
+    }
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({ error: 'modelOverride or effortOverride required' })
+    }
+    const updated = store.updateTabMetadata
+      ? store.updateTabMetadata(req.params.id, req.params.tabId, patch)
+      : null
+    if (!updated) return res.status(404).json({ error: 'update failed' })
+    if (sessionController.setTabModelOverride) {
+      sessionController.setTabModelOverride(req.params.id, req.params.tabId, patch)
+    }
+    broadcastTabs(req.params.id)
+    res.json(updated)
+  })
+
+  /**
    * PATCH /api/projects/:id/tabs/:tabId/switch-team
    * Manually move the current conversation to another team NOW (copy transcript
    * + switch CLAUDE_CONFIG_DIR + upgrade model to the target team's default).
