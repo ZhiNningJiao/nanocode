@@ -3308,14 +3308,44 @@ body.workspace-active .back-to-menu { display: inline-flex; }
 /* Show touch toolbar on any touch/coarse-pointer device (tablets, landscape phones) */
 @media (pointer: coarse) {
   .touch-toolbar { display: flex; }
-  /* 需求16: on touch devices there is no hover, so the favorite star must be
-     always visible (not opacity:0) for it to be discoverable as the
-     favorite/unfavorite entry. Favorite chips are already opacity:1. */
-   .tab-chip:not(.is-favorite) .tab-chip-fav { opacity: 0.7; }
-   .tab-chip-fav { width: 32px; height: 32px; font-size: 15px; }
-  /* 需求16增补: on any touch device the "+" new-tab button meets the touch
-     band so it stays tappable alongside many tabs, regardless of width. */
-  .tab-chip-add { min-width: 40px; min-height: 40px; font-size: 18px; }
+  /* 需求16打回第2轮 #5: on touch devices grow the strip + chip to the 44px
+     touch band so the 44px star/close/+ fit cleanly (mirrors the ≤480 block). */
+  .terminal-tab-strip { min-height: 44px; padding: 6px var(--s-2); }
+  .tab-chip { min-height: 34px; }
+  /* 需求16打回第2轮 #6: on touch devices there is no hover, so the favorite
+     star must be ALWAYS visible (not opacity:0-hover-gated) or it can't be
+     tapped on a phone. Favorite chips are opacity:1 already; non-favorites
+     are bumped to opacity:1 too (was 0.7) so the ☆ is clearly visible on
+     every tab, and the active tab's star is fully opaque for emphasis. */
+   .tab-chip:not(.is-favorite) .tab-chip-fav { opacity: 1; }
+   .tab-chip.active .tab-chip-fav { opacity: 1; }
+  /* 需求16打回第2轮 #5: ≥44px touch band for the star on coarse-pointer
+     devices (was 32px — a tablet >480px didn't meet the band). Visual glyph
+     stays 13px; only the box grows to the touch band. */
+   .tab-chip-fav { width: 44px; height: 44px; font-size: 15px; }
+  /* 需求16增补: on any touch device the "+" new-tab button meets the ≥44px
+     touch band (was 40px) so it stays tappable alongside many tabs. */
+  .tab-chip-add { min-width: 44px; min-height: 44px; font-size: 18px; }
+}
+
+/* 需求16打回第2轮 #5: ≥44px effective hit area for the close × on coarse-
+   pointer OR ≤480px viewports. The close × is only visible on the ACTIVE tab
+   (base rule: opacity:0 on non-active), so the ≥44px band is applied to the
+   active tab's close box — an in-flow 44px² box (the 14px glyph stays centred,
+   so the visual icon stays small while the clickable box meets the touch band).
+   In-flow (not a ::before extender) so it can't overlap/bleed into the adjacent
+   star button or the next chip and intercept their taps; the active chip grows
+   ~28px which is not "巨大". Non-active tabs keep the 16px invisible close (no
+   44px invisible zone that could catch accidental taps). (pointer:coarse) covers
+   touch phones/tablets; (max-width:480px) covers narrow fine-pointer windows
+   (e.g. Playwright's 390px default, which is not coarse) so the band holds at
+   every ≤480px width. */
+@media (pointer: coarse), (max-width: 480px) {
+  .tab-chip.active .tab-chip-close {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-sm);
+  }
 }
 .touch-btn {
   height: 28px;
@@ -4511,6 +4541,12 @@ body.workspace-active .landing-overlay { display: none; }
     min-height: 44px;
     font-size: 20px;
   }
+
+  /* 需求16打回第2轮 #5: the close × ≥44px hit area on the active tab is
+     provided by the shared `@media (pointer:coarse),(max-width:480px)` block
+     above (an in-flow 44px² box on the active tab keeps the × glyph 14px
+     without bloating every chip). No extra rule needed here — that block
+     covers this ≤480px window too. */
 
   /* Memory viewer: stack file list over content, ≥44px touch targets */
   .mem-body { flex-direction: column; }
