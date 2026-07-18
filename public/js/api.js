@@ -54,6 +54,13 @@ export function createTab(projectId, opts = {}) {
   // 需求8: persona id chosen in the new-session picker → forwarded to the
   // server, stored on the tab, re-injected each turn via --append-system-prompt.
   if (opts.persona) body.persona = opts.persona
+  // 需求16: create a tab already favorited + with its model / block renderMode
+  // locked (used by the favorites flow). All optional.
+  if (opts.favorite === true) body.favorite = true
+  if (typeof opts.favoriteOrder === 'number') body.favoriteOrder = opts.favoriteOrder
+  if (opts.renderMode) body.renderMode = opts.renderMode
+  if (opts.modelOverride) body.modelOverride = opts.modelOverride
+  if (opts.effortOverride) body.effortOverride = opts.effortOverride
   return request(`/projects/${projectId}/tabs`, {
     method: 'POST',
     body: JSON.stringify(body),
@@ -68,6 +75,15 @@ export function patchTab(projectId, tabId, label) {
   return request(`/projects/${projectId}/tabs/${tabId}`, {
     method: 'PATCH',
     body: JSON.stringify({ label }),
+  })
+}
+
+// 需求16: toggle a tab's session-group favorite flag (pin to top of the tab
+// strip on resume/reopen). The server (re)assigns favoriteOrder when pinning.
+export function setTabFavorite(projectId, tabId, favorite) {
+  return request(`/projects/${projectId}/tabs/${tabId}/favorite`, {
+    method: 'PATCH',
+    body: JSON.stringify({ favorite: !!favorite }),
   })
 }
 

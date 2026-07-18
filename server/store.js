@@ -172,6 +172,26 @@ export function createStore(filePath = ':memory:') {
         tab.persona = opts.persona.trim()
       }
     }
+    // 需求16: session-group favorites. A favorite tab carries its own model
+    // (modelOverride/effortOverride — the per-tab lock root, reused verbatim
+    // from req13's tab-model-override) and its own display mode (renderMode =
+    // 'block' | 'terminal', falling back to the global per-type setting when
+    // absent). favorite/favoriteOrder persist so the resume strip re-pins the
+    // starred tabs to the top on reopen. All four are optional + absent = off,
+    // so legacy tabs (no favorite fields) stay exactly as they were.
+    if (opts.favorite === true) tab.favorite = true
+    if (typeof opts.favoriteOrder === 'number' && Number.isFinite(opts.favoriteOrder)) {
+      tab.favoriteOrder = opts.favoriteOrder
+    }
+    if (typeof opts.renderMode === 'string' && ['block', 'terminal'].includes(opts.renderMode)) {
+      tab.renderMode = opts.renderMode
+    }
+    if (typeof opts.modelOverride === 'string' && opts.modelOverride.trim()) {
+      tab.modelOverride = opts.modelOverride.trim()
+    }
+    if (typeof opts.effortOverride === 'string' && opts.effortOverride.trim()) {
+      tab.effortOverride = opts.effortOverride.trim()
+    }
     existing.push(tab)
     save()
     return { ...tab }
@@ -212,7 +232,7 @@ export function createStore(filePath = ':memory:') {
     if (!data.tabs[projectId]) return null
     const tab = data.tabs[projectId].find((t) => t.id === tabId)
     if (!tab) return null
-    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona', 'opencodeSessionId', 'allowTeamFailover', 'modelOverride', 'effortOverride']
+    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona', 'opencodeSessionId', 'allowTeamFailover', 'modelOverride', 'effortOverride', 'favorite', 'favoriteOrder', 'renderMode']
     let changed = false
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
@@ -265,6 +285,71 @@ export function createStore(filePath = ':memory:') {
     createProject(name, cwd)
   }
 
+  // 需求16: seed the master's resident secretary tabs + life assistant into
+  // the HOME project (cwd === homeCwd, i.e. os.homedir()) as favorites. This is
+  // a one-time, idempotent reconcile — gated by the `secretary_favorites_seeded_v1`
+  // settings flag (same one-time-seed pattern as `remote_machines_seeded_v1`).
+  //
+  // Reconcile-by-label: if a tab with the same {label,type} already exists (the
+  // master already created 秘书T1 / 生活小助手 on 9475), it is NOT duplicated —
+  // we only set favorite=true + favoriteOrder and, when ABSENT, the model +
+  // block renderMode. Existing modelOverride / persona / renderMode choices
+  // are never overwritten. Tabs that don't exist are created with the full
+  // config. Running this on a fresh 9476 (home project = just bash) creates
+  // all four; running it later on 9475 (master restarts themselves) marks the
+  // existing secretaries as favorites and creates the missing ones — no dups.
+  //
+  // The four favorites are NOT given any persona (需求16: no 人设 prompt on
+  // these sessions; the life assistant is explicitly a plain session).
+  function seedSecretaryFavorites(homeCwd) {
+    if (getSetting('secretary_favorites_seeded_v1')) return false
+    const project = data.projects.find((p) => p.cwd === homeCwd)
+    if (!project) return false // home project not registered yet — retry next startup
+    const pid = project.id
+    if (!data.tabs[pid]) data.tabs[pid] = []
+    const tabs = data.tabs[pid]
+    const specs = [
+      { label: '秘书T1', type: 'claude', modelOverride: 'claude-fable-5', order: 0 },
+      { label: '秘书T2', type: 'claude', modelOverride: 'claude-fable-5', order: 1 },
+      { label: 'Codex秘书', type: 'codex', modelOverride: 'gpt-5.6', order: 2 },
+      { label: '生活小助手', type: 'claude', modelOverride: 'claude-sonnet-4-6', order: 3 },
+    ]
+    let changed = false
+    for (const spec of specs) {
+      const existing = tabs.find((t) => (t.type || 'bash') === spec.type && t.label === spec.label)
+      if (existing) {
+        // Reconcile: pin as favorite + lock model/block only where absent.
+        if (!existing.favorite) { existing.favorite = true; changed = true }
+        if (typeof existing.favoriteOrder !== 'number') { existing.favoriteOrder = spec.order; changed = true }
+        if (!existing.modelOverride) { existing.modelOverride = spec.modelOverride; changed = true }
+        if (!existing.renderMode) { existing.renderMode = 'block'; changed = true }
+        continue
+      }
+      // Create the favorite tab in-place with the full config.
+      const tab = {
+        id: randomUUID().slice(0, 8),
+        label: spec.label,
+        type: spec.type,
+        createdAt: Date.now(),
+        favorite: true,
+        favoriteOrder: spec.order,
+        renderMode: 'block',
+        modelOverride: spec.modelOverride,
+      }
+      if (spec.type === 'claude') {
+        tab.claudeSessionId = randomUUID()
+        tab.claudeSessionStarted = false
+      } else if (spec.type === 'codex') {
+        tab.codexThreadId = null
+      }
+      tabs.push(tab)
+      changed = true
+    }
+    setSetting('secretary_favorites_seeded_v1', '1')
+    if (changed) save()
+    return changed
+  }
+
   // Shutdown hooks: modules that hold live resources (e.g. the claude session
   // controller's in-process SDK streaming sessions → child-process handles)
   // register a teardown here. close() runs them so the process can exit. This
@@ -288,7 +373,7 @@ export function createStore(filePath = ':memory:') {
   return {
     getSetting, setSetting, getAllSettings,
     createProject, getProject, listProjects, removeProject,
-    migrateProjectsJson, ensureStarterProject,
+    migrateProjectsJson, ensureStarterProject, seedSecretaryFavorites,
     listTabs, createTab, removeTab, renameTab, hasTab, getTab, updateTabMetadata,
     registerCloseHook,
     close,
