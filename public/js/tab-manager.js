@@ -61,6 +61,18 @@ export class TabManager {
     this.onActiveChange = opts.onActiveChange || (() => {})
     this.onStatusChange = opts.onStatusChange || (() => {})
 
+    // 需求16增补: horizontal scroll region. Tabs (chips + divider) live inside
+    // this wrapper; the "+" new-tab button stays a sibling of it under
+    // stripEl so it is always visible and never scrolls away. The wrapper is
+    // created in index.html, but we create one defensively if missing.
+    this.scrollEl = this.stripEl.querySelector('.terminal-tab-scroll')
+    if (!this.scrollEl) {
+      this.scrollEl = document.createElement('div')
+      this.scrollEl.className = 'terminal-tab-scroll'
+      this.stripEl.appendChild(this.scrollEl)
+    }
+    this._initStripScrolling()
+
     // Carousel track — all pane DOM lives here side-by-side. The
     // track's translateX selects which pane is visible, and the CSS
     // transition is the slide animation. Created once per TabManager;
@@ -575,8 +587,103 @@ export class TabManager {
     input.select()
   }
 
+  // 需求16增补: wire horizontal scrolling for the tab strip.
+  //   - Desktop: mouse wheel (vertical wheel → horizontal scroll) and
+  //     click-drag to scroll, like a trackpad. Drag suppresses the
+  //     following click so switching tabs still works.
+  //   - Mobile: native touch scrolling (overflow-x:auto + touch-action:pan-x
+  //     in CSS) handles swipes; no JS needed.
+  _initStripScrolling() {
+    const el = this.scrollEl
+
+    // Wheel: translate vertical wheel deltas into horizontal scroll so a
+    // mouse wheel over the strip scrolls it sideways (the strip only has
+    // overflow-x, so a pure vertical wheel would otherwise do nothing).
+    el.addEventListener('wheel', (e) => {
+      // Only hijack when there is horizontal room to scroll and the user
+      // isn't modifier-scrolling (Ctrl+wheel zoom etc.).
+      if (e.ctrlKey || e.metaKey || e.shiftKey) return
+      const canX = el.scrollWidth > el.clientWidth + 1
+      if (!canX) return
+      const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+      if (delta === 0) return
+      const atStart = el.scrollLeft <= 0 && delta < 0
+      const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 && delta > 0
+      // Don't preventDefault at the scroll extremes so the page can still
+      // scroll vertically when the strip has no more room.
+      if (atStart || atEnd) return
+      e.preventDefault()
+      el.scrollLeft += delta
+    }, { passive: false })
+
+    // Drag-to-scroll (mouse only; touch is handled natively).
+    let drag = null
+    const DRAG_THRESHOLD = 5
+    el.addEventListener('mousedown', (ev) => {
+      if (ev.button !== 0) return
+      drag = { x: ev.clientX, left: el.scrollLeft, moved: false }
+      // Don't preventDefault here so clicks still work for tiny movements.
+    })
+    window.addEventListener('mousemove', (ev) => {
+      if (!drag) return
+      const dx = ev.clientX - drag.x
+      if (!drag.moved && Math.abs(dx) > DRAG_THRESHOLD) {
+        drag.moved = true
+        el.classList.add('is-dragging')
+      }
+      if (drag.moved) {
+        ev.preventDefault()
+        el.scrollLeft = drag.left - dx
+      }
+    })
+    const endDrag = () => {
+      if (!drag) return
+      const wasDrag = drag.moved
+      el.classList.remove('is-dragging')
+      drag = null
+      if (!wasDrag) return
+      // Suppress the next click the browser fires after a drag so a swipe
+      // doesn't also switch tabs. Put the one-shot capture on window (not el)
+      // so it catches the click even if the mouse released outside the strip.
+      const cap = (ce) => {
+        ce.stopPropagation()
+        ce.preventDefault()
+        window.removeEventListener('click', cap, true)
+      }
+      window.addEventListener('click', cap, true)
+    }
+    window.addEventListener('mouseup', endDrag)
+    window.addEventListener('blur', endDrag)
+  }
+
+  // 需求16增补: scroll the active tab chip into view (horizontal nearest) so
+  // activating/switching a tab that's off-screen brings it into the viewport.
+  // Uses getBoundingClientRect (visual positions) rather than offsetLeft, so
+  // the math is correct regardless of which ancestor is the offsetParent.
+  _scrollActiveIntoView() {
+    if (!this.activeId) return
+    const chip = this.scrollEl.querySelector('.tab-chip.active')
+    if (!chip) return
+    const el = this.scrollEl
+    const chipRect = chip.getBoundingClientRect()
+    const elRect = el.getBoundingClientRect()
+    const PAD = 4
+    if (chipRect.right > elRect.right) {
+      // Chip overflows the right edge — scroll right to bring it into view.
+      el.scrollLeft += chipRect.right - elRect.right + PAD
+    } else if (chipRect.left < elRect.left) {
+      // Chip overflows the left edge — scroll left to bring it into view.
+      el.scrollLeft -= elRect.left - chipRect.left + PAD
+    }
+  }
+
   _renderStrip() {
-    this.stripEl.innerHTML = ''
+    // 需求16增补: tabs live in the scroll wrapper; the "+" button is a sibling
+    // under stripEl so it never scrolls away. Don't wipe stripEl (that would
+    // destroy the scroll wrapper) — clear the wrapper + the old "+" button.
+    this.scrollEl.innerHTML = ''
+    const oldAdd = this.stripEl.querySelector('.tab-chip-add')
+    if (oldAdd) oldAdd.remove()
     // 需求16: this.tabs is already favorite-first (see _applyServerTabs sort),
     // so rendering in array order pins favorites to the front of the strip.
     // Insert a thin divider between the favorite group and the rest so the
@@ -588,7 +695,7 @@ export class TabManager {
         const div = document.createElement('span')
         div.className = 'tab-strip-divider'
         div.setAttribute('aria-hidden', 'true')
-        this.stripEl.appendChild(div)
+        this.scrollEl.appendChild(div)
       }
       rendered++
       const btn = document.createElement('button')
@@ -667,7 +774,7 @@ export class TabManager {
       btn.appendChild(close)
 
       btn.addEventListener('click', () => this.setActive(tab.id))
-      this.stripEl.appendChild(btn)
+      this.scrollEl.appendChild(btn)
     }
 
     const addBtn = document.createElement('button')
@@ -679,7 +786,12 @@ export class TabManager {
       e.stopPropagation()
       this._showNewTabMenu(addBtn)
     })
+    // Sibling of the scroll wrapper so it stays pinned at the right edge and
+    // is always visible/clickable at every viewport width.
     this.stripEl.appendChild(addBtn)
+
+    // Bring the active chip into view after the strip is (re)built.
+    this._scrollActiveIntoView()
   }
 
   _showNewTabMenu(anchor) {

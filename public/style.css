@@ -2384,10 +2384,29 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+/* 需求16增补: scrollable region that holds the tab chips + divider. The "+"
+   new-tab button is a sibling of this element under .terminal-tab-strip, so
+   it never scrolls away. overflow-x:auto gives native touch scrolling on
+   mobile; touch-action:pan-x lets vertical gestures fall through to the page.
+   flex:1 + min-width:0 lets it shrink so the "+" button always has room. */
+.terminal-tab-scroll {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
 }
-.terminal-tab-strip::-webkit-scrollbar { display: none; }
+.terminal-tab-scroll::-webkit-scrollbar { display: none; }
+.terminal-tab-scroll.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
 
 .tab-chip {
   display: inline-flex;
@@ -3292,8 +3311,11 @@ body.workspace-active .back-to-menu { display: inline-flex; }
   /* 需求16: on touch devices there is no hover, so the favorite star must be
      always visible (not opacity:0) for it to be discoverable as the
      favorite/unfavorite entry. Favorite chips are already opacity:1. */
-  .tab-chip:not(.is-favorite) .tab-chip-fav { opacity: 0.7; }
-  .tab-chip-fav { width: 32px; height: 32px; font-size: 15px; }
+   .tab-chip:not(.is-favorite) .tab-chip-fav { opacity: 0.7; }
+   .tab-chip-fav { width: 32px; height: 32px; font-size: 15px; }
+  /* 需求16增补: on any touch device the "+" new-tab button meets the touch
+     band so it stays tappable alongside many tabs, regardless of width. */
+  .tab-chip-add { min-width: 40px; min-height: 40px; font-size: 18px; }
 }
 .touch-btn {
   height: 28px;
@@ -4480,6 +4502,15 @@ body.workspace-active .landing-overlay { display: none; }
   }
   .tab-chip:not(.is-favorite) .tab-chip-fav { opacity: 1; }
   .tab-strip-divider { height: 24px; }
+
+  /* 需求16增补: the "+" new-tab button is a sibling of the scroll region so it
+     is always visible; on touch screens it also meets the ≥44px touch band
+     so it stays reliably tappable at 390×844 even with many tabs. */
+  .tab-chip-add {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 20px;
+  }
 
   /* Memory viewer: stack file list over content, ≥44px touch targets */
   .mem-body { flex-direction: column; }
