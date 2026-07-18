@@ -385,7 +385,19 @@ export function createTerminalRoutes(store, opts = {}) {
     // stored — resolvePersonaPrompt would no-op anyway, but we keep the tab clean.
     const _personaRaw = typeof req.body?.persona === 'string' ? req.body.persona.trim() : ''
     const persona = _personaRaw && /^[A-Za-z0-9._-]+$/.test(_personaRaw) ? _personaRaw : undefined
-    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, claudeConfigDir, claudeSessionCwd, tmuxTarget, skipAutoResume, persona, opencodeSessionId })
+    // 需求16: session-group favorites — a tab can be created already favorited
+    // and with its model + block renderMode locked (used by the Playwright flow
+    // and by any external seeder). All optional; absent = legacy behaviour.
+    const favorite = req.body?.favorite === true ? true : undefined
+    const favoriteOrder = typeof req.body?.favoriteOrder === 'number' && Number.isFinite(req.body.favoriteOrder)
+      ? req.body.favoriteOrder : undefined
+    const renderMode = typeof req.body?.renderMode === 'string' && ['block', 'terminal'].includes(req.body.renderMode)
+      ? req.body.renderMode : undefined
+    const modelOverride = typeof req.body?.modelOverride === 'string' && req.body.modelOverride.trim()
+      ? req.body.modelOverride.trim() : undefined
+    const effortOverride = typeof req.body?.effortOverride === 'string' && req.body.effortOverride.trim()
+      ? req.body.effortOverride.trim() : undefined
+    const tab = store.createTab(req.params.id, { label, type, claudeSessionId, claudeConfigDir, claudeSessionCwd, tmuxTarget, skipAutoResume, persona, opencodeSessionId, favorite, favoriteOrder, renderMode, modelOverride, effortOverride })
     broadcastTabs(req.params.id)
     res.status(201).json(tab)
   })
@@ -498,6 +510,40 @@ export function createTerminalRoutes(store, opts = {}) {
     if (sessionController.setTabModelOverride) {
       sessionController.setTabModelOverride(req.params.id, req.params.tabId, patch)
     }
+    broadcastTabs(req.params.id)
+    res.json(updated)
+  })
+
+  /**
+   * PATCH /api/projects/:id/tabs/:tabId/favorite
+   * 需求16: toggle a tab's session-group favorite flag. Favorites are pinned
+   * to the top of the tab strip on resume/reopen and carry their own model +
+   * block renderMode. Body: { favorite: boolean }. favorite=false (or absent)
+   * clears the pin; the tab stays in the list, just no longer pinned. The
+   * favoriteOrder is (re)assigned when pinning so newly-favorited tabs land
+   * after the existing ones; clearing leaves the stale order in place (it is
+   * ignored once favorite is false).
+   */
+  router.patch('/api/projects/:id/tabs/:tabId/favorite', (req, res) => {
+    const project = store.getProject(req.params.id)
+    if (!project) return res.status(404).json({ error: 'project not found' })
+    const tab = store.getTab ? store.getTab(req.params.id, req.params.tabId) : null
+    if (!tab) return res.status(404).json({ error: 'tab not found' })
+    const want = req.body?.favorite === true
+    const patch = { favorite: want }
+    if (want && typeof tab.favoriteOrder !== 'number') {
+      // Assign an order past the last currently-pinned tab so the newly
+      // pinned one appends to the favorites section instead of jumping to top.
+      const tabs = store.listTabs(req.params.id)
+      const maxOrder = tabs.reduce((m, t) => {
+        return (t.favorite && typeof t.favoriteOrder === 'number' && t.favoriteOrder > m) ? t.favoriteOrder : m
+      }, -1)
+      patch.favoriteOrder = maxOrder + 1
+    }
+    const updated = store.updateTabMetadata
+      ? store.updateTabMetadata(req.params.id, req.params.tabId, patch)
+      : null
+    if (!updated) return res.status(404).json({ error: 'update failed' })
     broadcastTabs(req.params.id)
     res.json(updated)
   })

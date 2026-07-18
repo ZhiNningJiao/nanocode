@@ -137,6 +137,12 @@ for (const [route, dir] of Object.entries(vendorMap)) {
 const store = getStore()
 store.migrateProjectsJson(path.join(root, 'terminal', 'projects.json'))
 store.ensureStarterProject()
+// 需求16: seed the master's resident secretary favorites + life assistant
+// into the home project (cwd === os.homedir()). Idempotent one-time reconcile
+// gated by `secretary_favorites_seeded_v1` — see store.seedSecretaryFavorites.
+try { store.seedSecretaryFavorites(os.homedir()) } catch (err) {
+  console.warn('[store] seedSecretaryFavorites failed:', err?.message || err)
+}
 // MES-13781: seed the remote address book with an example SSH dev machine
 // (dev-212) so others can copy the shape. Idempotent via a settings flag.
 try { seedRemoteDefaults(store) } catch (err) { console.warn('[seedRemoteDefaults]', err?.message) }

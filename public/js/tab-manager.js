@@ -10,7 +10,7 @@
  */
 
 import { TerminalPane } from './terminal-pane.js'
-import { fetchTabs, createTab, deleteTab, patchTab } from './api.js'
+import { fetchTabs, createTab, deleteTab, patchTab, setTabFavorite } from './api.js'
 
 // Block renderers (claude-block-renderer.js ~100 KB, codex-block-renderer.js
 // ~59 KB raw — ~41 KB gz combined) are loaded LAZILY. Claude/codex tabs default
@@ -288,12 +288,28 @@ export class TabManager {
     for (const t of serverTabs) {
       const local = this.tabs.find((x) => x.id === t.id)
       if (!local) {
-        this._addTab(t.id, t.label, t.type || 'bash', { persona: t.persona || '' })
+        this._addTab(t.id, t.label, t.type || 'bash', {
+          persona: t.persona || '',
+          favorite: t.favorite === true,
+          favoriteOrder: typeof t.favoriteOrder === 'number' ? t.favoriteOrder : undefined,
+          renderMode: t.renderMode || '',
+          modelOverride: t.modelOverride || '',
+          effortOverride: t.effortOverride || '',
+        })
       } else {
         if (local.label !== t.label) local.label = t.label
         if (t.type && local.type !== t.type) local.type = t.type
         // 需求8: keep persona in sync so the 🐱 tab chip reflects server state.
         if ((local.persona || '') !== (t.persona || '')) local.persona = t.persona || ''
+        // 需求16: keep favorite / model / renderMode in sync so the star pin,
+        // the model badge, and the block/terminal renderer follow server state
+        // (the star toggle PATCH broadcasts a tabs:update that re-syncs here).
+        local.favorite = t.favorite === true
+        if (typeof t.favoriteOrder === 'number') local.favoriteOrder = t.favoriteOrder
+        else if (!local.favorite) local.favoriteOrder = undefined
+        local.modelOverride = t.modelOverride || ''
+        local.effortOverride = t.effortOverride || ''
+        local.renderMode = t.renderMode || ''
       }
     }
 
@@ -307,12 +323,21 @@ export class TabManager {
       }
     }
 
-    // Reorder to match server order
-    this.tabs.sort(
-      (a, b) =>
-        serverTabs.findIndex((t) => t.id === a.id) -
-        serverTabs.findIndex((t) => t.id === b.id)
-    )
+    // Reorder: favorites pinned to the front (需求16), then the rest in
+    // server order. This.array order drives BOTH the strip (render order) and
+    // the carousel track (translateX index), so they stay consistent. Server
+    // order (creation order) is the tiebreaker within each group so existing
+    // tabs don't jump around when one is starred.
+    const serverIdx = (id) => serverTabs.findIndex((t) => t.id === id)
+    this.tabs.sort((a, b) => {
+      const af = a.favorite ? 1 : 0
+      const bf = b.favorite ? 1 : 0
+      if (af !== bf) return bf - af
+      const ao = typeof a.favoriteOrder === 'number' ? a.favoriteOrder : 0
+      const bo = typeof b.favoriteOrder === 'number' ? b.favoriteOrder : 0
+      if (af && bf && ao !== bo) return ao - bo
+      return serverIdx(a.id) - serverIdx(b.id)
+    })
     // Mirror that order into the carousel track so the translateX math
     // stays in sync with the array. appendChild on an existing child is
     // a move, so iterating in tab-order pushes each pane to its new
@@ -421,11 +446,16 @@ export class TabManager {
     const codexRenderMode = (() => { try { return window.__nanocodeState?.codexRenderMode || 'terminal' } catch { return 'terminal' } })()
     const fable5RenderMode = (() => { try { return window.__nanocodeState?.fable5RenderMode || 'block' } catch { return 'block' } })()
     const opencodeRenderMode = (() => { try { return window.__nanocodeState?.opencodeRenderMode || 'block' } catch { return 'block' } })()
+    // 需求16: a favorite (or any tab) may carry its own renderMode override so
+    // its display mode is locked regardless of the global per-type setting —
+    // the three secretary favorites + life assistant must be block. '' / absent
+    // → fall back to the global setting (unchanged behaviour for legacy tabs).
+    const tabRender = opts.renderMode === 'block' || opts.renderMode === 'terminal' ? opts.renderMode : null
     const useClaudeRenderer =
-      (type === 'claude' && renderMode !== 'terminal') ||
-      (type === 'fable5' && fable5RenderMode !== 'terminal') ||
-      (type === 'opencode' && opencodeRenderMode !== 'terminal')
-    const useCodexRenderer = type === 'codex' && codexRenderMode === 'block'
+      (type === 'claude' && (tabRender ? tabRender !== 'terminal' : renderMode !== 'terminal')) ||
+      (type === 'fable5' && (tabRender ? tabRender !== 'terminal' : fable5RenderMode !== 'terminal')) ||
+      (type === 'opencode' && (tabRender ? tabRender !== 'terminal' : opencodeRenderMode !== 'terminal'))
+    const useCodexRenderer = type === 'codex' && (tabRender ? tabRender === 'block' : codexRenderMode === 'block')
     // Synchronous default: PTY renderer. Block renderers (~100 KB + ~59 KB
     // raw, ~41 KB gz combined) load lazily via dynamic import() and swap in
     // once the module arrives. While the JS streams in, the placeholder
@@ -445,7 +475,15 @@ export class TabManager {
     // real-device root-cause fix.
     const willSwapToBlock = useClaudeRenderer || useCodexRenderer
     let pane = new TerminalPane(paneEl, { ...paneOpts, skipTouchScroll: willSwapToBlock })
-    this.tabs.push({ id, label, type, pane, paneEl, persona: opts.persona || '' })
+    this.tabs.push({
+      id, label, type, pane, paneEl,
+      persona: opts.persona || '',
+      favorite: opts.favorite === true,
+      favoriteOrder: typeof opts.favoriteOrder === 'number' ? opts.favoriteOrder : undefined,
+      renderMode: opts.renderMode || '',
+      modelOverride: opts.modelOverride || '',
+      effortOverride: opts.effortOverride || '',
+    })
 
     if (willSwapToBlock) {
       const loader = useClaudeRenderer ? loadClaudeBlock() : loadCodexBlock()
@@ -539,11 +577,25 @@ export class TabManager {
 
   _renderStrip() {
     this.stripEl.innerHTML = ''
+    // 需求16: this.tabs is already favorite-first (see _applyServerTabs sort),
+    // so rendering in array order pins favorites to the front of the strip.
+    // Insert a thin divider between the favorite group and the rest so the
+    // "置顶区" is visually distinct and "一眼看到" on reopen.
+    const favCount = this.tabs.filter((t) => t.favorite).length
+    let rendered = 0
     for (const tab of this.tabs) {
+      if (favCount > 0 && favCount < this.tabs.length && rendered === favCount) {
+        const div = document.createElement('span')
+        div.className = 'tab-strip-divider'
+        div.setAttribute('aria-hidden', 'true')
+        this.stripEl.appendChild(div)
+      }
+      rendered++
       const btn = document.createElement('button')
       btn.type = 'button'
       btn.className = 'tab-chip tab-chip-' + (tab.type || 'bash') +
-        (tab.id === this.activeId ? ' active' : '')
+        (tab.id === this.activeId ? ' active' : '') +
+        (tab.favorite ? ' is-favorite' : '')
       btn.dataset.tabId = tab.id
       btn.title = 'Double-click to rename'
 
@@ -578,6 +630,31 @@ export class TabManager {
         mChip.title = `model: ${tab.modelOverride} (this tab)`
         btn.appendChild(mChip)
       }
+
+      // 需求16: favorite star toggle — prominent entry on the tab list (per
+      // "收藏/取消收藏操作就在会话列表/tab 列表上，入口显眼"). ★ pinned, ☆ not.
+      // Stop-propagation so tapping the star doesn't also switch the tab.
+      const fav = document.createElement('span')
+      fav.className = 'tab-chip-fav' + (tab.favorite ? ' is-on' : '')
+      fav.textContent = tab.favorite ? '★' : '☆'
+      fav.title = tab.favorite ? 'Unfavorite (remove from pinned top)' : 'Favorite (pin to top on resume)'
+      fav.setAttribute('role', 'button')
+      fav.setAttribute('aria-label', tab.favorite ? 'Unfavorite tab' : 'Favorite tab')
+      fav.addEventListener('click', async (e) => {
+        e.stopPropagation()
+        // Optimistic flip so the star reacts instantly; the tabs:update
+        // broadcast confirms (or corrects) the server state.
+        tab.favorite = !tab.favorite
+        this._renderStrip()
+        try { await setTabFavorite(this.projectId, tab.id, tab.favorite) }
+        catch (err) {
+          // Revert on failure and re-render so the star reflects truth.
+          tab.favorite = !tab.favorite
+          this._renderStrip()
+          console.warn('[tab-manager] setTabFavorite failed:', err?.message || err)
+        }
+      })
+      btn.appendChild(fav)
 
       const close = document.createElement('span')
       close.className = 'tab-chip-close'
