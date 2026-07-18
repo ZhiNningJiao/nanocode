@@ -362,7 +362,12 @@
         <div class="terminal-layout">
           <div class="split-container" id="split-container">
             <div class="pane pane-left">
-              <div class="terminal-tab-strip" id="terminal-tab-strip"></div>
+              <div class="terminal-tab-strip" id="terminal-tab-strip">
+                <!-- 需求16增补: scrollable tab region. The "+" new-tab button is a
+                     sibling of this wrapper (appended by TabManager), so it stays
+                     pinned at the right edge and never scrolls out of view. -->
+                <div class="terminal-tab-scroll" id="terminal-tab-scroll"></div>
+              </div>
               <div class="terminal-stack" id="terminal-stack"></div>
             </div>
             <div class="split-divider" id="split-divider"></div>
