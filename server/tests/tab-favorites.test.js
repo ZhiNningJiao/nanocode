@@ -327,15 +327,24 @@ describe('seedSecretaryFavorites', () => {
 // Bug: seedSecretaryFavorites pre-assigned each seeded claude favorite tab a
 // phantom `claudeSessionId = randomUUID()` (with claudeSessionStarted=false).
 // That UUID had no jsonl behind it, so the first click fell into
-// resolveSessionJsonl's newest-jsonl fallback and resumed the ACTIVE 秘书T1
-// session (daf68aac), which then got persisted back onto the favorite tab →
-// two tabs owned one jsonl → fork. The idempotency flag lived in the same JSON
-// as the tabs but a store reset / multi-instance re-seed wiped it and re-ran
-// the seed, recreating the phantom ids.
+// resolveSessionJsonl's newest-jsonl fallback (CASE B) and resumed the ACTIVE
+// 秘书T1 session (daf68aac), which the controller then persisted back onto the
+// favorite tab → two tabs owned one jsonl → fork. A store reset / multi-instance
+// re-seed wiped the idempotency flag and re-ran the seed, recreating the phantoms.
 //
-// Fix: seeded claude favorite tabs are born SESSION-LESS (no claudeSessionId,
-// no claudeSessionStarted); reconcile never touches an existing tab's session;
-// the flag stays in the same persistence layer as the tabs.
+// Fix (two layers, both required):
+//  1. session-less — seeded claude favorites carry NO phantom claudeSessionId
+//     (no claudeSessionStarted). Reconcile NEVER touches an existing tab's
+//     session. The flag stays in the same persistence layer as the tabs.
+//  2. skipAutoResume=true — the ACTUAL fork guard. resolveSessionJsonl CASE B
+//     (claude-history.js line 667) skips the newest-jsonl fallback entirely when
+//     `tab.skipAutoResume` is set, so the tab starts a FRESH session instead of
+//     grabbing daf68aac. Being session-less ALONE does not stop the fork: a null
+//     claudeSessionId still hits CASE B and still falls back to daf68aac. Only
+//     skipAutoResume closes that path. For 秘书T1 (owns daf68aac, jsonl exists)
+//     CASE A applies and skipAutoResume is never consulted, so it still resumes
+//     its own session. See the resolveSessionJsonl skipAutoResume test in
+//     claude-session-resume.test.js for the mechanism-level proof.
 // ===========================================================================
 describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
   // The "active session at seed runtime" — mirrors process.env.CLAUDE_CODE_SESSION_ID
@@ -363,12 +372,21 @@ describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
         `seeded claude tab "${t.label}" must NOT carry claudeSessionStarted`)
       // Corollary: it is not bound to the active session either.
       assert.notEqual(t.claudeSessionId, ACTIVE_SESSION)
+      // The actual fork guard: skipAutoResume=true blocks resolveSessionJsonl
+      // CASE B from falling back to the newest jsonl (daf68aac). The OLD code
+      // never set this, so even a session-less tab would have forked on attach.
+      assert.equal(t.skipAutoResume, true,
+        `seeded claude tab "${t.label}" must carry skipAutoResume=true (the fork guard)`)
     }
     // The codex favorite keeps codexThreadId=null (not a phantom — null means
     // "no thread yet"; the codex driver assigns one on the first turn).
+    // skipAutoResume is claude-only (resolveSessionJsonl is never called for
+    // codex), so the codex favorite must NOT carry it.
     const codex = tabs.find((t) => t.type === 'codex')
     assert.equal(codex.codexThreadId, null)
     assert.equal(codex.claudeSessionId, undefined)
+    assert.equal(codex.skipAutoResume, undefined,
+      'codex favorite must NOT carry skipAutoResume (claude-only flag)')
   })
 
   it('no seeded favorite tab claudeSessionId equals the active session at seed runtime', () => {
@@ -438,6 +456,10 @@ describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
       'rebuilt 秘书T2 must be session-less (no phantom claudeSessionId)')
     assert.equal(rebuilt.claudeSessionStarted, undefined)
     assert.notEqual(rebuilt.claudeSessionId, ACTIVE_SESSION)
+    // And it carries the fork guard (skipAutoResume=true) so its first attach
+    // starts a fresh session instead of falling back to daf68aac.
+    assert.equal(rebuilt.skipAutoResume, true,
+      'rebuilt 秘书T2 must carry skipAutoResume=true (fork guard)')
 
     // No tab in the project is bound to the active session.
     for (const t of tabs) {
@@ -499,5 +521,57 @@ describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
     // No duplicate tabs created.
     assert.equal(tabs.filter((t) => t.label === '秘书T1' && t.type === 'claude').length, 1)
     assert.equal(tabs.filter((t) => t.label === '秘书T2' && t.type === 'claude').length, 1)
+  })
+
+  it('reconcile backfills skipAutoResume on existing claude favorites missing it', () => {
+    // Reproduces the CURRENT live 9476 state after the first (incomplete)
+    // seedfix: 秘书T1/秘书T2/生活小助手 were seeded by the OLD buggy seed (phantom
+    // UUIDs, no skipAutoResume) and later got their own session ids assigned
+    // (4c48e092 / 92df2f0e) but STILL lack skipAutoResume. On a re-seed (flag
+    // cleared), the reconcile branch must backfill skipAutoResume=true so the
+    // next attach does NOT fall back to daf68aac. Without this backfill the
+    // latent fork risk would survive the seedfix for all pre-existing tabs.
+    const store = createStore(':memory:')
+    const home = '/tmp/home-seedfix-skip-backfill'
+    const project = store.createProject('zhiningjiao', home)
+    // Three claude favorites created by the OLD seed: they have session ids +
+    // favorite/model/render but NO skipAutoResume (the legacy gap).
+    const t1 = store.createTab(project.id, {
+      type: 'claude', label: '秘书T1',
+      claudeSessionId: ACTIVE_SESSION, favorite: true, favoriteOrder: 0,
+      renderMode: 'block', modelOverride: 'claude-fable-5',
+    })
+    const t2 = store.createTab(project.id, {
+      type: 'claude', label: '秘书T2',
+      claudeSessionId: '4c48e092-9080-4a39-a15f-62fd3b7ee7a5', favorite: true, favoriteOrder: 1,
+      renderMode: 'block', modelOverride: 'claude-fable-5',
+    })
+    const life = store.createTab(project.id, {
+      type: 'claude', label: '生活小助手',
+      claudeSessionId: '92df2f0e-8017-47ff-8962-0fd09e7b92cc', favorite: true, favoriteOrder: 3,
+      renderMode: 'block', modelOverride: 'claude-sonnet-4-6',
+    })
+    for (const t of [t1, t2, life]) {
+      const tab = store.getTab(project.id, t.id)
+      assert.equal(tab.skipAutoResume, undefined,
+        `precondition: legacy tab "${tab.label}" has no skipAutoResume`)
+    }
+    // Re-seed (flag absent → seed runs → reconcile).
+    store.seedSecretaryFavorites(home)
+    const tabs = store.listTabs(project.id)
+    const after = (label) => tabs.find((t) => t.label === label && t.type === 'claude')
+    // The fork guard is now backfilled on all three claude favorites.
+    assert.equal(after('秘书T1').skipAutoResume, true, '秘书T1 backfilled with skipAutoResume')
+    assert.equal(after('秘书T2').skipAutoResume, true, '秘书T2 backfilled with skipAutoResume')
+    assert.equal(after('生活小助手').skipAutoResume, true, '生活小助手 backfilled with skipAutoResume')
+    // Sessions are preserved (reconcile never touches session fields).
+    assert.equal(after('秘书T1').claudeSessionId, ACTIVE_SESSION)
+    assert.equal(after('秘书T2').claudeSessionId, '4c48e092-9080-4a39-a15f-62fd3b7ee7a5')
+    assert.equal(after('生活小助手').claudeSessionId, '92df2f0e-8017-47ff-8962-0fd09e7b92cc')
+    // Codex favorite is created on this re-seed (it was missing) and must NOT
+    // carry skipAutoResume (claude-only flag).
+    const codex = tabs.find((t) => t.label === 'Codex秘书' && t.type === 'codex')
+    assert.ok(codex, 'Codex秘书 created on re-seed')
+    assert.equal(codex.skipAutoResume, undefined, 'codex favorite has no skipAutoResume')
   })
 })
