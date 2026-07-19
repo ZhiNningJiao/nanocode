@@ -307,11 +307,23 @@ export function createStore(filePath = ':memory:') {
   // fallback as the rest of the store), so a successful seed always leaves both
   // the tabs and the flag durably together. On a store reset / multi-instance
   // re-seed (flag gone) the reconcile branch only backfills the missing
-  // favorite / favoriteOrder / modelOverride / renderMode fields and NEVER
-  // rewrites an existing tab's session; the create branch creates the tab
-  // SESSION-LESS (no claudeSessionId / claudeSessionStarted). This is what
-  // stops a re-seed from rebounding favorite tabs onto the active 秘书T1
-  // session (daf68aac) — the jsonl-fork root cause.
+  // favorite / favoriteOrder / modelOverride / renderMode / skipAutoResume
+  // fields and NEVER rewrites an existing tab's session; the create branch
+  // creates the tab SESSION-LESS (no claudeSessionId / claudeSessionStarted).
+  //
+  // The ACTUAL fork-prevention mechanism is `skipAutoResume = true` on every
+  // seeded claude favorite. resolveSessionJsonl (claude-history.js) CASE B
+  // falls back to the newest jsonl in the project dir when a tab has no valid
+  // jsonl of its own — and the newest jsonl is the active 秘书T1 session
+  // (daf68aac). Being session-less ALONE does not stop this: a null
+  // claudeSessionId still hits CASE B and still falls back to daf68aac, which
+  // the controller then persists onto the favorite tab → two tabs own one jsonl
+  // → the fork. `skipAutoResume = true` makes CASE B skip the fallback entirely
+  // (claude-history.js line 667) so the tab starts a FRESH session instead of
+  // grabbing daf68aac. For 秘书T1, which OWNS daf68aac (jsonl exists), CASE A
+  // applies and skipAutoResume is never consulted, so it still resumes its own
+  // session. This is what stops a re-seed / restart from rebounding favorite
+  // tabs onto the active 秘书T1 session — the jsonl-fork root cause.
   function seedSecretaryFavorites(homeCwd) {
     if (getSetting('secretary_favorites_seeded_v1')) return false
     const project = data.projects.find((p) => p.cwd === homeCwd)
@@ -339,6 +351,11 @@ export function createStore(filePath = ':memory:') {
         if (typeof existing.favoriteOrder !== 'number') { existing.favoriteOrder = spec.order; changed = true }
         if (!existing.modelOverride) { existing.modelOverride = spec.modelOverride; changed = true }
         if (!existing.renderMode) { existing.renderMode = 'block'; changed = true }
+        // seedfix: backfill skipAutoResume on claude favorites missing it —
+        // this is the actual fork guard (see function docstring). Without it a
+        // favorite whose own jsonl is missing/lost would fall back to the
+        // newest jsonl (daf68aac) on the next attach and re-fork.
+        if (spec.type === 'claude' && !existing.skipAutoResume) { existing.skipAutoResume = true; changed = true }
         continue
       }
       // Create the favorite tab in-place. seedfix: a seeded favorite tab is
@@ -366,6 +383,8 @@ export function createStore(filePath = ':memory:') {
           tab.claudeSessionId = spec.claudeSessionId.trim()
         }
         // deliberately no claudeSessionId / claudeSessionStarted otherwise.
+        // seedfix: skipAutoResume=true is the fork guard — see function docstring.
+        tab.skipAutoResume = true
       } else if (spec.type === 'codex') {
         tab.codexThreadId = null
       }
