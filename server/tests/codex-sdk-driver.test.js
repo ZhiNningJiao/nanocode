@@ -272,12 +272,16 @@ describe('codex sdk driver', () => {
     assert.deepEqual(cs.queue, ['third'])
   })
 
-  it('emits interrupt fallback output and clears queued prompts after abort', async () => {
+  it('emits interrupt fallback output and clears queued prompts after abort (auto_flush off)', async () => {
     const textEvents = []
     const reruns = []
     const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    // auto_flush_queue_on_interrupt='0' opts out of auto-flush; without
+    // _forceFlushQueue the driver must still discard on interrupt (the
+    // send-now path sets _forceFlushQueue to override this — covered below).
     const store = {
-      getSetting() {
+      getSetting(key) {
+        if (key === 'auto_flush_queue_on_interrupt') return '0'
         return null
       },
     }
@@ -320,6 +324,142 @@ describe('codex sdk driver', () => {
       '────────────\n',
       '[Queue cleared (1 pending message discarded after interrupt).]\n',
     ])
+  })
+
+  // ── Interrupt queue policy parity (claude/opencode block "send now") ──────
+  // On interrupt the driver now mirrors claude-session-controller.js ~L690-704:
+  //   - _forceFlushQueue (set by the WS "send now" atomic flush or the HTTP
+  //     /interrupt?andFlush route) → drain the queue as the next turn, always.
+  //   - auto_flush_queue_on_interrupt ON (default) → drain on interrupt too.
+  //   - auto_flush OFF + no _forceFlushQueue → discard (the test above).
+  // This makes the codex block-mode queue tray meaningful: "立刻发送"
+  // (send now) and a plain stop both preserve queued messages by default.
+
+  it('forceFlush on interrupt drains the queued message as the next turn (send-now parity)', async () => {
+    const reruns = []
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    // auto_flush OFF — forceFlush must win regardless (the send-now contract).
+    const store = {
+      getSetting(key) {
+        if (key === 'auto_flush_queue_on_interrupt') return '0'
+        return null
+      },
+    }
+    const FakeCodex = createCodexImplFactory([
+      { signalError: Object.assign(new Error('aborted'), { name: 'AbortError' }) },
+    ], calls)
+
+    const driver = createCodexSdkDriver({
+      store,
+      codexBroadcast: () => {},
+      codexBroadcastEvent: () => {},
+      rerunTurn: (...args) => { reruns.push(args) },
+      CodexImpl: FakeCodex,
+    })
+
+    const cs = baseClientState()
+    cs.codexThreadId = 'thread-x'
+
+    const run = driver.runCodexTurn(cs, 'first', 'p:codex:t', '/tmp/w')
+    await Promise.resolve()
+    await driver.runCodexTurn(cs, 'queued send-now', 'p:codex:t', '/tmp/w')
+
+    assert.equal(typeof cs.currentProc?.kill, 'function')
+    cs._forceFlushQueue = true
+    cs.currentProc.kill('SIGINT')
+    await run
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.equal(reruns.length, 1, 'forceFlush must drain the queued message as the next turn')
+    assert.equal(reruns[0][0], cs)
+    assert.equal(reruns[0][1], 'queued send-now')
+    assert.deepEqual(cs.queue, [])
+    assert.equal(cs._forceFlushQueue, false, '_forceFlushQueue must be reset after draining')
+  })
+
+  it('auto-flush on interrupt (default) drains the queued message as the next turn', async () => {
+    const reruns = []
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    const store = { getSetting() { return null } } // auto_flush default ON
+    const FakeCodex = createCodexImplFactory([
+      { signalError: Object.assign(new Error('aborted'), { name: 'AbortError' }) },
+    ], calls)
+
+    const driver = createCodexSdkDriver({
+      store,
+      codexBroadcast: () => {},
+      codexBroadcastEvent: () => {},
+      rerunTurn: (...args) => { reruns.push(args) },
+      CodexImpl: FakeCodex,
+    })
+
+    const cs = baseClientState()
+    cs.codexThreadId = 'thread-y'
+
+    const run = driver.runCodexTurn(cs, 'first', 'p:codex:t', '/tmp/w')
+    await Promise.resolve()
+    await driver.runCodexTurn(cs, 'queued auto', 'p:codex:t', '/tmp/w')
+
+    assert.equal(typeof cs.currentProc?.kill, 'function')
+    // No _forceFlushQueue — auto_flush default must still drain on interrupt.
+    cs.currentProc.kill('SIGINT')
+    await run
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.equal(reruns.length, 1, 'auto-flush default must drain the queued message as the next turn')
+    assert.equal(reruns[0][1], 'queued auto')
+    assert.deepEqual(cs.queue, [])
+  })
+
+  it('resumes the same codex thread after an interrupt (thread id preserved)', async () => {
+    // E2e core guarantee: interrupt must NOT discard the codexThreadId; the
+    // next turn resumes the same thread (conversation continuity), mirroring
+    // claude session resume. This is the "stop → resume same thread" red line.
+    const reruns = []
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    const store = { getSetting() { return null } }
+    const FakeCodex = createCodexImplFactory([
+      {
+        signalError: Object.assign(new Error('aborted'), { name: 'AbortError' }),
+      },
+      {
+        events: [
+          { type: 'thread.started', thread_id: 'thread-resume' },
+          { type: 'turn.completed', usage: {} },
+        ],
+      },
+    ], calls)
+
+    const driver = createCodexSdkDriver({
+      store,
+      codexBroadcast: () => {},
+      codexBroadcastEvent: () => {},
+      rerunTurn: (...args) => { reruns.push(args) },
+      CodexImpl: FakeCodex,
+    })
+
+    const cs = baseClientState()
+    // First turn establishes the thread id.
+    cs.codexThreadId = 'thread-resume'
+
+    const run = driver.runCodexTurn(cs, 'first', 'p:codex:t', '/tmp/w')
+    await Promise.resolve()
+    await driver.runCodexTurn(cs, 'after-interrupt', 'p:codex:t', '/tmp/w')
+
+    cs.currentProc.kill('SIGINT')
+    await run
+    await new Promise((resolve) => setImmediate(resolve))
+
+    // The interrupt must not clear the thread id; the drained next turn resumes it.
+    assert.equal(cs.codexThreadId, 'thread-resume', 'thread id must survive interrupt')
+    assert.equal(reruns.length, 1, 'queued message must drain after interrupt')
+    assert.equal(reruns[0][1], 'after-interrupt')
+
+    // The drained turn runs via rerunTurn — invoke it and assert it resumes the
+    // same thread (resumeThread called with the preserved id).
+    await driver.runCodexTurn(reruns[0][0], reruns[0][1], reruns[0][2], reruns[0][3])
+    assert.equal(calls.threadCalls[1].mode, 'resume', 'next turn must resume the existing thread')
+    assert.equal(calls.threadCalls[1].threadId, 'thread-resume', 'must resume the SAME thread id')
   })
 
   // ── Cut 2: codex binary resolution & model passthrough ───────────────────

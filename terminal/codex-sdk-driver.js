@@ -250,15 +250,28 @@ export function createCodexSdkDriver({
       }
 
       if (!Array.isArray(cs.queue)) cs.queue = []
-      if (currentTurn._nanocodeInterrupted) {
-        if (cs.queue.length > 0) {
+      // Mirror claude's queue-on-interrupt policy (claude-session-controller.js
+      // ~L690-704): on interrupt, auto-flush queued messages as the next turn
+      // unless the user explicitly disabled auto_flush_queue_on_interrupt.
+      // _forceFlushQueue (set by the WS "send now" atomic flush or the HTTP
+      // /interrupt?andFlush route) overrides the setting so the user's "send now"
+      // message is never silently dropped.
+      const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'
+      const forceFlush = cs._forceFlushQueue === true
+      cs._forceFlushQueue = false
+      const wasInterrupted = currentTurn._nanocodeInterrupted === true
+      if (cs.queue.length > 0) {
+        if (forceFlush || !wasInterrupted || autoFlushOnInterrupt) {
+          if (wasInterrupted && !forceFlush) {
+            codexBroadcast(cs, `[Resuming with ${cs.queue.length} queued message${cs.queue.length !== 1 ? 's' : ''}…]\n`)
+          }
+          const nextPrompt = cs.queue.shift()
+          setImmediate(() => rerunTurn(cs, nextPrompt, sessionKey, cwd))
+        } else {
           const discarded = cs.queue.length
           cs.queue = []
           codexBroadcast(cs, `[Queue cleared (${discarded} pending message${discarded > 1 ? 's' : ''} discarded after interrupt).]\n`)
         }
-      } else if (cs.queue.length > 0) {
-        const nextPrompt = cs.queue.shift()
-        setImmediate(() => rerunTurn(cs, nextPrompt, sessionKey, cwd))
       } else if (!sawTerminalEvent) {
         codexBroadcast(cs, TURN_SEPARATOR)
       }
