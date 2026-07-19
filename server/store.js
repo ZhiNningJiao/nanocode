@@ -301,6 +301,17 @@ export function createStore(filePath = ':memory:') {
   //
   // The four favorites are NOT given any persona (需求16: no 人设 prompt on
   // these sessions; the life assistant is explicitly a plain session).
+  //
+  // seedfix: the `secretary_favorites_seeded_v1` flag lives in `data.settings`,
+  // i.e. the SAME persistent JSON file as `data.tabs` (same atomic write + .bak
+  // fallback as the rest of the store), so a successful seed always leaves both
+  // the tabs and the flag durably together. On a store reset / multi-instance
+  // re-seed (flag gone) the reconcile branch only backfills the missing
+  // favorite / favoriteOrder / modelOverride / renderMode fields and NEVER
+  // rewrites an existing tab's session; the create branch creates the tab
+  // SESSION-LESS (no claudeSessionId / claudeSessionStarted). This is what
+  // stops a re-seed from rebounding favorite tabs onto the active 秘书T1
+  // session (daf68aac) — the jsonl-fork root cause.
   function seedSecretaryFavorites(homeCwd) {
     if (getSetting('secretary_favorites_seeded_v1')) return false
     const project = data.projects.find((p) => p.cwd === homeCwd)
@@ -319,13 +330,27 @@ export function createStore(filePath = ':memory:') {
       const existing = tabs.find((t) => (t.type || 'bash') === spec.type && t.label === spec.label)
       if (existing) {
         // Reconcile: pin as favorite + lock model/block only where absent.
+        // seedfix: NEVER touch the session fields (claudeSessionId /
+        // claudeSessionStarted / codexThreadId) on an existing tab — only
+        // favorite / favoriteOrder / modelOverride / renderMode are backfilled.
+        // Overwriting session here is what rebound favorite tabs onto the
+        // active 秘书T1 session on a re-seed.
         if (!existing.favorite) { existing.favorite = true; changed = true }
         if (typeof existing.favoriteOrder !== 'number') { existing.favoriteOrder = spec.order; changed = true }
         if (!existing.modelOverride) { existing.modelOverride = spec.modelOverride; changed = true }
         if (!existing.renderMode) { existing.renderMode = 'block'; changed = true }
         continue
       }
-      // Create the favorite tab in-place with the full config.
+      // Create the favorite tab in-place. seedfix: a seeded favorite tab is
+      // born SESSION-LESS — we do NOT pre-write claudeSessionId (nor
+      // claudeSessionStarted). A pre-assigned random UUID is a phantom with no
+      // jsonl behind it; on the first click resolveSessionJsonl's newest-jsonl
+      // fallback would resume the active 秘书T1 session (daf68aac) and persist
+      // it back here, so two tabs owned one jsonl → the fork accident. Instead
+      // the tab stays session-less until the claude session controller assigns
+      // a fresh id on the first turn and persists it via updateTabMetadata.
+      // `spec.claudeSessionId` is honored ONLY when explicitly provided (and
+      // never inferred from the running active session).
       const tab = {
         id: randomUUID().slice(0, 8),
         label: spec.label,
@@ -337,8 +362,10 @@ export function createStore(filePath = ':memory:') {
         modelOverride: spec.modelOverride,
       }
       if (spec.type === 'claude') {
-        tab.claudeSessionId = randomUUID()
-        tab.claudeSessionStarted = false
+        if (typeof spec.claudeSessionId === 'string' && spec.claudeSessionId.trim()) {
+          tab.claudeSessionId = spec.claudeSessionId.trim()
+        }
+        // deliberately no claudeSessionId / claudeSessionStarted otherwise.
       } else if (spec.type === 'codex') {
         tab.codexThreadId = null
       }
