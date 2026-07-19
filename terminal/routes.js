@@ -39,6 +39,11 @@ export function createTerminalRoutes(store, opts = {}) {
     // Test seam only: forwarded to createClaudeSdkDriver so send-now race
     // tests can inject a deterministic mock query. Undefined in production.
     testQueryImpl: opts?.testQueryImpl,
+    // Test seam only: forwarded to createCodexSdkDriver as CodexImpl so the
+    // codex send-now / interrupt tests can inject a deterministic mock SDK
+    // (the real codex binary completes turns too fast for a stable busy
+    // window). Undefined in production.
+    testCodexImpl: opts?.testCodexImpl,
   })
   // On server shutdown / test end, tear down all in-process SDK streaming
   // sessions so their child-process handles release and the process can exit.

@@ -15,7 +15,7 @@ import { copyTranscriptToTeam, teamModelDefaults } from './team-failover.js'
 import { loadPersonalConfig } from './personal-config.js'
 import { acquireSessionLock, releaseSessionLock } from './session-lock.js'
 
-export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl, port }) {
+export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl, testCodexImpl, port }) {
   const IS_WIN = platform() === 'win32'
   const SHELL = IS_WIN
     ? (process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe')
@@ -495,6 +495,9 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     codexBroadcastStreamText,
     rerunTurn: (...args) => dispatchCodexTurn(...args),
     home,
+    // Test seam only: inject a deterministic mock CodexImpl so send-now /
+    // interrupt tests get a stable busy window. Undefined in production.
+    ...(testCodexImpl ? { CodexImpl: testCodexImpl } : {}),
     onBundledCodexFallback: (cs) => {
       // Surface once per session: the SDK is about to use its bundled 0.137
       // codex (no override + no user CLI), which can't run gpt-5.6-sol. Tell the
@@ -1558,11 +1561,29 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
           return
         }
 
+        // queuefix parity (claude/opencode block "send now"): capture busy state
+        // BEFORE dispatch. busy → dispatch enqueues, then we atomically interrupt
+        // the running turn + set _forceFlushQueue so the codex SDK driver's finally
+        // block drains the queue as the next turn. idle → dispatch starts the
+        // turn directly, no interrupt (would kill the user's own message).
+        const wasBusy = msg._sendNow === true && cs.busy && !!cs.currentProc
+        const sendNowProc = wasBusy ? cs.currentProc : null
+
         cs.inputBuffer += data
         const segments = cs.inputBuffer.split('\r')
         cs.inputBuffer = segments.pop() || ''
         for (const segment of segments) {
           flushCodexInput(segment)
+        }
+
+        if (sendNowProc) {
+          try {
+            cs._forceFlushQueue = true
+            sendNowProc._nanocodeInterrupted = true
+            sendNowProc.kill('SIGINT')
+          } catch (err) {
+            console.error(`[codex:send-now] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+          }
         }
       } else if (msg.type === 'ping') {
         try { ws.send(JSON.stringify({ type: 'pong', id: msg.id })) } catch {}
@@ -1742,9 +1763,15 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       if (!codexSession) return res.status(404).json({ error: 'no claude, opencode, or codex session' })
       if (!codexSession.busy || !codexSession.currentProc) return res.json({ ok: false, reason: 'not busy' })
       try {
+        // 需求15 item2 parity: honour andFlush (set by the client "send now" flush)
+        // so the codex SDK driver's finally block force-flushes the in-memory queue
+        // as the next turn regardless of the auto_flush_queue_on_interrupt setting
+        // — mirrors the claude (L1674) + opencode (L1732) paths.
+        const andFlush = req.query.flush === '1' || req.body?.andFlush === true
+        if (andFlush) codexSession._forceFlushQueue = true
         codexSession.currentProc._nanocodeInterrupted = true
         codexSession.currentProc.kill('SIGINT')
-        return res.json({ ok: true, force: false })
+        return res.json({ ok: true, force: false, andFlush })
       } catch (err) {
         return res.status(500).json({ error: err.message })
       }

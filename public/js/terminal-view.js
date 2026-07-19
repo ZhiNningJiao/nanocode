@@ -747,9 +747,18 @@ function setupChatInput() {
     // useClaudeRenderer condition so renderMode toggles stay in sync.
     const fable5RenderMode = (() => { try { return window.__nanocodeState?.fable5RenderMode || 'block' } catch { return 'block' } })()
     const opencodeRenderMode = (() => { try { return window.__nanocodeState?.opencodeRenderMode || 'block' } catch { return 'block' } })()
+    const codexRenderMode = (() => { try { return window.__nanocodeState?.codexRenderMode || 'terminal' } catch { return 'terminal' } })()
+    // 需求15 keystone + codex-block parity: block-mode codex reuses CodexBlockRenderer
+    // and dispatches the same claude-thinking events, so it deserves the same
+    // "shell" (stop button, model badge, busy/thinking UI, queue tray). Mirror
+    // tab-manager.js's useCodexRenderer condition (codexRenderMode === 'block')
+    // so the shell lights up exactly when CodexBlockRenderer is in use.
+    // Terminal-mode codex (xterm) stays on the N43-R9 interactive-REPL path
+    // (dim-only thinking, send stays enabled) — it is NOT a block agent.
     isBlockAgentTab = isClaudeTab ||
       (tabType === 'fable5' && fable5RenderMode !== 'terminal') ||
-      (tabType === 'opencode' && opencodeRenderMode !== 'terminal')
+      (tabType === 'opencode' && opencodeRenderMode !== 'terminal') ||
+      (isCodexTab && codexRenderMode === 'block')
     if (isClaudeTab) {
       chatInput.placeholder = 'Message Claude… (/ for commands)'
     } else if (tabType === 'fable5' && fable5RenderMode !== 'terminal') {
@@ -876,14 +885,17 @@ function setupChatInput() {
     // Only update UI if this is the active tab
     const activeId = tabManager ? tabManager.activeId : null
     if (!activeId || thinkingTabId !== activeId) return
-    if (isCodexTab) {
-      // N43-R9: codex is an interactive REPL — dim animation only, do NOT
-      // disable the send button or the user can't navigate interactive menus
+    if (isCodexTab && !isBlockAgentTab) {
+      // N43-R9: terminal-mode codex is an interactive REPL — dim animation only,
+      // do NOT disable the send button or the user can't navigate interactive menus
       // (/model, /compact, etc.) or send /clear while codex is busy.
+      // Block-mode codex (isBlockAgentTab) is excluded here and falls through to
+      // updateThinkingState below, giving it the same stop-button + busy shell as
+      // claude (block mode is turn-based, not an interactive REPL).
       isCodexThinking = !!detail.thinking
       chatInput.classList.toggle('codex-thinking', isCodexThinking)
       sendBtn.classList.toggle('codex-thinking-btn', isCodexThinking)
-      // sendBtn.disabled intentionally NOT set for codex tabs — keep enabled
+      // sendBtn.disabled intentionally NOT set for terminal-mode codex tabs — keep enabled
       sendBtn.title = isCodexThinking ? 'Codex is working… (send to interact)' : 'Send'
     } else {
       updateThinkingState(!!detail.thinking)

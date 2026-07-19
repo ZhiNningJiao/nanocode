@@ -865,12 +865,16 @@ export class CodexBlockRenderer {
 
   // ── Public API ───────────────────────────────────────────────────────────────
 
-  sendInputWithEcho(text) {
+  sendInputWithEcho(text, opts = {}) {
     // Show user input as a prompt block
     this._finalizeCurrentBlock()
     this._finalizeAgentMessage()
     this._appendUserBlock(text)
-    this._send({ type: 'input', data: text + '\r' })
+    // _sendNow: tells the server to atomically interrupt the running turn + set
+    // _forceFlushQueue so this message fires as the next turn (queuefix parity
+    // with claude-block-renderer / opencode block). Only meaningful when busy —
+    // the server captures busy state before dispatch; idle → normal send.
+    this._send({ type: 'input', data: text + '\r', _sendNow: opts.sendNow === true })
     this._setThinking(true)
     // Reset response block tracking: new turn always starts a fresh block
     this._lastResponseBlockEl = null
