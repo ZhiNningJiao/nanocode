@@ -320,3 +320,184 @@ describe('seedSecretaryFavorites', () => {
     assert.equal(store.getSetting('secretary_favorites_seeded_v1'), null)
   })
 })
+
+// ===========================================================================
+// seedfix: regression tests for the jsonl-fork root cause.
+//
+// Bug: seedSecretaryFavorites pre-assigned each seeded claude favorite tab a
+// phantom `claudeSessionId = randomUUID()` (with claudeSessionStarted=false).
+// That UUID had no jsonl behind it, so the first click fell into
+// resolveSessionJsonl's newest-jsonl fallback and resumed the ACTIVE 秘书T1
+// session (daf68aac), which then got persisted back onto the favorite tab →
+// two tabs owned one jsonl → fork. The idempotency flag lived in the same JSON
+// as the tabs but a store reset / multi-instance re-seed wiped it and re-ran
+// the seed, recreating the phantom ids.
+//
+// Fix: seeded claude favorite tabs are born SESSION-LESS (no claudeSessionId,
+// no claudeSessionStarted); reconcile never touches an existing tab's session;
+// the flag stays in the same persistence layer as the tabs.
+// ===========================================================================
+describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
+  // The "active session at seed runtime" — mirrors process.env.CLAUDE_CODE_SESSION_ID
+  // on the live 9476 box (daf68aac-…, the 秘书T1 secretary session). The seed must
+  // NEVER bind any favorite tab's claudeSessionId to this value.
+  const ACTIVE_SESSION = 'daf68aac-29cc-4385-b1e2-b95842c46130'
+
+  it('seeded claude favorite tabs are born SESSION-LESS (no phantom claudeSessionId)', () => {
+    const store = createStore(':memory:')
+    const home = '/tmp/home-seedfix-sessionless'
+    store.createProject('zhiningjiao', home)
+
+    store.seedSecretaryFavorites(home)
+    const pid = store.listProjects().find((p) => p.cwd === home).id
+    const tabs = store.listTabs(pid)
+    const claudeTabs = tabs.filter((t) => t.type === 'claude')
+    assert.equal(claudeTabs.length, 3, 'three claude favorites: 秘书T1/秘书T2/生活小助手')
+    for (const t of claudeTabs) {
+      // The direct fix: a seeded claude favorite has NO pre-assigned session id
+      // and NO claudeSessionStarted flag. The OLD code wrote randomUUID() here,
+      // which would fail both assertions.
+      assert.equal(t.claudeSessionId, undefined,
+        `seeded claude tab "${t.label}" must NOT carry a phantom claudeSessionId`)
+      assert.equal(t.claudeSessionStarted, undefined,
+        `seeded claude tab "${t.label}" must NOT carry claudeSessionStarted`)
+      // Corollary: it is not bound to the active session either.
+      assert.notEqual(t.claudeSessionId, ACTIVE_SESSION)
+    }
+    // The codex favorite keeps codexThreadId=null (not a phantom — null means
+    // "no thread yet"; the codex driver assigns one on the first turn).
+    const codex = tabs.find((t) => t.type === 'codex')
+    assert.equal(codex.codexThreadId, null)
+    assert.equal(codex.claudeSessionId, undefined)
+  })
+
+  it('no seeded favorite tab claudeSessionId equals the active session at seed runtime', () => {
+    const store = createStore(':memory:')
+    const home = '/tmp/home-seedfix-active'
+    store.createProject('zhiningjiao', home)
+
+    // Simulate the 9476 restart condition: an active secretary session exists
+    // at seed time (env var). The seed must not pull it into any tab.
+    const orig = process.env.CLAUDE_CODE_SESSION_ID
+    process.env.CLAUDE_CODE_SESSION_ID = ACTIVE_SESSION
+    try {
+      store.seedSecretaryFavorites(home)
+    } finally {
+      if (orig === undefined) delete process.env.CLAUDE_CODE_SESSION_ID
+      else process.env.CLAUDE_CODE_SESSION_ID = orig
+    }
+    const pid = store.listProjects().find((p) => p.cwd === home).id
+    for (const t of store.listTabs(pid)) {
+      assert.notEqual(t.claudeSessionId, ACTIVE_SESSION,
+        `tab "${t.label}" claudeSessionId must not equal the active session`)
+    }
+  })
+
+  it('seed twice + delete tab + store-reset re-seed rebuilds the tab SESSION-LESS', () => {
+    // Reproduces the two-incident scenario: seed → (store reset wipes the flag
+    // but tabs survive OR a tab is deleted then a restart re-seeds) → the
+    // rebuilt tab must NOT carry a phantom session id, and NO tab may bind to
+    // the active session.
+    const store = createStore(':memory:')
+    const home = '/tmp/home-seedfix-twice'
+    const project = store.createProject('zhiningjiao', home)
+
+    // --- Seed #1: creates all four favorites. ---
+    store.seedSecretaryFavorites(home)
+    assert.equal(store.getSetting('secretary_favorites_seeded_v1'), '1')
+    let pid = store.listProjects().find((p) => p.cwd === home).id
+    let t2 = store.listTabs(pid).find((t) => t.label === '秘书T2' && t.type === 'claude')
+    assert.ok(t2, '秘书T2 created on first seed')
+    assert.equal(t2.claudeSessionId, undefined, 'first-seed 秘书T2 is session-less')
+
+    // --- Master deletes 秘书T2 (e.g. to recreate it), then the store is reset
+    // (flag gone) — simulating the multi-instance / store-reset re-seed path. ---
+    assert.equal(store.removeTab(pid, t2.id), true)
+    assert.equal(store.listTabs(pid).filter((t) => t.label === '秘书T2').length, 0)
+    // Store reset: clear the idempotency flag while keeping the surviving tabs,
+    // exactly as a partial reset / sibling instance would leave them.
+    store.setSetting('secretary_favorites_seeded_v1', null)
+
+    // --- Seed #2: rebuilds the deleted 秘书T2; surviving tabs are reconciled. ---
+    const orig = process.env.CLAUDE_CODE_SESSION_ID
+    process.env.CLAUDE_CODE_SESSION_ID = ACTIVE_SESSION
+    try {
+      store.seedSecretaryFavorites(home)
+    } finally {
+      if (orig === undefined) delete process.env.CLAUDE_CODE_SESSION_ID
+      else process.env.CLAUDE_CODE_SESSION_ID = orig
+    }
+    assert.equal(store.getSetting('secretary_favorites_seeded_v1'), '1', 'flag re-set after re-seed')
+    pid = store.listProjects().find((p) => p.cwd === home).id
+    const tabs = store.listTabs(pid)
+    const rebuilt = tabs.find((t) => t.label === '秘书T2' && t.type === 'claude')
+    assert.ok(rebuilt, '秘书T2 rebuilt on re-seed')
+    // The key regression assertion: the rebuilt tab is session-less, not a
+    // phantom, and never the active session.
+    assert.equal(rebuilt.claudeSessionId, undefined,
+      'rebuilt 秘书T2 must be session-less (no phantom claudeSessionId)')
+    assert.equal(rebuilt.claudeSessionStarted, undefined)
+    assert.notEqual(rebuilt.claudeSessionId, ACTIVE_SESSION)
+
+    // No tab in the project is bound to the active session.
+    for (const t of tabs) {
+      assert.notEqual(t.claudeSessionId, ACTIVE_SESSION,
+        `tab "${t.label}" must not bind to the active session after re-seed`)
+    }
+    // favorite/order/render/model are still pinned on the rebuilt tab.
+    assert.equal(rebuilt.favorite, true)
+    assert.equal(rebuilt.favoriteOrder, 1)
+    assert.equal(rebuilt.renderMode, 'block')
+    assert.equal(rebuilt.modelOverride, 'claude-fable-5')
+  })
+
+  it('reconcile NEVER overwrites an existing tab session (even on a re-seed)', () => {
+    // The master already has 秘书T1 with its own real session (daf68aac) and
+    // 秘书T2 with a different real session. A re-seed (flag cleared) must pin
+    // favorite/order/render/model where absent but must NOT touch either tab's
+    // claudeSessionId — not blank it, not reassign it, not bind it to the
+    // active session.
+    const store = createStore(':memory:')
+    const home = '/tmp/home-seedfix-reconcile'
+    const project = store.createProject('zhiningjiao', home)
+    const t1 = store.createTab(project.id, {
+      type: 'claude', label: '秘书T1',
+      claudeSessionId: ACTIVE_SESSION, // the real secretary session — must survive
+    })
+    // Mark it as a real (started) session so it's not a phantom.
+    store.updateTabMetadata(project.id, t1.id, { claudeSessionStarted: true })
+    const t2Other = store.createTab(project.id, {
+      type: 'claude', label: '秘书T2',
+      claudeSessionId: 'f82e12e3-8728-4fb7-9acb-97fb8fda413c', // a different real session
+    })
+    store.updateTabMetadata(project.id, t2Other.id, { claudeSessionStarted: true })
+
+    // Re-seed with the active session env set (flag absent → seed runs).
+    const orig = process.env.CLAUDE_CODE_SESSION_ID
+    process.env.CLAUDE_CODE_SESSION_ID = ACTIVE_SESSION
+    try {
+      store.seedSecretaryFavorites(home)
+    } finally {
+      if (orig === undefined) delete process.env.CLAUDE_CODE_SESSION_ID
+      else process.env.CLAUDE_CODE_SESSION_ID = orig
+    }
+
+    const tabs = store.listTabs(project.id)
+    const t1After = tabs.find((t) => t.label === '秘书T1' && t.type === 'claude')
+    const t2After = tabs.find((t) => t.label === '秘书T2' && t.type === 'claude')
+    // Sessions are preserved verbatim — not blanked, not rebound.
+    assert.equal(t1After.claudeSessionId, ACTIVE_SESSION,
+      '秘书T1 keeps its real active session (the ONLY tab allowed to own it)')
+    assert.equal(t1After.claudeSessionStarted, true)
+    assert.equal(t2After.claudeSessionId, 'f82e12e3-8728-4fb7-9acb-97fb8fda413c',
+      '秘书T2 keeps its own session — re-seed must not touch it')
+    assert.equal(t2After.claudeSessionStarted, true)
+    // favorite/order/render/model are pinned (reconcile backfill).
+    assert.equal(t1After.favorite, true)
+    assert.equal(t1After.renderMode, 'block')
+    assert.equal(t2After.favorite, true)
+    // No duplicate tabs created.
+    assert.equal(tabs.filter((t) => t.label === '秘书T1' && t.type === 'claude').length, 1)
+    assert.equal(tabs.filter((t) => t.label === '秘书T2' && t.type === 'claude').length, 1)
+  })
+})
