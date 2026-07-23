@@ -506,6 +506,21 @@ export class TabManager {
         paneEl.innerHTML = ''
         const blockOpts = useClaudeRenderer ? { ...paneOpts, tabType: type } : paneOpts
         tab.pane = new Cls(paneEl, blockOpts)
+        // If this tab is already the active tab, re-fire onActiveChange so
+        // terminal-view.js's activePane updates from the disposed
+        // TerminalPane placeholder to the real block renderer. Without this,
+        // sendInputWithEcho() calls go to the dead placeholder pane and the
+        // user can't send messages until they switch tabs and back — the
+        // "mobile Claude tab can't send until you visit a bash tab" bug.
+        // The race is wider on mobile (slower dynamic import) but exists on
+        // all platforms whenever setActive runs before the import resolves.
+        if (this.activeId === id) {
+          this.onActiveChange(tab.pane, { id: tab.id, label: tab.label, type: tab.type })
+          if (tab.pane._ws) {
+            this.onStatusChange(tab.pane._ws.readyState === WebSocket.OPEN)
+          }
+          requestAnimationFrame(() => { try { tab.pane.fitAddon.fit() } catch {} })
+        }
       }).catch((err) => {
         console.error('[tab-manager] failed to load block renderer:', err)
         // Block renderer failed to load — the TerminalPane stays as the
