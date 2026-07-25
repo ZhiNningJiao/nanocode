@@ -203,6 +203,53 @@ describe('GET /api/codex/models — authoritative source (~/.codex/models_cache.
     assert.deepEqual(res.payload.models[0].supported_reasoning_levels, ['low', 'medium', 'high'])
   })
 
+  it('drops entries with missing/non-string/blank slug so the picker never sees escapeHtml(undefined)', async () => {
+    // A single malformed cache entry (slug undefined / number / whitespace)
+    // must NOT take down the whole picker. The route drops it; the good
+    // entries still come through with safe, non-empty string slugs. Display
+    // fields are also coerced so a non-string sibling can't make escapeHtml
+    // throw on the surviving entries.
+    const home = makeTempDir('nanocode-codex-models-slug-')
+    mkdirSync(path.join(home, '.codex'), { recursive: true })
+    writeFileSync(
+      path.join(home, '.codex', 'models_cache.json'),
+      makeCache([
+        { slug: 'gpt-5.5', display_name: 'GPT-5.5', description: 'prev gen', visibility: 'list' },
+        { display_name: 'No Slug', visibility: 'list' }, // dropped: slug missing
+        { slug: 123, display_name: 'Num Slug', visibility: 'list' }, // dropped: non-string slug
+        { slug: '   ', display_name: 'Blank Slug', visibility: 'list' }, // dropped: whitespace slug
+        { slug: '', display_name: 'Empty Slug', visibility: 'list' }, // dropped: empty slug
+        { slug: 'gpt-5.6-sol', visibility: 'list' }, // valid; display_name missing → falls back to slug
+        { slug: 'gpt-5.4', display_name: 42, visibility: 'list' }, // valid slug; non-string display_name → slug
+        { slug: 'o7', display_name: 'O7', description: 99, visibility: 'list', supported_reasoning_levels: ['low', null, 7, { effort: 'high' }, ''] }, // non-string description + mixed effort list
+      ])
+    )
+
+    const store = createStore(':memory:')
+    const { router } = createTerminalRoutes(store, { home })
+
+    const res = await invokeRoute(router, 'GET', '/api/codex/models')
+    assert.equal(res.statusCode, 200)
+    assert.equal(res.payload.fallback, false, 'a valid cache with some bad entries is not a fallback')
+
+    const slugs = res.payload.models.map((m) => m.slug)
+    assert.deepEqual(slugs, ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.4', 'o7'], 'only non-empty-string-slug entries survive, in order')
+    // Every served slug is a non-empty trimmed string → escapeHtml never sees undefined.
+    for (const m of res.payload.models) {
+      assert.equal(typeof m.slug, 'string')
+      assert.ok(m.slug.trim().length > 0, 'slug must be a non-empty trimmed string')
+      assert.equal(typeof m.display_name, 'string')
+      assert.equal(typeof m.description, 'string')
+    }
+    // display_name falls back to slug when missing or non-string.
+    assert.equal(res.payload.models[1].display_name, 'gpt-5.6-sol', 'missing display_name → slug')
+    assert.equal(res.payload.models[2].display_name, 'gpt-5.4', 'non-string display_name → slug')
+    // non-string description is coerced to '' (not passed through to escapeHtml).
+    assert.equal(res.payload.models[3].description, '', 'non-string description → empty string')
+    // mixed-type supported_reasoning_levels keeps only non-empty string efforts.
+    assert.deepEqual(res.payload.models[3].supported_reasoning_levels, ['low', 'high'])
+  })
+
   it('uses the injected home, never the real ~/.codex (sandbox isolation)', async () => {
     // A temp home with NO .codex at all → fallback, empty. This also proves the
     // route does not accidentally read the worker's real ~/.codex/models_cache.json.

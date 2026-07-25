@@ -1069,15 +1069,26 @@ export function createTerminalRoutes(store, opts = {}) {
       const all = Array.isArray(parsed && parsed.models) ? parsed.models : []
       // Keep only user-facing models (visibility:"list"); drop hidden/internal
       // ones. Preserve the cache's own ordering (priority then slug).
+      //
+      // A single bad cache entry (e.g. slug missing / non-string / blank) would
+      // otherwise reach the frontend as slug:undefined → escapeHtml(undefined)
+      // throws inside the picker loop and the whole picker fails to render. So
+      // drop any entry whose slug is not a non-empty trimmed string, and coerce
+      // the other display fields to safe strings so no bad sibling breaks the
+      // picker for the good entries.
       const models = all
-        .filter((m) => m && m.visibility !== 'hide')
+        .filter((m) => m && m.visibility !== 'hide' && typeof m.slug === 'string' && m.slug.trim() !== '')
         .map((m) => ({
           slug: m.slug,
-          display_name: m.display_name || m.slug,
-          description: m.description || '',
-          default_reasoning_level: m.default_reasoning_level || null,
+          display_name: typeof m.display_name === 'string' && m.display_name.trim() !== '' ? m.display_name : m.slug,
+          description: typeof m.description === 'string' ? m.description : '',
+          default_reasoning_level: typeof m.default_reasoning_level === 'string' && m.default_reasoning_level
+            ? m.default_reasoning_level
+            : null,
           supported_reasoning_levels: Array.isArray(m.supported_reasoning_levels)
-            ? m.supported_reasoning_levels.map((l) => (l && typeof l === 'object' ? l.effort : l)).filter(Boolean)
+            ? m.supported_reasoning_levels
+                .map((l) => (l && typeof l === 'object' ? l.effort : l))
+                .filter((l) => typeof l === 'string' && l.trim() !== '')
             : [],
         }))
       res.json({

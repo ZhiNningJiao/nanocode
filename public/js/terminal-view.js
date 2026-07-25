@@ -10,6 +10,7 @@ import { TabManager, TYPE_ICON_SVG } from './tab-manager.js'
 import { createExplorer } from './explorer.js'
 import { initRightPanel, showRightPanelTab } from './right-panel.js'
 import { t } from './i18n.js'
+import { mountFloatingEl } from './model-picker-mount.js'
 
 const mobileQuery = window.matchMedia('(max-width: 768px)')
 const isMobile = () => mobileQuery.matches
@@ -1669,13 +1670,30 @@ function setupChatInput() {
   // back to the .pane-terminal container and flag the picker as --floating so
   // CSS anchors it as an overlay (position:absolute, bottom-anchored, own
   // scroll). The pane is made a positioning context via .terminal-track scope.
+  //
+  // _mountOverlay is the shared safe-mount used by BOTH the picker and the
+  // success/error toasts (see _mountToast). Previously the toasts only called
+  // _appendToScroll, which returns false in a terminal pane — so a codex
+  // terminal tab gave zero feedback after a model/effort change. Reusing the
+  // same scroll-or-float logic guarantees the toast mounts in terminal mode.
+  function _mountOverlay(el, floatingClass) {
+    return mountFloatingEl(el, {
+      scroll: _getPickerScroll(),
+      container: activePane?.container || null,
+      floatingClass,
+    })
+  }
+
   function _mountPicker(picker) {
-    if (_appendToScroll(picker)) return true
-    const mount = activePane?.container || null
-    if (!mount) return false
-    picker.classList.add('cbr-model-picker--floating')
-    mount.appendChild(picker)
-    return true
+    return _mountOverlay(picker, 'cbr-model-picker--floating')
+  }
+
+  // Toasts (model-set confirmation / save-failed error) reuse the same
+  // safe-mount as the picker so they are visible in terminal mode too. The
+  // --floating variant is a small bottom-anchored banner, not the full picker
+  // overlay, so it doesn't cover the xterm.
+  function _mountToast(el) {
+    return _mountOverlay(el, 'cbr-model-picker-confirm--floating')
   }
 
   async function showModelPicker() {
@@ -1809,14 +1827,14 @@ function setupChatInput() {
         const modelLabel = chosenModel.label || '(CLI default)'
         const effortLabel = chosenEffort.id ? ` · effort: ${chosenEffort.label}` : ''
         confirmEl.textContent = `Model set to ${modelLabel}${effortLabel} (this tab). Takes effect on next message.`
-        _appendToScroll(confirmEl)
+        _mountToast(confirmEl)
         setTimeout(() => confirmEl.remove(), 5000)
       } catch (err) {
         console.error('[model-picker] failed to save settings:', err)
         const errEl = document.createElement('div')
         errEl.className = 'cbr-model-picker-confirm cbr-model-picker-error'
         errEl.textContent = `Failed to save model: ${err.message}`
-        _appendToScroll(errEl)
+        _mountToast(errEl)
         setTimeout(() => errEl.remove(), 5000)
       }
       chatInput.focus()
@@ -1949,13 +1967,13 @@ function setupChatInput() {
       confirmEl.className = 'cbr-model-picker-confirm'
       const label = value || '(CLI default)'
       confirmEl.textContent = `Codex model set to ${label} (this tab). Takes effect on next message.`
-      _appendToScroll(confirmEl)
+      _mountToast(confirmEl)
       setTimeout(() => confirmEl.remove(), 5000)
     } catch (err) {
       const errEl = document.createElement('div')
       errEl.className = 'cbr-model-picker-confirm cbr-model-picker-error'
       errEl.textContent = `Failed to set codex model: ${err.message}`
-      _appendToScroll(errEl)
+      _mountToast(errEl)
       setTimeout(() => errEl.remove(), 5000)
     }
     chatInput.focus()
@@ -1978,14 +1996,14 @@ function setupChatInput() {
       const modelLabel = chosenModel.label || '(CLI default)'
       const effortLabel = chosenEffort.id ? ` · effort: ${chosenEffort.label}` : ''
       confirmEl.textContent = `Codex model set to ${modelLabel}${effortLabel} (this tab). Takes effect on next message.`
-      _appendToScroll(confirmEl)
+      _mountToast(confirmEl)
       setTimeout(() => confirmEl.remove(), 5000)
     } catch (err) {
       console.error('[codex-model-picker] failed to save settings:', err)
       const errEl = document.createElement('div')
       errEl.className = 'cbr-model-picker-confirm cbr-model-picker-error'
       errEl.textContent = `Failed to save codex model: ${err.message}`
-      _appendToScroll(errEl)
+      _mountToast(errEl)
       setTimeout(() => errEl.remove(), 5000)
     }
     chatInput.focus()
