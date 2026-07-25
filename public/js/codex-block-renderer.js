@@ -2180,12 +2180,15 @@ export class CodexBlockRenderer {
       this._sessionInfoData = {}
     }
     this._sessionInfoData[key] = value
-    // Render compact: model / directory / permissions
+    // Render compact: model / effort / directory / permissions
     const parts = []
     if (this._sessionInfoData.model) {
       // Trim the "/model to change" hint that codex appends after the model name
       const modelName = this._sessionInfoData.model.replace(/\s*\/model\s+to\s+change.*$/i, '').replace(/\s{2,}/g, ' ').trim()
       parts.push(`<span class="cbx-si-model">${escHtml(modelName)}</span>`)
+    }
+    if (this._sessionInfoData.effort) {
+      parts.push(`<span class="cbx-si-effort">effort: ${escHtml(this._sessionInfoData.effort)}</span>`)
     }
     if (this._sessionInfoData.directory) {
       const dir = this._sessionInfoData.directory
@@ -2310,6 +2313,14 @@ export class CodexBlockRenderer {
         break
       case 'thread.started':
         // informational — no visual rendering
+        break
+      case 'nanocode:session-info':
+        // Driver surfaces the resolved model + reasoning effort for this turn
+        // (the SDK's own events don't carry it). Accumulate into the codex
+        // session-info header so the picker's selection is visibly effective on
+        // the next turn. ``/null = follow config default (shown only if set).
+        if (event.model) this._accumulateSessionInfo('model', event.model)
+        if (event.effort) this._accumulateSessionInfo('effort', event.effort)
         break
     }
   }

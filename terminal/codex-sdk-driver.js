@@ -115,7 +115,11 @@ export function createCodexSdkDriver({
     // modelOverride at attach; the frontend /model picker writes the tab (not the
     // global codex_model setting) so sibling codex tabs keep their own model.
     const codexModel = cs.codexModelOverride || store.getSetting('codex_model') || ''
-    const codexEffort = store.getSetting('codex_effort') || ''
+    // Per-tab reasoning-effort override (codex model picker step 2): same
+    // root-fix pattern as codexModelOverride — the tab's effortOverride wins
+    // over the global codex_effort setting so sibling codex tabs keep their own
+    // effort. The SDK accepts minimal/low/medium/high/xhigh (ModelReasoningEffort).
+    const codexEffort = cs.codexEffortOverride || store.getSetting('codex_effort') || ''
     const sandboxMode = store.getSetting('codex_sandbox_mode') || 'danger-full-access'
     const pathOverride = store.getSetting('codex_path_override') || ''
 
@@ -145,6 +149,19 @@ export function createCodexSdkDriver({
     }
     if (codexModel) threadOptions.model = codexModel
     if (codexEffort) threadOptions.modelReasoningEffort = codexEffort
+
+    // Surface the resolved model + reasoning effort to the frontend as a
+    // structured event so the codex session-info header (the "codex 头部") shows
+    // what this turn is actually using. The SDK's own events don't carry the
+    // model (thread.started only has thread_id), so without this the user can't
+    // see which model/effort a codex turn used — a requirement of the model
+    // picker (selection must be visibly effective on the next turn). The
+    // renderer's _handleCodexEvent accumulates this into the session-info bar.
+    codexBroadcastEvent(cs, {
+      type: 'nanocode:session-info',
+      model: codexModel || null,
+      effort: codexEffort || null,
+    })
 
     const client = new CodexImpl(codexOptions)
     const thread = cs.codexThreadId

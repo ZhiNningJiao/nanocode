@@ -8,6 +8,7 @@ import { createStore } from '../store.js'
 import { createTerminalRoutes } from '../../terminal/routes.js'
 import { createCodexSdkDriver } from '../../terminal/codex-sdk-driver.js'
 import { createClaudeSdkDriver } from '../../terminal/claude-sdk-driver.js'
+import { createClaudeSessionController } from '../../terminal/claude-session-controller.js'
 
 const tempDirs = []
 
@@ -306,6 +307,90 @@ describe('codex sdk driver honors tab model override', () => {
     assert.equal(calls.threadCalls[0].options.model, 'gpt-5.6-sol',
       'gpt-5.6-sol must reach the thread options unmodified (no model whitelist)')
   })
+
+  it('uses cs.codexEffortOverride in preference to the global codex_effort', async () => {
+    const store = {
+      getSetting(key) {
+        if (key === 'codex_model') return 'gpt-5-codex'
+        if (key === 'codex_effort') return 'high'
+        if (key === 'codex_sandbox_mode') return 'workspace-write'
+        if (key === 'codex_path_override') return '/tmp/codex-bin'
+        return null
+      },
+      updateTabMetadata() {},
+    }
+    const cs = {
+      codexThreadId: null,
+      codexModelOverride: 'gpt-5.6-sol',
+      codexEffortOverride: 'minimal',
+      busy: false,
+      turnCount: 0,
+      queue: [],
+      clients: new Set(),
+      scrollback: '',
+    }
+    const { driver, calls } = codexDriverHarness({ store, cs })
+    await driver.runCodexTurn(cs, 'hi', 'project-1:codex:tab-1', '/tmp/w')
+
+    assert.equal(calls.threadCalls[0].options.model, 'gpt-5.6-sol')
+    assert.equal(calls.threadCalls[0].options.modelReasoningEffort, 'minimal',
+      'cs.codexEffortOverride must win over the global codex_effort')
+  })
+
+  it('falls back to the global codex_effort when no tab effort override is set', async () => {
+    const store = {
+      getSetting(key) {
+        if (key === 'codex_model') return 'gpt-5-codex'
+        if (key === 'codex_effort') return 'high'
+        if (key === 'codex_sandbox_mode') return 'workspace-write'
+        if (key === 'codex_path_override') return '/tmp/codex-bin'
+        return null
+      },
+      updateTabMetadata() {},
+    }
+    const cs = {
+      codexThreadId: null,
+      codexModelOverride: null,
+      // codexEffortOverride absent → must fall through to global codex_effort
+      busy: false,
+      turnCount: 0,
+      queue: [],
+      clients: new Set(),
+      scrollback: '',
+    }
+    const { driver, calls } = codexDriverHarness({ store, cs })
+    await driver.runCodexTurn(cs, 'hi', 'project-1:codex:tab-1', '/tmp/w')
+
+    assert.equal(calls.threadCalls[0].options.model, 'gpt-5-codex')
+    assert.equal(calls.threadCalls[0].options.modelReasoningEffort, 'high',
+      'absent override must fall through to the global codex_effort')
+  })
+
+  it('null codexEffortOverride falls through to the global codex_effort', async () => {
+    const store = {
+      getSetting(key) {
+        if (key === 'codex_model') return 'gpt-5-codex'
+        if (key === 'codex_effort') return 'medium'
+        return null
+      },
+      updateTabMetadata() {},
+    }
+    const cs = {
+      codexThreadId: null,
+      codexModelOverride: null,
+      codexEffortOverride: null,
+      busy: false,
+      turnCount: 0,
+      queue: [],
+      clients: new Set(),
+      scrollback: '',
+    }
+    const { driver, calls } = codexDriverHarness({ store, cs })
+    await driver.runCodexTurn(cs, 'hi', 'project-1:codex:tab-1', '/tmp/w')
+
+    assert.equal(calls.threadCalls[0].options.modelReasoningEffort, 'medium',
+      'null override must fall through to the global codex_effort')
+  })
 })
 
 describe('claude sdk driver honors tab model/effort override', () => {
@@ -465,5 +550,166 @@ describe('PATCH /api/projects/:id/tabs/:tabId/model', () => {
     const broadcasted = (lastUpdate.tabs || []).find((t) => t.id === tab.id)
     assert.ok(broadcasted, 'the patched tab must appear in the broadcast')
     assert.equal(broadcasted.modelOverride, 'claude-opus-4-8')
+  })
+
+  it('persists modelOverride + effortOverride on a codex tab and broadcasts them', async () => {
+    const tempRoot = makeTempDir('nanocode-tab-model-route-')
+    const projectCwd = path.join(tempRoot, 'workspace')
+    mkdirSync(projectCwd, { recursive: true })
+
+    const store = createStore(':memory:')
+    const project = store.createProject('Codex Route Project', projectCwd)
+    const tab = store.createTab(project.id, { type: 'codex', label: 'cx1' })
+
+    const { router, handleTabsWs } = createTerminalRoutes(store)
+
+    const ws = new MockWs()
+    handleTabsWs(ws)
+    ws.emit('message', JSON.stringify({ type: 'subscribe', projectId: project.id }))
+
+    const res = await invokeRoute(
+      router,
+      'PATCH',
+      `/api/projects/${project.id}/tabs/${tab.id}/model`,
+      { modelOverride: 'gpt-5.6-sol', effortOverride: 'minimal' }
+    )
+    assert.equal(res.statusCode, 200)
+    assert.equal(res.payload.modelOverride, 'gpt-5.6-sol')
+    assert.equal(res.payload.effortOverride, 'minimal')
+
+    // Persisted on the tab (the codex SDK driver reads tab.effortOverride at attach).
+    const fetched = store.getTab(project.id, tab.id)
+    assert.equal(fetched.modelOverride, 'gpt-5.6-sol')
+    assert.equal(fetched.effortOverride, 'minimal')
+
+    // Broadcast carries both fields so sibling tabs (and the badge) refresh.
+    const tabsUpdates = ws.sent.filter((m) => m.type === 'tabs:update')
+    const lastUpdate = tabsUpdates[tabsUpdates.length - 1]
+    const broadcasted = (lastUpdate.tabs || []).find((t) => t.id === tab.id)
+    assert.ok(broadcasted, 'the patched codex tab must appear in the broadcast')
+    assert.equal(broadcasted.modelOverride, 'gpt-5.6-sol')
+    assert.equal(broadcasted.effortOverride, 'minimal')
+  })
+
+  it('clears a codex tab effortOverride with empty string → follows the global default', async () => {
+    const tempRoot = makeTempDir('nanocode-tab-model-route-')
+    const projectCwd = path.join(tempRoot, 'workspace')
+    mkdirSync(projectCwd, { recursive: true })
+
+    const store = createStore(':memory:')
+    const project = store.createProject('Codex Clear Project', projectCwd)
+    const tab = store.createTab(project.id, { type: 'codex', label: 'cx2' })
+
+    const { router } = createTerminalRoutes(store)
+
+    await invokeRoute(
+      router,
+      'PATCH',
+      `/api/projects/${project.id}/tabs/${tab.id}/model`,
+      { effortOverride: 'high' }
+    )
+    assert.equal(store.getTab(project.id, tab.id).effortOverride, 'high')
+
+    // '' clears the override → null (driver reads tab.effortOverride || global).
+    const res = await invokeRoute(
+      router,
+      'PATCH',
+      `/api/projects/${project.id}/tabs/${tab.id}/model`,
+      { effortOverride: '' }
+    )
+    assert.equal(res.statusCode, 200)
+    assert.equal(res.payload.effortOverride, null)
+    assert.equal(store.getTab(project.id, tab.id).effortOverride, null)
+  })
+})
+
+describe('setTabModelOverride updates the live codex session cs', () => {
+  // The PATCH route persists on the tab AND calls setTabModelOverride to update
+  // the in-memory cs so the next turn honors the new model/effort without a WS
+  // reconnect. This test pins the codexEffortOverride seam (the model seam was
+  // already exercised by the existing codexModelOverride tests).
+  it('sets codexModelOverride + codexEffortOverride on the live codex cs', () => {
+    const tempRoot = makeTempDir('nanocode-codex-ctrl-')
+    const projectCwd = path.join(tempRoot, 'workspace')
+    mkdirSync(projectCwd, { recursive: true })
+
+    const store = createStore(':memory:')
+    const project = store.createProject('Codex Ctrl Project', projectCwd)
+    const tab = store.createTab(project.id, { type: 'codex', label: 'cx' })
+
+    const recentAgents = {
+      getRecentAgentsCached() { return [] },
+      primeRecentAgentsCache() {},
+    }
+    const controller = createClaudeSessionController({ store, home: process.cwd(), recentAgents })
+
+    // Seed a live codex session (as attachCodexSession would create on ws attach).
+    const sessionKey = `${project.id}:codex:${tab.id}`
+    const cs = {
+      sessionKey,
+      codexThreadId: null,
+      codexModelOverride: null,
+      codexEffortOverride: null,
+      clients: new Set(),
+      scrollback: '',
+      eventHistory: [],
+      busy: false,
+      turnCount: 0,
+      cwd: projectCwd,
+      currentProc: null,
+      queue: [],
+      inputBuffer: '',
+    }
+    controller.codexSessions.set(sessionKey, cs)
+
+    controller.setTabModelOverride(project.id, tab.id, { modelOverride: 'gpt-5.6-sol', effortOverride: 'minimal' })
+
+    assert.equal(cs.codexModelOverride, 'gpt-5.6-sol', 'live codex cs must reflect the new model override')
+    assert.equal(cs.codexEffortOverride, 'minimal', 'live codex cs must reflect the new effort override')
+  })
+
+  it('clears codexEffortOverride with null/empty → follows the global default', () => {
+    const tempRoot = makeTempDir('nanocode-codex-ctrl-')
+    const projectCwd = path.join(tempRoot, 'workspace')
+    mkdirSync(projectCwd, { recursive: true })
+
+    const store = createStore(':memory:')
+    const project = store.createProject('Codex Ctrl Clear Project', projectCwd)
+    const tab = store.createTab(project.id, { type: 'codex', label: 'cx2' })
+
+    const recentAgents = { getRecentAgentsCached() { return [] }, primeRecentAgentsCache() {} }
+    const controller = createClaudeSessionController({ store, home: process.cwd(), recentAgents })
+
+    const sessionKey = `${project.id}:codex:${tab.id}`
+    const cs = { sessionKey, codexModelOverride: 'gpt-5.6', codexEffortOverride: 'high', clients: new Set(), scrollback: '', eventHistory: [], busy: false, turnCount: 0, cwd: projectCwd, currentProc: null, queue: [], inputBuffer: '' }
+    controller.codexSessions.set(sessionKey, cs)
+
+    controller.setTabModelOverride(project.id, tab.id, { effortOverride: '' })
+
+    assert.equal(cs.codexEffortOverride, null, 'empty effortOverride must clear the live override → null')
+    assert.equal(cs.codexModelOverride, 'gpt-5.6', 'model override is untouched when only effort is patched')
+  })
+
+  it('does not touch codexEffortOverride when only modelOverride is patched', () => {
+    const tempRoot = makeTempDir('nanocode-codex-ctrl-')
+    const projectCwd = path.join(tempRoot, 'workspace')
+    mkdirSync(projectCwd, { recursive: true })
+
+    const store = createStore(':memory:')
+    const project = store.createProject('Codex Ctrl ModelOnly Project', projectCwd)
+    const tab = store.createTab(project.id, { type: 'codex', label: 'cx3' })
+
+    const recentAgents = { getRecentAgentsCached() { return [] }, primeRecentAgentsCache() {} }
+    const controller = createClaudeSessionController({ store, home: process.cwd(), recentAgents })
+
+    const sessionKey = `${project.id}:codex:${tab.id}`
+    const cs = { sessionKey, codexModelOverride: null, codexEffortOverride: 'xhigh', clients: new Set(), scrollback: '', eventHistory: [], busy: false, turnCount: 0, cwd: projectCwd, currentProc: null, queue: [], inputBuffer: '' }
+    controller.codexSessions.set(sessionKey, cs)
+
+    // /model <name> path: only modelOverride in the patch → effort stays.
+    controller.setTabModelOverride(project.id, tab.id, { modelOverride: 'gpt-5.5' })
+
+    assert.equal(cs.codexModelOverride, 'gpt-5.5')
+    assert.equal(cs.codexEffortOverride, 'xhigh', 'effort override must be preserved when only model is patched')
   })
 })

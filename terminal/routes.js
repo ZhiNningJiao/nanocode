@@ -494,8 +494,10 @@ export function createTerminalRoutes(store, opts = {}) {
       const m = typeof body.modelOverride === 'string' ? body.modelOverride.trim() : ''
       patch.modelOverride = m || null
     }
-    // effortOverride only applies to claude (codex effort is a separate setting);
-    // accepted on any tab but only read by claude drivers.
+    // effortOverride applies to both claude AND codex: claude drivers read
+    // claudeEffortOverride, the codex SDK driver reads codexEffortOverride
+    // (codex model picker step 2). Either way the per-tab value wins over the
+    // global claude_effort / codex_effort setting; '' or null clears it.
     if (Object.prototype.hasOwnProperty.call(body, 'effortOverride')) {
       const e = typeof body.effortOverride === 'string' ? body.effortOverride.trim() : ''
       patch.effortOverride = e || null
