@@ -624,6 +624,13 @@ if (codexRenderModeSaveBtn) {
 // The Team & Model pane in plugins-panel.js still writes the global
 // codex_model key, which now acts as the per-tab default (tabs with no
 // modelOverride follow it).
+//
+// 需求9476 (codex model picker): bare /model and the model badge next to the
+// chat box open a two-step codex picker (model + reasoning effort). Step 2's
+// effort is persisted as a per-tab `effortOverride` on the same PATCH route;
+// the driver reads cs.codexEffortOverride || global codex_effort each turn
+// and passes it as threadOptions.modelReasoningEffort (SDK enum:
+// minimal/low/medium/high/xhigh).
 
 // ─── Fable5 / opencode render mode save (需求11-C) ───────────────────────────
 

@@ -267,7 +267,12 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       if (effortOverride !== undefined) cCs.claudeEffortOverride = effortOverride || null
     }
     const xCs = codexSessions.get(codexSessionKeyFor(projectId, tabId))
-    if (xCs && modelOverride !== undefined) xCs.codexModelOverride = modelOverride || null
+    if (xCs) {
+      if (modelOverride !== undefined) xCs.codexModelOverride = modelOverride || null
+      // Codex picker step 2 (reasoning effort): per-tab override wins over the
+      // global codex_effort setting; '' / null clears it → follows the global.
+      if (effortOverride !== undefined) xCs.codexEffortOverride = effortOverride || null
+    }
   }
 
   // Manually move the current conversation to another team NOW: copy the
@@ -1506,6 +1511,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // codex_model setting, so sibling codex tabs keep their own model. The
         // driver reads cs.codexModelOverride || global codex_model each turn.
         codexModelOverride: tab?.modelOverride || null,
+        // Per-tab reasoning-effort override (codex model picker step 2): same
+        // pattern as codexModelOverride — persisted on the tab, not the global
+        // codex_effort setting, so sibling codex tabs keep their own effort.
+        // The driver reads cs.codexEffortOverride || global codex_effort each turn.
+        codexEffortOverride: tab?.effortOverride || null,
         clients: new Set(),
         scrollback: '',
         eventHistory: [],

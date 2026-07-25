@@ -135,6 +135,7 @@ describe('codex sdk driver', () => {
       { projectId: 'project-1', tabId: 'tab-1', patch: { codexThreadId: 'thread-1' } },
     ])
     assert.deepEqual(rawEvents.map((event) => event.type), [
+      'nanocode:session-info',
       'thread.started',
       'item.started',
       'item.completed',
@@ -142,6 +143,11 @@ describe('codex sdk driver', () => {
       'item.completed',
       'turn.completed',
     ])
+    // The driver surfaces the resolved model + effort to the frontend as a
+    // structured event (the SDK's own events don't carry the model).
+    assert.equal(rawEvents[0].type, 'nanocode:session-info')
+    assert.equal(rawEvents[0].model, 'gpt-5-codex')
+    assert.equal(rawEvents[0].effort, 'high')
     // Agent message text is streamed and recorded to scrollback; it is no longer
     // emitted as a single live output block.
     assert.deepEqual(textEvents, [

@@ -915,30 +915,74 @@ function setupChatInput() {
   // the same two-step model/effort picker as `/model`, so switching models never
   // requires typing a slash command (mobile-first). On claude tabs it stays
   // visible even before the first reply so the affordance is always reachable.
+  //
+  // Codex tabs reuse the SAME badge (需求 9476 model picker): the codex SDK
+  // bypasses the CLI REPL so no "/model" prompt ever reaches the model — the
+  // badge + /model are the only way to switch. The codex SDK events don't carry
+  // the model (thread.started only has thread_id), so the codex badge is driven
+  // from the active tab's modelOverride (set by the picker) || the global
+  // codex_model setting, refreshed on nanocode:codex-model / tab-active.
   const modelBadgeEl = document.getElementById('model-badge')
   const _modelByTab = new Map()
+  const _codexModelByTab = new Map()
+  let _codexSettingsModel = '' // cached global codex_model (fallback for the badge)
+
+  async function _refreshCodexSettingsModel() {
+    try {
+      const res = await fetch('/api/settings')
+      if (res.ok) {
+        const s = await res.json()
+        _codexSettingsModel = s.codex_model || ''
+      }
+    } catch { /* badge falls back to the tab override alone */ }
+  }
+
+  function _codexBadgeLabel(model) {
+    if (!model) return ''
+    // "gpt-5.6-sol" stays "gpt-5.6-sol" (already short); just keep it.
+    return model
+  }
 
   function _updateModelBadge() {
     if (!modelBadgeEl) return
     const activeId = tabManager ? tabManager.activeId : null
-    if (!isBlockAgentTab || !activeId) {
-      // Non-claude tabs: hide the badge (no model concept / no picker).
+    if (!activeId) {
       modelBadgeEl.hidden = true
       modelBadgeEl.classList.remove('model-badge--pickable')
       return
     }
-    const model = _modelByTab.get(activeId)
-    if (model) {
-      // "claude-fable-5" → "fable-5": keep the pill short (mobile-friendly).
-      modelBadgeEl.textContent = model.replace(/^claude-/, '')
-      modelBadgeEl.title = t('composer.model.tooltip')
-    } else {
-      // No reply yet — still show a tappable "model" affordance on claude tabs.
-      modelBadgeEl.textContent = 'model'
-      modelBadgeEl.title = t('composer.model.tooltip')
+    if (isBlockAgentTab) {
+      const model = _modelByTab.get(activeId)
+      if (model) {
+        // "claude-fable-5" → "fable-5": keep the pill short (mobile-friendly).
+        modelBadgeEl.textContent = model.replace(/^claude-/, '')
+        modelBadgeEl.title = t('composer.model.tooltip')
+      } else {
+        // No reply yet — still show a tappable "model" affordance on claude tabs.
+        modelBadgeEl.textContent = 'model'
+        modelBadgeEl.title = t('composer.model.tooltip')
+      }
+      modelBadgeEl.hidden = false
+      modelBadgeEl.classList.add('model-badge--pickable')
+      return
     }
-    modelBadgeEl.hidden = false
-    modelBadgeEl.classList.add('model-badge--pickable')
+    if (isCodexTab) {
+      // Codex badge: tab override wins; global codex_model is the default.
+      const activeTab = (tabManager && tabManager.tabs)
+        ? (tabManager.tabs.find((t) => t.id === activeId) || null) : null
+      const model = _codexModelByTab.get(activeId)
+        || (activeTab && activeTab.modelOverride)
+        || _codexSettingsModel
+        || ''
+      modelBadgeEl.textContent = model ? _codexBadgeLabel(model) : 'model'
+      modelBadgeEl.title = t('composer.model.tooltip')
+      modelBadgeEl.hidden = false
+      modelBadgeEl.classList.add('model-badge--pickable')
+      return
+    }
+    // Non-agent tabs: hide the badge (no model concept / no picker).
+    modelBadgeEl.hidden = true
+    modelBadgeEl.classList.remove('model-badge--pickable')
   }
 
   if (modelBadgeEl) {
@@ -946,9 +990,14 @@ function setupChatInput() {
     modelBadgeEl.setAttribute('tabindex', '0')
     modelBadgeEl.setAttribute('aria-label', t('composer.model.tooltip'))
     const openPicker = (e) => {
-      if (modelBadgeEl.hidden || !isBlockAgentTab) return
-      e.preventDefault()
-      showModelPicker()
+      if (modelBadgeEl.hidden) return
+      if (isBlockAgentTab) {
+        e.preventDefault()
+        showModelPicker()
+      } else if (isCodexTab) {
+        e.preventDefault()
+        showCodexModelPicker()
+      }
     }
     modelBadgeEl.addEventListener('click', openPicker)
     modelBadgeEl.addEventListener('keydown', (e) => {
@@ -963,8 +1012,23 @@ function setupChatInput() {
     _updateModelBadge()
   })
 
-  document.addEventListener('nanocode:tab-active', () => _updateModelBadge())
+  // Codex: the picker dispatches this after a model/effort choice is persisted so
+  // the badge re-renders with the new model immediately (no need to wait for the
+  // next turn, which the SDK events don't reflect anyway).
+  document.addEventListener('nanocode:codex-model', (e) => {
+    const { tabId, model } = e.detail || {}
+    if (!tabId) return
+    if (model) _codexModelByTab.set(tabId, model)
+    else _codexModelByTab.delete(tabId)
+    _updateModelBadge()
+  })
+
+  document.addEventListener('nanocode:tab-active', () => {
+    _refreshCodexSettingsModel()
+    _updateModelBadge()
+  })
   // Reflect model concept when the active tab type changes at init.
+  _refreshCodexSettingsModel()
   _updateModelBadge()
 
   // ── Permission-mode badge / Shift+Tab cycle (CC parity, gap #3) ──────────
@@ -1750,16 +1814,45 @@ function setupChatInput() {
     }
   }
 
-  // ── Codex /model: persist a per-tab model override ─────────────────────
-  // The codex SDK driver reads cs.codexModelOverride (populated from the tab's
-  // modelOverride) || global codex_model each turn and passes it as
-  // threadOptions.model. The SDK calls thread.runStreamed() — a direct API call
-  // that BYPASSES the codex CLI REPL, so a literal "/model <name>" prompt is
-  // just text to the model and never switches anything. Intercept /model on
-  // codex tabs and persist a per-tab modelOverride (NOT the global codex_model
-  // setting) so sibling codex tabs keep their own model — root fix for (a)
-  // plus the cross-tab /model sync bug.
+  // ── Codex /model: per-tab model + reasoning-effort picker ─────────────
+  // The codex SDK driver reads cs.codexModelOverride / cs.codexEffortOverride
+  // (populated from the tab's modelOverride / effortOverride at attach) || the
+  // global codex_model / codex_effort setting each turn, and passes them as
+  // threadOptions.model / threadOptions.modelReasoningEffort. The SDK calls
+  // thread.runStreamed() — a direct API call that BYPASSES the codex CLI REPL, so
+  // a literal "/model <name>" prompt is just text to the model and never
+  // switches anything. Intercept /model on codex tabs and persist a per-tab
+  // modelOverride (+ effortOverride from the picker) so sibling codex tabs keep
+  // their own model/effort — root fix for (a) plus the cross-tab /model sync bug.
+  //
+  // The codex CLI accepts any model string (no fixed whitelist), so the picker
+  // offers a curated list PLUS a "Custom…" free-form input. Reasoning effort uses
+  // the SDK's ModelReasoningEffort enum: minimal/low/medium/high/xhigh.
+  const _CODEX_MODEL_PICKER_LIST = [
+    { id: 'gpt-5.6-sol',  label: 'gpt-5.6-sol',  hint: 'Latest · recommended · default in config.toml' },
+    { id: 'gpt-5.6',      label: 'gpt-5.6',      hint: 'Powerful · complex tasks' },
+    { id: 'gpt-5.5',      label: 'gpt-5.5',      hint: 'Balanced' },
+    { id: 'gpt-5-codex',  label: 'gpt-5-codex',  hint: 'Code-tuned' },
+    { id: '',             label: '(CLI default)', hint: 'Use config.toml model (no override)' },
+  ]
+
+  const _CODEX_EFFORT_PICKER_LIST = [
+    { id: 'xhigh',  label: 'xhigh',  hint: 'Max thinking budget · slowest · most thorough' },
+    { id: 'high',   label: 'high',   hint: 'Extended reasoning · thorough' },
+    { id: 'medium', label: 'medium', hint: 'Balanced speed vs depth' },
+    { id: 'low',    label: 'low',    hint: 'Fast · light reasoning' },
+    { id: 'minimal',label: 'minimal',hint: 'Fastest · minimal thinking' },
+    { id: '',       label: '(none / config default)', hint: 'No override — use config.toml effort' },
+  ]
+
+  function _dispatchCodexModelEvent(tabId, model) {
+    document.dispatchEvent(new CustomEvent('nanocode:codex-model', { detail: { tabId, model } }))
+  }
+
   async function applyCodexModel(model) {
+    // /model <name> path: set modelOverride ONLY (do not touch effortOverride,
+    // so the tab's existing effort choice is preserved). Mirrors the claude
+    // picker's per-field PATCH semantics.
     const value = (model || '').trim()
     try {
       const tabId = tabManager ? tabManager.activeId : null
@@ -1770,6 +1863,7 @@ function setupChatInput() {
         body: JSON.stringify({ modelOverride: value }),
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      _dispatchCodexModelEvent(tabId, value)
       const confirmEl = document.createElement('div')
       confirmEl.className = 'cbr-model-picker-confirm'
       const label = value || '(CLI default)'
@@ -1786,11 +1880,44 @@ function setupChatInput() {
     chatInput.focus()
   }
 
-  // Bare /model on a codex tab → echo the current codex_model and offer a
-  // free-form input (no hardcoded whitelist — any model name the user types,
-  // e.g. gpt-5.6-sol, is accepted). Mirrors the claude picker's shell/CSS.
+  async function applyCodexModelAndEffort(chosenModel, chosenEffort) {
+    dismissModelPicker()
+    try {
+      const tabId = tabManager ? tabManager.activeId : null
+      if (!currentProjectId || !tabId) throw new Error('no active codex tab')
+      const r = await fetch(`/api/projects/${currentProjectId}/tabs/${tabId}/model`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelOverride: chosenModel.id, effortOverride: chosenEffort.id }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      _dispatchCodexModelEvent(tabId, chosenModel.id)
+      const confirmEl = document.createElement('div')
+      confirmEl.className = 'cbr-model-picker-confirm'
+      const modelLabel = chosenModel.label || '(CLI default)'
+      const effortLabel = chosenEffort.id ? ` · effort: ${chosenEffort.label}` : ''
+      confirmEl.textContent = `Codex model set to ${modelLabel}${effortLabel} (this tab). Takes effect on next message.`
+      _appendToScroll(confirmEl)
+      setTimeout(() => confirmEl.remove(), 5000)
+    } catch (err) {
+      console.error('[codex-model-picker] failed to save settings:', err)
+      const errEl = document.createElement('div')
+      errEl.className = 'cbr-model-picker-confirm cbr-model-picker-error'
+      errEl.textContent = `Failed to save codex model: ${err.message}`
+      _appendToScroll(errEl)
+      setTimeout(() => errEl.remove(), 5000)
+    }
+    chatInput.focus()
+  }
+
+  // Bare /model (or the model badge) on a codex tab → two-step inline picker:
+  // Step 1 = model (curated list + Custom… free-form), Step 2 = reasoning
+  // effort. Mirrors the claude picker's two-step shell/CSS. The codex CLI has
+  // no fixed model whitelist, so "Custom…" reveals a text input for any model
+  // name the user types (e.g. gpt-5.6-sol, o7).
   async function showCodexModelPicker() {
     let curModel = ''
+    let curEffort = ''
     let configModel = null
     try {
       const [sRes, cRes] = await Promise.all([
@@ -1800,8 +1927,9 @@ function setupChatInput() {
       const activeTab = (typeof tabManager !== 'undefined' && tabManager && tabManager.tabs)
         ? (tabManager.tabs.find((t) => t.id === tabManager.activeId) || null)
         : null
-      // tab override wins; global codex_model is the default
+      // tab override wins; global codex_model / codex_effort are the defaults
       curModel = (activeTab && activeTab.modelOverride) ? activeTab.modelOverride : (sRes.codex_model || '')
+      curEffort = (activeTab && activeTab.effortOverride) ? activeTab.effortOverride : (sRes.codex_effort || '')
       configModel = cRes?.model || null
     } catch { /* picker still works, just no prefill */ }
 
@@ -1811,68 +1939,171 @@ function setupChatInput() {
     picker.className = 'cbr-model-picker cbr-model-picker--codex'
     _modelPickerEl = picker
 
-    const header = document.createElement('div')
-    header.className = 'cbr-model-picker-header'
-    header.textContent = 'Codex model'
-    picker.appendChild(header)
+    function currentHeader() {
+      const curLabel = curModel || '(CLI default)'
+      const cfgHint = configModel ? ` · config.toml: ${configModel}` : ''
+      const curEff = curEffort ? ` · effort: ${curEffort}` : ''
+      return `Current: ${curLabel}${curEff}${cfgHint}`
+    }
 
-    const cur = document.createElement('div')
-    cur.className = 'cbr-model-picker-hint'
-    const curLabel = curModel || '(CLI default)'
-    const cfgHint = configModel ? ` · config.toml: ${configModel}` : ''
-    cur.textContent = `Current: ${curLabel}${cfgHint}`
-    picker.appendChild(cur)
+    function buildModelStep(customInputValue) {
+      picker.innerHTML = ''
+      const header = document.createElement('div')
+      header.className = 'cbr-model-picker-header'
+      header.textContent = 'Select codex model (step 1 of 2)'
+      picker.appendChild(header)
 
-    const inputRow = document.createElement('div')
-    inputRow.className = 'cbr-model-picker-cancel-row'
-    const input = document.createElement('input')
-    input.type = 'text'
-    input.className = 'rp-input'
-    input.placeholder = 'e.g. gpt-5.6-sol'
-    input.value = curModel
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
+      const cur = document.createElement('div')
+      cur.className = 'cbr-model-picker-hint'
+      cur.textContent = currentHeader()
+      picker.appendChild(cur)
+
+      const grid = document.createElement('div')
+      grid.className = 'cbr-model-picker-grid'
+
+      for (const m of _CODEX_MODEL_PICKER_LIST) {
+        const btn = document.createElement('button')
+        btn.className = 'cbr-model-picker-btn' + (m.id === curModel ? ' cbr-model-picker-active' : '')
+        btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(m.label)}</span>` +
+                        `<span class="cbr-model-picker-hint">${escapeHtml(m.hint)}</span>`
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          buildEffortStep(m)
+        })
+        grid.appendChild(btn)
+      }
+
+      // Custom… button: codex accepts any model string, so offer a free-form
+      // escape hatch (the curated list is just convenience).
+      const customBtn = document.createElement('button')
+      customBtn.className = 'cbr-model-picker-btn' + (_CODEX_MODEL_PICKER_LIST.some((m) => m.id === curModel) ? '' : ' cbr-model-picker-active')
+      customBtn.innerHTML = `<span class="cbr-model-picker-name">Custom…</span>` +
+                            `<span class="cbr-model-picker-hint">Type any model name (e.g. gpt-5.6-sol, o7)</span>`
+      customBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault()
+        buildCustomModelStep()
+      })
+      grid.appendChild(customBtn)
+
+      picker.appendChild(grid)
+
+      const cancelRow = document.createElement('div')
+      cancelRow.className = 'cbr-model-picker-cancel-row'
+      const cancelBtn = document.createElement('button')
+      cancelBtn.className = 'cbr-queue-btn cbr-queue-cancel'
+      cancelBtn.textContent = 'Cancel'
+      cancelBtn.addEventListener('mousedown', (e) => { e.preventDefault(); dismissModelPicker(); chatInput.focus() })
+      cancelRow.appendChild(cancelBtn)
+      picker.appendChild(cancelRow)
+
+      const scroll = _getPickerScroll()
+      if (scroll) scroll.scrollTop = scroll.scrollHeight
+    }
+
+    function buildCustomModelStep() {
+      picker.innerHTML = ''
+      const header = document.createElement('div')
+      header.className = 'cbr-model-picker-header'
+      header.textContent = 'Custom codex model (step 1 of 2)'
+      picker.appendChild(header)
+
+      const cur = document.createElement('div')
+      cur.className = 'cbr-model-picker-hint'
+      cur.textContent = currentHeader()
+      picker.appendChild(cur)
+
+      const inputRow = document.createElement('div')
+      inputRow.className = 'cbr-model-picker-cancel-row'
+      const input = document.createElement('input')
+      input.type = 'text'
+      input.className = 'rp-input'
+      input.placeholder = 'e.g. gpt-5.6-sol'
+      input.value = curModel
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          const v = input.value.trim()
+          buildEffortStep({ id: v, label: v || '(CLI default)', hint: '' })
+        }
+      })
+      const nextBtn = document.createElement('button')
+      nextBtn.className = 'cbr-queue-btn'
+      nextBtn.textContent = 'Next →'
+      nextBtn.addEventListener('mousedown', (e) => {
         e.preventDefault()
         const v = input.value.trim()
-        applyCodexModel(v)
-        dismissModelPicker()
-      }
-    })
-    const setBtn = document.createElement('button')
-    setBtn.className = 'cbr-queue-btn'
-    setBtn.textContent = 'Set'
-    setBtn.addEventListener('mousedown', (e) => {
-      e.preventDefault()
-      const v = input.value.trim()
-      applyCodexModel(v)
-      dismissModelPicker()
-    })
-    inputRow.appendChild(input)
-    inputRow.appendChild(setBtn)
-    picker.appendChild(inputRow)
+        buildEffortStep({ id: v, label: v || '(CLI default)', hint: '' })
+      })
+      inputRow.appendChild(input)
+      inputRow.appendChild(nextBtn)
+      picker.appendChild(inputRow)
 
-    const cancelRow = document.createElement('div')
-    cancelRow.className = 'cbr-model-picker-cancel-row'
-    const clearBtn = document.createElement('button')
-    clearBtn.className = 'cbr-queue-btn'
-    clearBtn.textContent = 'Use CLI default'
-    clearBtn.addEventListener('mousedown', (e) => {
-      e.preventDefault()
-      applyCodexModel('')
-      dismissModelPicker()
-    })
-    const cancelBtn = document.createElement('button')
-    cancelBtn.className = 'cbr-queue-btn cbr-queue-cancel'
-    cancelBtn.textContent = 'Cancel'
-    cancelBtn.addEventListener('mousedown', (e) => { e.preventDefault(); dismissModelPicker(); chatInput.focus() })
-    cancelRow.appendChild(clearBtn)
-    cancelRow.appendChild(cancelBtn)
-    picker.appendChild(cancelRow)
+      const cancelRow = document.createElement('div')
+      cancelRow.className = 'cbr-model-picker-cancel-row'
+      const backBtn = document.createElement('button')
+      backBtn.className = 'cbr-queue-btn'
+      backBtn.textContent = '← Back'
+      backBtn.addEventListener('mousedown', (e) => { e.preventDefault(); buildModelStep() })
+      const cancelBtn = document.createElement('button')
+      cancelBtn.className = 'cbr-queue-btn cbr-queue-cancel'
+      cancelBtn.textContent = 'Cancel'
+      cancelBtn.addEventListener('mousedown', (e) => { e.preventDefault(); dismissModelPicker(); chatInput.focus() })
+      cancelRow.appendChild(backBtn)
+      cancelRow.appendChild(cancelBtn)
+      picker.appendChild(cancelRow)
+
+      setTimeout(() => input.focus(), 0)
+      const scroll = _getPickerScroll()
+      if (scroll) scroll.scrollTop = scroll.scrollHeight
+    }
+
+    function buildEffortStep(chosenModel) {
+      picker.innerHTML = ''
+      const header = document.createElement('div')
+      header.className = 'cbr-model-picker-header'
+      header.innerHTML = `Select reasoning effort for <strong>${escapeHtml(chosenModel.label)}</strong> (step 2 of 2)`
+      picker.appendChild(header)
+
+      const grid = document.createElement('div')
+      grid.className = 'cbr-model-picker-grid'
+
+      for (const ef of _CODEX_EFFORT_PICKER_LIST) {
+        const btn = document.createElement('button')
+        btn.className = 'cbr-model-picker-btn' + (ef.id === curEffort ? ' cbr-model-picker-active' : '')
+        btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(ef.label)}</span>` +
+                        `<span class="cbr-model-picker-hint">${escapeHtml(ef.hint)}</span>`
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          applyCodexModelAndEffort(chosenModel, ef)
+        })
+        grid.appendChild(btn)
+      }
+
+      picker.appendChild(grid)
+
+      const cancelRow = document.createElement('div')
+      cancelRow.className = 'cbr-model-picker-cancel-row'
+      const backBtn = document.createElement('button')
+      backBtn.className = 'cbr-queue-btn'
+      backBtn.textContent = '← Back'
+      backBtn.addEventListener('mousedown', (e) => { e.preventDefault(); buildModelStep() })
+      const cancelBtn = document.createElement('button')
+      cancelBtn.className = 'cbr-queue-btn cbr-queue-cancel'
+      cancelBtn.textContent = 'Cancel'
+      cancelBtn.addEventListener('mousedown', (e) => { e.preventDefault(); dismissModelPicker(); chatInput.focus() })
+      cancelRow.appendChild(backBtn)
+      cancelRow.appendChild(cancelBtn)
+      picker.appendChild(cancelRow)
+
+      const scroll = _getPickerScroll()
+      if (scroll) scroll.scrollTop = scroll.scrollHeight
+    }
+
+    buildModelStep()
 
     if (!_appendToScroll(picker)) {
+      // No CBR scroll available — fall back to clearing the picker ref.
       _modelPickerEl = null
-    } else {
-      setTimeout(() => input.focus(), 0)
     }
   }
 
