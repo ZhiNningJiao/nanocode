@@ -11,6 +11,7 @@ import { createExplorer } from './explorer.js'
 import { initRightPanel, showRightPanelTab } from './right-panel.js'
 import { t } from './i18n.js'
 import { mountFloatingEl } from './model-picker-mount.js'
+import { claudeBadgeText } from './model-badge.js'
 
 const mobileQuery = window.matchMedia('(max-width: 768px)')
 const isMobile = () => mobileQuery.matches
@@ -953,16 +954,22 @@ function setupChatInput() {
       return
     }
     if (isBlockAgentTab) {
-      const model = _modelByTab.get(activeId)
-      if (model) {
-        // "claude-fable-5" → "fable-5": keep the pill short (mobile-friendly).
-        modelBadgeEl.textContent = model.replace(/^claude-/, '')
-        modelBadgeEl.title = t('composer.model.tooltip')
-      } else {
-        // No reply yet — still show a tappable "model" affordance on claude tabs.
-        modelBadgeEl.textContent = 'model'
-        modelBadgeEl.title = t('composer.model.tooltip')
-      }
+      // Claude (block) badge: the model ACTUALLY generating the last reply wins
+      // (filled by the block renderer's nanocode:claude-model dispatch on each
+      // assistant message_start); fall back to the tab's modelOverride (the
+      // picker's per-tab pick) so the user sees their selection immediately, even
+      // before the first turn / after a page reload. Root fix for the badge being
+      // stuck on 'model' after picking — the old code read _modelByTab only, so a
+      // tab with an override but no turn yet always rendered the bare 'model'
+      // affordance. Mirrors the codex branch's reported > override > 'model'
+      // priority. claudeBadgeText strips a `claude-` prefix but keeps `[1m]`.
+      const activeTab = (tabManager && tabManager.tabs)
+        ? (tabManager.tabs.find((t) => t.id === activeId) || null) : null
+      modelBadgeEl.textContent = claudeBadgeText({
+        reportedModel: _modelByTab.get(activeId),
+        modelOverride: activeTab && activeTab.modelOverride,
+      })
+      modelBadgeEl.title = t('composer.model.tooltip')
       modelBadgeEl.hidden = false
       modelBadgeEl.classList.add('model-badge--pickable')
       return
@@ -1007,9 +1014,15 @@ function setupChatInput() {
   }
 
   document.addEventListener('nanocode:claude-model', (e) => {
+    // Reported model from a real reply (always non-empty) OR the picker's
+    // choice (may be '' = clear override). On clear, DELETE the entry so the
+    // badge falls back to modelOverride (which the picker cleared) → 'model';
+    // a stale reported model must never linger after the user clears the pick.
+    // Symmetric with the codex listener's set-on-value / delete-on-empty.
     const { tabId, model } = e.detail || {}
-    if (!tabId || !model) return
-    _modelByTab.set(tabId, model)
+    if (!tabId) return
+    if (model) _modelByTab.set(tabId, model)
+    else _modelByTab.delete(tabId)
     _updateModelBadge()
   })
 
@@ -1975,6 +1988,25 @@ function setupChatInput() {
           body: JSON.stringify({ modelOverride: chosenModel.id, effortOverride: chosenEffort.id }),
         })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        // Optimistically sync the active tab's override so the badge (which
+        // falls back to modelOverride) is correct immediately, before the
+        // server's tabs:update broadcast arrives — and so clearing the override
+        // leaves no stale residue: the badge reads '' → 'model' at once. The
+        // broadcast will confirm these fields shortly (and overwrites on any
+        // real divergence), same optimistic-flip pattern as the star toggle.
+        const activeTab = (tabManager && tabManager.tabs)
+          ? (tabManager.tabs.find((t) => t.id === tabId) || null) : null
+        if (activeTab) {
+          activeTab.modelOverride = chosenModel.id || ''
+          activeTab.effortOverride = chosenEffort.id || ''
+        }
+        // Notify the badge live, without waiting for the next turn. model:'' =
+        // clear override → the nanocode:claude-model listener deletes the cache
+        // entry so the badge falls back to the (now-cleared) modelOverride →
+        // 'model'. Symmetric with codex's _dispatchCodexModelEvent.
+        document.dispatchEvent(new CustomEvent('nanocode:claude-model', {
+          detail: { tabId, model: chosenModel.id || '' },
+        }))
         // Show confirmation as a system info message rendered inline
         const confirmEl = document.createElement('div')
         confirmEl.className = 'cbr-model-picker-confirm'
