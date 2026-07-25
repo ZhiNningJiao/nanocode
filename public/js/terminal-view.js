@@ -1662,6 +1662,22 @@ function setupChatInput() {
     return true
   }
 
+  // Mount the model picker. Block-mode agent panes have a conversation scroll
+  // (.cbr-scroll / .cbx-scroll) where the picker flows inline at the bottom.
+  // Terminal-mode codex tabs have NO such scroll (the pane is an xterm), so the
+  // picker would never mount and the badge click silently did nothing. Fall
+  // back to the .pane-terminal container and flag the picker as --floating so
+  // CSS anchors it as an overlay (position:absolute, bottom-anchored, own
+  // scroll). The pane is made a positioning context via .terminal-track scope.
+  function _mountPicker(picker) {
+    if (_appendToScroll(picker)) return true
+    const mount = activePane?.container || null
+    if (!mount) return false
+    picker.classList.add('cbr-model-picker--floating')
+    mount.appendChild(picker)
+    return true
+  }
+
   async function showModelPicker() {
     dismissModelPicker()
 
@@ -1808,8 +1824,7 @@ function setupChatInput() {
 
     buildModelStep()
 
-    if (!_appendToScroll(picker)) {
-      // No CBR scroll available (plain terminal tab) — fall back to clearing input
+    if (!_mountPicker(picker)) {
       _modelPickerEl = null
     }
   }
@@ -1844,6 +1859,72 @@ function setupChatInput() {
     { id: 'minimal',label: 'minimal',hint: 'Fastest · minimal thinking' },
     { id: '',       label: '(none / config default)', hint: 'No override — use config.toml effort' },
   ]
+
+  // Codex model list source of truth: ~/.codex/models_cache.json, served by
+  // GET /api/codex/models. The hardcoded _CODEX_MODEL_PICKER_LIST above is a
+  // FALLBACK ONLY — it goes stale (e.g. gpt-5.6 / gpt-5-codex no longer exist),
+  // so the picker prefers the live cache. Cached per-session after the first
+  // fetch; refreshed on picker open if the cache is empty or marked stale.
+  let _codexModelsCache = null // { models, configModel, fallback } | null
+
+  async function _fetchCodexModels() {
+    try {
+      const r = await fetch('/api/codex/models')
+      if (!r.ok) return null
+      const j = await r.json()
+      if (!j || !Array.isArray(j.models)) return null
+      _codexModelsCache = j
+      return j
+    } catch { return null }
+  }
+
+  // Build the model picker list. Uses the live cache when available; falls back
+  // to the curated hardcoded list otherwise. Always appends a "(CLI default)"
+  // entry (id='') so the user can clear the override. "Custom…" is rendered
+  // separately by the caller (it has the free-form input step).
+  function _codexModelPickerList() {
+    const cfgModel = _codexModelsCache?.configModel || null
+    if (_codexModelsCache && !_codexModelsCache.fallback && _codexModelsCache.models.length) {
+      const list = _codexModelsCache.models.map((m) => {
+        const hint = (m.description || '') + (m.slug === cfgModel ? ' · default in config.toml' : '')
+        return { id: m.slug, label: m.slug, hint }
+      })
+      list.push({ id: '', label: '(CLI default)', hint: 'Use config.toml model (no override)' })
+      return list
+    }
+    // Fallback: mark the hardcoded entry that matches config.toml.
+    return _CODEX_MODEL_PICKER_LIST.map((m) => ({
+      ...m,
+      hint: m.id && m.id === cfgModel ? (m.hint ? m.hint.replace(/ · default in config\.toml.*$/, '') + ' · default in config.toml' : 'default in config.toml') : m.hint,
+    }))
+  }
+
+  // Build the effort picker list for a chosen model. If the model is in the
+  // live cache, use its supported_reasoning_levels (the authoritative set —
+  // some models support max/ultra, others only up to xhigh). Otherwise fall back
+  // to the curated _CODEX_EFFORT_PICKER_LIST. Always appends a "(none)" entry.
+  const _CODEX_EFFORT_HINTS = {
+    ultra: 'Maximum reasoning + automatic task delegation',
+    max: 'Maximum reasoning depth · hardest problems',
+    xhigh: 'Extra high reasoning · complex problems',
+    high: 'Extended reasoning · thorough',
+    medium: 'Balanced speed vs depth',
+    low: 'Fast · light reasoning',
+    minimal: 'Fastest · minimal thinking',
+  }
+  function _codexEffortPickerList(modelSlug) {
+    const m = _codexModelsCache && !_codexModelsCache.fallback
+      ? _codexModelsCache.models.find((x) => x.slug === modelSlug)
+      : null
+    if (m && Array.isArray(m.supported_reasoning_levels) && m.supported_reasoning_levels.length) {
+      const list = m.supported_reasoning_levels.map((ef) => ({
+        id: ef, label: ef, hint: _CODEX_EFFORT_HINTS[ef] || '',
+      }))
+      list.push({ id: '', label: '(none / config default)', hint: 'No override — use config.toml effort' })
+      return list
+    }
+    return _CODEX_EFFORT_PICKER_LIST
+  }
 
   function _dispatchCodexModelEvent(tabId, model) {
     document.dispatchEvent(new CustomEvent('nanocode:codex-model', { detail: { tabId, model } }))
@@ -1923,6 +2004,9 @@ function setupChatInput() {
       const [sRes, cRes] = await Promise.all([
         fetch('/api/settings').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
         fetch('/api/codex/config').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        // Refresh the model cache every open so a newly-fetched models_cache.json
+        // shows up without a page reload. Falls back to the hardcoded list on error.
+        _fetchCodexModels(),
       ])
       const activeTab = (typeof tabManager !== 'undefined' && tabManager && tabManager.tabs)
         ? (tabManager.tabs.find((t) => t.id === tabManager.activeId) || null)
@@ -1930,7 +2014,9 @@ function setupChatInput() {
       // tab override wins; global codex_model / codex_effort are the defaults
       curModel = (activeTab && activeTab.modelOverride) ? activeTab.modelOverride : (sRes.codex_model || '')
       curEffort = (activeTab && activeTab.effortOverride) ? activeTab.effortOverride : (sRes.codex_effort || '')
-      configModel = cRes?.model || null
+      // configModel: prefer the value carried by the models endpoint (single
+      // source of truth), fall back to the dedicated /api/codex/config one.
+      configModel = (_codexModelsCache && _codexModelsCache.configModel) || cRes?.model || null
     } catch { /* picker still works, just no prefill */ }
 
     dismissModelPicker()
@@ -1961,7 +2047,8 @@ function setupChatInput() {
       const grid = document.createElement('div')
       grid.className = 'cbr-model-picker-grid'
 
-      for (const m of _CODEX_MODEL_PICKER_LIST) {
+      const modelList = _codexModelPickerList()
+      for (const m of modelList) {
         const btn = document.createElement('button')
         btn.className = 'cbr-model-picker-btn' + (m.id === curModel ? ' cbr-model-picker-active' : '')
         btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(m.label)}</span>` +
@@ -1976,7 +2063,7 @@ function setupChatInput() {
       // Custom… button: codex accepts any model string, so offer a free-form
       // escape hatch (the curated list is just convenience).
       const customBtn = document.createElement('button')
-      customBtn.className = 'cbr-model-picker-btn' + (_CODEX_MODEL_PICKER_LIST.some((m) => m.id === curModel) ? '' : ' cbr-model-picker-active')
+      customBtn.className = 'cbr-model-picker-btn' + (modelList.some((m) => m.id === curModel) ? '' : ' cbr-model-picker-active')
       customBtn.innerHTML = `<span class="cbr-model-picker-name">Custom…</span>` +
                             `<span class="cbr-model-picker-hint">Type any model name (e.g. gpt-5.6-sol, o7)</span>`
       customBtn.addEventListener('mousedown', (e) => {
@@ -2067,7 +2154,7 @@ function setupChatInput() {
       const grid = document.createElement('div')
       grid.className = 'cbr-model-picker-grid'
 
-      for (const ef of _CODEX_EFFORT_PICKER_LIST) {
+      for (const ef of _codexEffortPickerList(chosenModel.id)) {
         const btn = document.createElement('button')
         btn.className = 'cbr-model-picker-btn' + (ef.id === curEffort ? ' cbr-model-picker-active' : '')
         btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(ef.label)}</span>` +
@@ -2101,8 +2188,9 @@ function setupChatInput() {
 
     buildModelStep()
 
-    if (!_appendToScroll(picker)) {
-      // No CBR scroll available — fall back to clearing the picker ref.
+    if (!_mountPicker(picker)) {
+      // No scroll AND no pane container — clear the picker ref so dismissModelPicker
+      // stays consistent. Should not happen in practice (every tab has a pane).
       _modelPickerEl = null
     }
   }
