@@ -6552,6 +6552,21 @@ body.workspace-active .landing-overlay { display: none; }
   border-color: var(--error, #f87171);
   color: var(--error, #f87171);
 }
+/* Terminal-mode codex tabs have no conversation scroll to flow the picker into,
+   so _mountPicker falls back to the .pane-terminal container and adds --floating.
+   Anchor the picker as a bottom overlay with its own scroll so it doesn't
+   disturb xterm's dimension calc (the pane keeps its size; the picker floats). */
+.terminal-track > .pane-terminal { position: relative; }
+.cbr-model-picker--floating {
+  position: absolute;
+  left: var(--s-2, 8px);
+  right: var(--s-2, 8px);
+  bottom: var(--s-2, 8px);
+  max-height: 62%;
+  overflow: auto;
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
 
 /* ── Code block ────────────────────────────────────────────────── */
 

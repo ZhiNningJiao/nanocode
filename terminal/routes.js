@@ -29,7 +29,7 @@ import { createReposRoutes } from './repos-routes.js'
  */
 export function createTerminalRoutes(store, opts = {}) {
   const router = Router()
-  const home = homedir()
+  const home = opts?.home || homedir()
   const recentAgents = createRecentAgentsService({ home })
   const sessionController = createClaudeSessionController({
     store,
@@ -1032,6 +1032,65 @@ export function createTerminalRoutes(store, opts = {}) {
       console.warn('[codex/config] failed to read config.toml:', err.message)
     }
     res.json({ model })
+  })
+
+  // ── GET /api/codex/models ─────────────────────────────────────────────────
+  //
+  // Read ~/.codex/models_cache.json (the authoritative model list the codex CLI
+  // itself caches after fetching from the API) and return the user-selectable
+  // models. This is the source of truth for the codex model picker so the
+  // frontend never ships a stale hardcoded list (e.g. gpt-5.6 / gpt-5-codex
+  // that no longer exist). Response shape:
+  //   { fetched_at, client_version, configModel, models: [...], fallback }
+  // `models` excludes visibility:"hide" entries (internal models like the auto
+  // review model). `configModel` mirrors /api/codex/config so the picker can
+  // flag the config.toml default in a single round-trip. On any error or a
+  // missing cache file the response is `{ models: [], configModel, fallback: true }`
+  // and the frontend falls back to its built-in curated list.
+  router.get('/api/codex/models', (req, res) => {
+    const cachePath = join(home, '.codex', 'models_cache.json')
+    const configPath = join(home, '.codex', 'config.toml')
+    let configModel = null
+    try {
+      if (existsSync(configPath)) {
+        const content = readFileSync(configPath, 'utf8')
+        const match = content.match(/^model\s*=\s*"([^"]+)"/m)
+        if (match) configModel = match[1]
+      }
+    } catch (err) {
+      console.warn('[codex/models] failed to read config.toml:', err.message)
+    }
+    try {
+      if (!existsSync(cachePath)) {
+        return res.json({ fetched_at: null, client_version: null, configModel, models: [], fallback: true })
+      }
+      const raw = readFileSync(cachePath, 'utf8')
+      const parsed = JSON.parse(raw)
+      const all = Array.isArray(parsed && parsed.models) ? parsed.models : []
+      // Keep only user-facing models (visibility:"list"); drop hidden/internal
+      // ones. Preserve the cache's own ordering (priority then slug).
+      const models = all
+        .filter((m) => m && m.visibility !== 'hide')
+        .map((m) => ({
+          slug: m.slug,
+          display_name: m.display_name || m.slug,
+          description: m.description || '',
+          default_reasoning_level: m.default_reasoning_level || null,
+          supported_reasoning_levels: Array.isArray(m.supported_reasoning_levels)
+            ? m.supported_reasoning_levels.map((l) => (l && typeof l === 'object' ? l.effort : l)).filter(Boolean)
+            : [],
+        }))
+      res.json({
+        fetched_at: parsed && parsed.fetched_at ? parsed.fetched_at : null,
+        client_version: parsed && parsed.client_version ? parsed.client_version : null,
+        configModel,
+        models,
+        fallback: false,
+      })
+    } catch (err) {
+      console.warn('[codex/models] failed to read models_cache.json:', err.message)
+      res.json({ fetched_at: null, client_version: null, configModel, models: [], fallback: true })
+    }
   })
 
   // ── 需求1 plugin routes ────────────────────────────────────────────────────
