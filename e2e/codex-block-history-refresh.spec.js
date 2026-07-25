@@ -230,4 +230,65 @@ test.describe.serial('codex block history — refresh restores full history', ()
     })
     expect(userIdx).toBeLessThan(agentIdx)
   })
+
+  test('two codex tabs do not cross-contaminate history after reload', async ({ page, request }) => {
+    test.setTimeout(120_000)
+
+    // Two codex block tabs in the same project, each with a distinct prompt.
+    const name = `codex-block-2tab-${Date.now() % 100000}`
+    const projectRes = await request.post(`${BASE}/api/projects`, {
+      data: { name, cwd: path.join(tempHome, 'workspace2') },
+    })
+    const project = await projectRes.json()
+    const tabARes = await request.post(`${BASE}/api/projects/${project.id}/tabs`, {
+      data: { type: 'codex', label: 'tabA', renderMode: 'block' },
+    })
+    const tabA = await tabARes.json()
+    const tabBRes = await request.post(`${BASE}/api/projects/${project.id}/tabs`, {
+      data: { type: 'codex', label: 'tabB', renderMode: 'block' },
+    })
+    const tabB = await tabBRes.json()
+    const listRes = await request.get(`${BASE}/api/projects`)
+    const allProjects = await listRes.json()
+    const url = BASE + workspaceUrl(project, allProjects)
+
+    const promptA = 'alpha tab message'
+    const promptB = 'bravo tab message'
+
+    // Drive a turn in tab A.
+    await page.goto(url)
+    await expect(page.locator('.tab-chip-label', { hasText: 'tabA' })).toBeVisible({ timeout: 10_000 })
+    await page.locator('.tab-chip', { hasText: 'tabA' }).click()
+    const paneA = page.locator(`.pane-terminal.cbx-container[data-tab-id="${tabA.id}"]`)
+    await expect(paneA).toBeAttached({ timeout: 15_000 })
+    await page.locator('#chat-input').fill(promptA)
+    await page.locator('#chat-input').press('Enter')
+    await expect(paneA.locator('.cbx-block-text .cbx-text-md', { hasText: `Agent says: ${promptA}` })).toBeVisible({ timeout: 30_000 })
+
+    // Switch to tab B and drive a turn with a DIFFERENT prompt.
+    await page.locator('.tab-chip', { hasText: 'tabB' }).click()
+    const paneB = page.locator(`.pane-terminal.cbx-container[data-tab-id="${tabB.id}"]`)
+    await expect(paneB).toBeAttached({ timeout: 15_000 })
+    await page.locator('#chat-input').fill(promptB)
+    await page.locator('#chat-input').press('Enter')
+    await expect(paneB.locator('.cbx-block-text .cbx-text-md', { hasText: `Agent says: ${promptB}` })).toBeVisible({ timeout: 30_000 })
+
+    // Reload. Each pane must contain ONLY its own prompt — no cross-tab bleed.
+    await page.reload()
+    await expect(page.locator('.tab-chip-label', { hasText: 'tabA' })).toBeVisible({ timeout: 10_000 })
+
+    await page.locator('.tab-chip', { hasText: 'tabA' }).click()
+    await expect(paneA).toBeAttached({ timeout: 15_000 })
+    await expect(paneA.locator('.cbx-block-user', { hasText: promptA })).toHaveCount(1)
+    // Tab A must NOT contain tab B's prompt.
+    await expect(paneA.locator('.cbx-block-user', { hasText: promptB })).toHaveCount(0)
+    await expect(paneA.locator('.cbx-block-text .cbx-text-md', { hasText: `Agent says: ${promptA}` })).toBeVisible({ timeout: 15_000 })
+
+    await page.locator('.tab-chip', { hasText: 'tabB' }).click()
+    await expect(paneB).toBeAttached({ timeout: 15_000 })
+    await expect(paneB.locator('.cbx-block-user', { hasText: promptB })).toHaveCount(1)
+    // Tab B must NOT contain tab A's prompt.
+    await expect(paneB.locator('.cbx-block-user', { hasText: promptA })).toHaveCount(0)
+    await expect(paneB.locator('.cbx-block-text .cbx-text-md', { hasText: `Agent says: ${promptB}` })).toBeVisible({ timeout: 15_000 })
+  })
 })
