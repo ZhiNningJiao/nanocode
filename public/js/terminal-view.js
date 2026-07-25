@@ -1624,7 +1624,11 @@ function setupChatInput() {
   // Applies only to claude tabs. If the user typed /model <name> directly, we
   // still pass it through to the backend interception for backward compat.
 
-  // Available Claude models for the picker (canonical list; kept short and real).
+  // Available Claude models for the picker. FALLBACK ONLY — the authoritative
+  // list is the SDK's live supportedModels() served by GET /api/claude/models
+  // (see _fetchClaudeModels). This hardcoded list goes stale (e.g. it knew
+  // Opus 4.8 but not Opus 5), so the picker prefers the live list and only uses
+  // this when the probe fails or the endpoint is unreachable.
   const _MODEL_PICKER_LIST = [
     { id: 'claude-fable-5',          label: 'Claude Fable 5',          hint: 'Latest · recommended' },
     { id: 'claude-opus-4-8',         label: 'Claude Opus 4.8',         hint: 'Powerful · complex tasks' },
@@ -1633,6 +1637,8 @@ function setupChatInput() {
     { id: '',                        label: '(CLI default)',            hint: 'Use whatever claude CLI defaults to' },
   ]
 
+  // Effort list FALLBACK ONLY — the authoritative set is the model's
+  // supportedEffortLevels from the live probe (see _claudeEffortPickerList).
   const _EFFORT_PICKER_LIST = [
     { id: 'xhigh', label: 'xhigh', hint: 'Max thinking budget · slowest · most thorough' },
     { id: 'high',  label: 'high',  hint: 'Extended reasoning · thorough' },
@@ -1696,9 +1702,70 @@ function setupChatInput() {
     return _mountOverlay(el, 'cbr-model-picker-confirm--floating')
   }
 
-  async function showModelPicker() {
-    dismissModelPicker()
+  // Claude model list source of truth: the SDK's live supportedModels(),
+  // served by GET /api/claude/models. The hardcoded _MODEL_PICKER_LIST above
+  // is a FALLBACK ONLY — it ships stale (e.g. knew Opus 4.8 but not Opus 5), so
+  // the picker prefers the live probe. The SDK values are arbitrary strings
+  // (e.g. `opus[1m]`, `claude-fable-5[1m]`, aliases like `default`/`sonnet`)
+  // and are passed through to options.model unchanged — no parsing/rewriting.
+  // Cached per-session after the first fetch; refreshed on picker open so a
+  // newly-upgraded SDK shows up without a page reload.
+  let _claudeModelsCache = null // { models, fallback, sdk_version } | null
 
+  async function _fetchClaudeModels() {
+    try {
+      const r = await fetch('/api/claude/models')
+      if (!r.ok) return null
+      const j = await r.json()
+      if (!j || !Array.isArray(j.models)) return null
+      _claudeModelsCache = j
+      return j
+    } catch { return null }
+  }
+
+  // Build the model picker list. Uses the live cache when available; falls back
+  // to the curated hardcoded list otherwise. Always appends a "(CLI default)"
+  // entry (id='') so the user can clear the override.
+  function _claudeModelPickerList() {
+    if (_claudeModelsCache && !_claudeModelsCache.fallback && _claudeModelsCache.models.length) {
+      const list = _claudeModelsCache.models.map((m) => {
+        const hint = m.description || ''
+        return { id: m.value, label: m.displayName || m.value, hint }
+      })
+      list.push({ id: '', label: '(CLI default)', hint: 'Use the SDK default model (no override)' })
+      return list
+    }
+    return _MODEL_PICKER_LIST.slice()
+  }
+
+  const _CLAUDE_EFFORT_HINTS = {
+    max: 'Maximum reasoning depth · hardest problems',
+    xhigh: 'Extra high reasoning · complex problems',
+    high: 'Extended reasoning · thorough',
+    medium: 'Balanced speed vs depth',
+    low: 'Fast · light reasoning',
+  }
+
+  // Build the effort picker list for a chosen model. If the model is in the
+  // live cache, use its supportedEffortLevels (the authoritative set — some
+  // models support max, others only up to high). Otherwise fall back to the
+  // curated _EFFORT_PICKER_LIST. Always appends a "(none)" entry. A model with
+  // supportsEffort === false (e.g. haiku) yields only the "(none)" entry.
+  function _claudeEffortPickerList(modelValue) {
+    const m = _claudeModelsCache && !_claudeModelsCache.fallback
+      ? _claudeModelsCache.models.find((x) => x.value === modelValue)
+      : null
+    if (m && Array.isArray(m.supportedEffortLevels) && m.supportedEffortLevels.length) {
+      const list = m.supportedEffortLevels.map((ef) => ({
+        id: ef, label: ef, hint: _CLAUDE_EFFORT_HINTS[ef] || '',
+      }))
+      list.push({ id: '', label: '(none / CLI default)', hint: 'No --effort flag passed to claude' })
+      return list
+    }
+    return _EFFORT_PICKER_LIST.slice()
+  }
+
+  async function showModelPicker() {
     // Per-tab model: the active tab's modelOverride/effortOverride take priority
     // over the global claude_model/claude_effort default (root fix for the
     // cross-tab /model sync bug — the choice is persisted on the tab, not the
@@ -1709,7 +1776,10 @@ function setupChatInput() {
     let curModel = ''
     let curEffort = ''
     try {
+      // Refresh the model cache every open so a newly-upgraded SDK shows up
+      // without a page reload. Falls back to the hardcoded list on error.
       const res = await fetch('/api/settings')
+      await _fetchClaudeModels()
       if (res.ok) {
         const s = await res.json()
         // tab override wins; global is the default
@@ -1721,11 +1791,19 @@ function setupChatInput() {
     if (!curModel && activeTab && activeTab.modelOverride) curModel = activeTab.modelOverride
     if (!curEffort && activeTab && activeTab.effortOverride) curEffort = activeTab.effortOverride
 
+    dismissModelPicker()
+
     const picker = document.createElement('div')
     picker.className = 'cbr-model-picker'
     _modelPickerEl = picker
 
-    // Build step 1: model selection
+    function currentHeader() {
+      const curLabel = curModel || '(CLI default)'
+      const curEff = curEffort ? ` · effort: ${curEffort}` : ''
+      return `Current: ${curLabel}${curEff}`
+    }
+
+    // Build step 1: model selection (live list + Custom… free-form)
     function buildModelStep() {
       picker.innerHTML = ''
       const header = document.createElement('div')
@@ -1733,10 +1811,16 @@ function setupChatInput() {
       header.textContent = 'Select model (step 1 of 2)'
       picker.appendChild(header)
 
+      const cur = document.createElement('div')
+      cur.className = 'cbr-model-picker-hint'
+      cur.textContent = currentHeader()
+      picker.appendChild(cur)
+
       const grid = document.createElement('div')
       grid.className = 'cbr-model-picker-grid'
 
-      for (const m of _MODEL_PICKER_LIST) {
+      const modelList = _claudeModelPickerList()
+      for (const m of modelList) {
         const btn = document.createElement('button')
         btn.className = 'cbr-model-picker-btn' + (m.id === curModel ? ' cbr-model-picker-active' : '')
         btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(m.label)}</span>` +
@@ -1747,6 +1831,19 @@ function setupChatInput() {
         })
         grid.appendChild(btn)
       }
+
+      // Custom… button: the SDK accepts arbitrary model strings (e.g.
+      // opus[1m], claude-fable-5[1m], or a raw model id the user knows), so
+      // offer a free-form escape hatch beyond the live list.
+      const customBtn = document.createElement('button')
+      customBtn.className = 'cbr-model-picker-btn' + (modelList.some((m) => m.id === curModel) ? '' : ' cbr-model-picker-active')
+      customBtn.innerHTML = `<span class="cbr-model-picker-name">Custom…</span>` +
+                            `<span class="cbr-model-picker-hint">Type any model name (e.g. opus[1m], claude-fable-5)</span>`
+      customBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault()
+        buildCustomModelStep()
+      })
+      grid.appendChild(customBtn)
 
       picker.appendChild(grid)
 
@@ -1763,6 +1860,63 @@ function setupChatInput() {
       if (scroll) scroll.scrollTop = scroll.scrollHeight
     }
 
+    function buildCustomModelStep() {
+      picker.innerHTML = ''
+      const header = document.createElement('div')
+      header.className = 'cbr-model-picker-header'
+      header.textContent = 'Custom model (step 1 of 2)'
+      picker.appendChild(header)
+
+      const cur = document.createElement('div')
+      cur.className = 'cbr-model-picker-hint'
+      cur.textContent = currentHeader()
+      picker.appendChild(cur)
+
+      const inputRow = document.createElement('div')
+      inputRow.className = 'cbr-model-picker-cancel-row'
+      const input = document.createElement('input')
+      input.type = 'text'
+      input.className = 'rp-input'
+      input.placeholder = 'e.g. opus[1m]'
+      input.value = curModel
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          const v = input.value.trim()
+          buildEffortStep({ id: v, label: v || '(CLI default)', hint: '' })
+        }
+      })
+      const nextBtn = document.createElement('button')
+      nextBtn.className = 'cbr-queue-btn'
+      nextBtn.textContent = 'Next →'
+      nextBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault()
+        const v = input.value.trim()
+        buildEffortStep({ id: v, label: v || '(CLI default)', hint: '' })
+      })
+      inputRow.appendChild(input)
+      inputRow.appendChild(nextBtn)
+      picker.appendChild(inputRow)
+
+      const cancelRow = document.createElement('div')
+      cancelRow.className = 'cbr-model-picker-cancel-row'
+      const backBtn = document.createElement('button')
+      backBtn.className = 'cbr-queue-btn'
+      backBtn.textContent = '← Back'
+      backBtn.addEventListener('mousedown', (e) => { e.preventDefault(); buildModelStep() })
+      const cancelBtn = document.createElement('button')
+      cancelBtn.className = 'cbr-queue-btn cbr-queue-cancel'
+      cancelBtn.textContent = 'Cancel'
+      cancelBtn.addEventListener('mousedown', (e) => { e.preventDefault(); dismissModelPicker(); chatInput.focus() })
+      cancelRow.appendChild(backBtn)
+      cancelRow.appendChild(cancelBtn)
+      picker.appendChild(cancelRow)
+
+      setTimeout(() => input.focus(), 0)
+      const scroll = _getPickerScroll()
+      if (scroll) scroll.scrollTop = scroll.scrollHeight
+    }
+
     function buildEffortStep(chosenModel) {
       picker.innerHTML = ''
       const header = document.createElement('div')
@@ -1773,7 +1927,7 @@ function setupChatInput() {
       const grid = document.createElement('div')
       grid.className = 'cbr-model-picker-grid'
 
-      for (const ef of _EFFORT_PICKER_LIST) {
+      for (const ef of _claudeEffortPickerList(chosenModel.id)) {
         const btn = document.createElement('button')
         btn.className = 'cbr-model-picker-btn' + (ef.id === curEffort ? ' cbr-model-picker-active' : '')
         btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(ef.label)}</span>` +
