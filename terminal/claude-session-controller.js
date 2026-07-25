@@ -429,9 +429,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     }
   }
 
-  function codexBroadcastEvent(cs, event) {
+  function codexBroadcastEvent(cs, event, { historyOnly = false } = {}) {
     cs.eventHistory.push(event)
     if (cs.eventHistory.length > 500) cs.eventHistory.shift()
+    if (historyOnly) return
     const msg = JSON.stringify({ type: 'codex-event', event })
     for (const client of cs.clients) {
       if (client.readyState === 1) try { client.send(msg) } catch {}
@@ -1529,13 +1530,20 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       codexSessions.set(sessionKey, cs)
     }
 
-    if (cs.scrollback && ws.readyState === 1) {
-      try { ws.send(JSON.stringify({ type: 'history', data: cs.scrollback })) } catch {}
-    }
+    // Replay structured codex events FIRST, then the raw scrollback history.
+    // Order matters: in block render mode the renderer sets _sdkMode=true on
+    // the first codex-event, which makes it suppress the subsequent history
+    // blob (a flattened PTY text log that would otherwise duplicate the
+    // structured blocks). In terminal render mode the xterm renderer ignores
+    // codex-event messages and renders from the history blob as before. The
+    // history blob is still sent in both modes for terminal-mode compatibility.
     for (const event of cs.eventHistory) {
       if (ws.readyState === 1) {
         try { ws.send(JSON.stringify({ type: 'codex-event', event })) } catch {}
       }
+    }
+    if (cs.scrollback && ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: 'history', data: cs.scrollback })) } catch {}
     }
 
     cs.clients.add(ws)
@@ -1544,6 +1552,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       const text = buffer.trim()
       if (!text) return
       appendCodexScrollback(cs, `› ${text}\n`)
+      // Persist the user message as a synthetic event for block-mode replay.
+      // historyOnly: do NOT re-broadcast live — the frontend's sendInputWithEcho
+      // already rendered the user block locally, so a live codex-event would
+      // duplicate it. On refresh, the renderer replays this event to restore
+      // the user block from structured events (not from the duplicated `›`
+      // PTY echo in scrollback, which is suppressed in SDK mode).
+      codexBroadcastEvent(cs, { type: 'user_message', text }, { historyOnly: true })
       dispatchCodexTurn(cs, text, sessionKey, project.cwd)
     }
 

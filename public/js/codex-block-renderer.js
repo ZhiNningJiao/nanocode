@@ -1047,6 +1047,15 @@ export class CodexBlockRenderer {
   _handlePtyData(data, fromHistory) {
     if (!data) return
 
+    // SDK mode: when codex-event messages drive rendering, suppress ALL PTY
+    // text — including the fromHistory replay blob — to avoid duplicate
+    // blocks. The driver sends formatted text for the same events
+    // (command_execution, file_change, turn boundaries) into scrollback, and
+    // the eventHistory replay already reconstructs every block. This guard
+    // runs before the fromHistory branch so a refresh (which replays events
+    // first, then scrollback) does not double-render the turn.
+    if (this._sdkMode) return
+
     // N42: History replay — skip TUI rendering entirely.
     // Raw PTY bytes stored in scrollback contain ESC[?1049h/l and ESC[?2026h/l.
     // Re-running the state machine on replay creates phantom spinner/result blocks.
@@ -1059,11 +1068,6 @@ export class CodexBlockRenderer {
       for (const line of lines) this._processLine(line.replace(/\r/g, ''))
       return
     }
-
-    // SDK mode: when codex-event messages drive rendering, suppress PTY text
-    // to avoid duplicate blocks. The driver sends formatted text for the same
-    // events (command_execution, file_change, turn boundaries) — skip it.
-    if (this._sdkMode) return
 
     // ── Sync output (ESC[?2026h/l) boundary detection ───────────────────────
     // Codex CLI uses DEC private mode 2026 for frame-level batching.
@@ -2272,6 +2276,15 @@ export class CodexBlockRenderer {
     _maybeDispatchTodoUpdate(event, this.tabId)
 
     switch (event.type) {
+      case 'user_message':
+        // Synthetic event persisted by the server (historyOnly) for block-mode
+        // replay. On live turns sendInputWithEcho renders the user block, so
+        // this event is never broadcast live — it only arrives on refresh to
+        // restore the user block from structured events.
+        this._finalizeCurrentBlock()
+        this._finalizeAgentMessage()
+        this._appendUserBlock(event.text || '')
+        break
       case 'item.started':
         this._handleSdkItemStarted(event.item)
         break
@@ -2388,6 +2401,15 @@ export class CodexBlockRenderer {
     if (!item) return
 
     if (item.type === 'agent_message') {
+      // Replay path: codex-stream-text deltas are live-only and never
+      // persisted, so on refresh no _liveAgentBlock exists. Reconstruct the
+      // agent message from the completed item's final text so it renders as a
+      // structured block (with markdown / copy / code highlighting) rather
+      // than relying on the flattened scrollback PTY text. On live turns the
+      // deltas already built the block, so this no-ops.
+      if (!this._liveAgentBlock && item.text) {
+        this._appendAgentMessageDelta(item.id, item.text)
+      }
       this._finalizeAgentMessage(item.id)
       return
     }
