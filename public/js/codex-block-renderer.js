@@ -593,7 +593,15 @@ const STATUS_BANNER_RE = /^(?:Working|Thinking|Analyzing|Planning|Running|Execut
 // The shell-prompt pattern captures everything after the $ so we get
 // just the command portion (e.g. "ls qatool/scripts").
 // Also handles "[tmux-label] user@host:path$ cmd" (double-echo from OSC title)
-const BASH_CMD_RE = /^(?:(?:[›❯])\s+(?=[a-zA-Z/~\.]|\.\.)|\$\s+|Running:\s+|Executing:\s+|bash:\s+|cmd:\s+|(?:[^\s@]+@[^\s:]+:[^\s$]+\$\s+)|(?:\[[^\]]+\]\s+[^\s@]+@[^\s:]+:[^\s$]+\$\s+))/
+// P2 fix: codex CLI echoes user input with a "›" prompt prefix. This is NOT a
+// bash command — it's the user's natural-language message. We must detect it
+// before BASH_CMD_RE and render as a user block, not a command block.
+const USER_PROMPT_RE = /^[›]\s+(.+)/
+
+// Bash command detection. Note: "›" (the codex user-input prompt) is NOT
+// included — it is handled by USER_PROMPT_RE above. "❯" is kept because it is
+// used by fish/starship shells as an actual command prompt.
+const BASH_CMD_RE = /^(?:(?:[❯])\s+(?=[a-zA-Z/~\.]|\.\.)|\$\s+|Running:\s+|Executing:\s+|bash:\s+|cmd:\s+|(?:[^\s@]+@[^\s:]+:[^\s$]+\$\s+)|(?:\[[^\]]+\]\s+[^\s@]+@[^\s:]+:[^\s$]+\$\s+))/
 
 // Regex to extract just the command part from a shell-prompt line
 // matches  "user@host:path$ COMMAND"  →  group 1 = "COMMAND"
@@ -763,6 +771,10 @@ export class CodexBlockRenderer {
     // (codexBroadcast) for the same events — suppress that to avoid duplicates.
     this._sdkMode = false
 
+    // P2 fix: track last user input sent via sendInputWithEcho so the PTY
+    // echo (with "›" prefix) can be deduplicated in _processLine.
+    this._lastSentUserText = null
+
     // Track active SDK command blocks by item ID for proper finalization
     this._sdkCommandBlocks = new Map()
 
@@ -870,6 +882,10 @@ export class CodexBlockRenderer {
     this._finalizeCurrentBlock()
     this._finalizeAgentMessage()
     this._appendUserBlock(text)
+    // P2 fix: track the text we just rendered so the PTY echo (with "›"
+    // prefix) can be deduplicated in _processLine instead of creating a
+    // duplicate bash block.
+    this._lastSentUserText = text
     this._send({ type: 'input', data: text + '\r' })
     this._setThinking(true)
     // Reset response block tracking: new turn always starts a fresh block
@@ -1646,7 +1662,33 @@ export class CodexBlockRenderer {
       return
     }
 
-    // Bash command line (› prompt, ❯ prompt, $ prompt, user@host:path$ prompt)
+    // P2 fix: codex user-input echo ("› <user message>"). The codex CLI echoes
+    // the user's natural-language input with a "›" prompt prefix. This must
+    // be rendered as a user block, not misclassified as a bash command.
+    // Deduplicate against sendInputWithEcho which already rendered the block.
+    const userPromptMatch = USER_PROMPT_RE.exec(line)
+    if (userPromptMatch) {
+      const userText = userPromptMatch[1].trim()
+      this._finalizeCurrentBlock()
+      // Skip if sendInputWithEcho already rendered this text. The PTY echo
+      // may wrap or truncate the text slightly, so we check if the echoed text
+      // starts with the sent text (or vice versa). Clear the tracker after
+      // matching to avoid suppressing a subsequent legitimate user message.
+      const sent = this._lastSentUserText
+      if (sent != null) {
+        const sentTrim = sent.trim()
+        if (sentTrim && (userText === sentTrim || userText.startsWith(sentTrim) || sentTrim.startsWith(userText))) {
+          this._lastSentUserText = null
+          return
+        }
+      }
+      if (userText) {
+        this._appendUserBlock(userText)
+      }
+      return
+    }
+
+    // Bash command line (❯ prompt, $ prompt, Running:, user@host:path$ prompt)
     if (BASH_CMD_RE.test(line)) {
       this._finalizeCurrentBlock()
 
@@ -1791,9 +1833,21 @@ export class CodexBlockRenderer {
     if (existingBtn) existingBtn.remove()
 
     if (isTooLong) {
-      const kept = lines.slice(0, MAX_LINES)
-      const dropped = lines.length - kept.length
-      bb.outputEl.textContent = kept.join('\n').slice(0, MAX_CHARS) + `\n\n… [${dropped} more lines hidden]`
+      // P4 fix: show the TAIL of the output (last N lines) instead of the head.
+      // The most important info — errors, final results, exit diagnostics — is
+      // almost always at the end. Showing the head buries the relevant part
+      // and forces the user to expand. We keep a small head for context and
+      // show the tail, with an expandable "Show all" button in between.
+      const TAIL_LINES = Math.min(MAX_LINES, 60)
+      const HEAD_LINES = Math.min(5, lines.length - TAIL_LINES)
+      const head = HEAD_LINES > 0 ? lines.slice(0, HEAD_LINES) : []
+      const tail = lines.slice(lines.length - TAIL_LINES)
+      const hidden = lines.length - head.length - tail.length
+      const headText = head.length ? (head.join('\n') + '\n') : ''
+      const tailText = tail.join('\n').slice(-MAX_CHARS)
+      bb.outputEl.textContent = headText +
+        `… [${hidden} lines hidden — click "Show all" below]\n\n` +
+        tailText
       // Add expandable "Show all" button
       const btn = document.createElement('button')
       btn.className = 'cbx-show-all-btn'
@@ -2193,6 +2247,9 @@ export class CodexBlockRenderer {
   _appendUserBlock(text) {
     const article = this._makeBlock('cbx-block-user')
     article.innerHTML = `<p class="cbx-user-prompt">&#10095; ${escHtml(text)}</p>`
+    // P9 fix: make file paths and URLs in user messages clickable (matches
+    // the claude tab's attachPathAndUrlHandlers behaviour).
+    _attachPathAndUrlLinks(article)
     this._scroll.appendChild(article)
     this._scrollBottom()
   }
@@ -2334,8 +2391,12 @@ export class CodexBlockRenderer {
 
       if (this._currentBashBlock) {
         // Add command output — batch all lines then render once (not per-line)
+        // P1 fix: strip ANSI escape codes from SDK aggregated_output — the
+        // codex CLI wraps nested tool output in \x1b[0m sequences that would
+        // otherwise leak as literal "[0m" text in the rendered block.
         if (item.aggregated_output) {
-          const lines = item.aggregated_output.split('\n')
+          const cleaned = stripAnsi(item.aggregated_output)
+          const lines = cleaned.split('\n')
           for (const line of lines) {
             if (line) this._currentBashBlock.outputLines.push(line)
           }
