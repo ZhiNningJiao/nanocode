@@ -8,6 +8,7 @@ import { buildReplaySeed, buildUserReplayId, resolveSessionJsonl, parseJsonlHist
 import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
+import { loadCodexScrollback } from './codex-history.js'
 import { createOpencodeBlockDriver } from './opencode-block-driver.js'
 import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
@@ -1098,6 +1099,24 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     }
   }
 
+  // "/new" for a codex tab — start a fresh thread. Clears the in-memory thread
+  // id + transcript and the persisted tab metadata so the next turn calls
+  // startThread() (new conversation, no prior context) instead of resumeThread().
+  // Best used when idle: a turn in flight will restore its own thread id in its
+  // finally (lastThreadId), so /new mid-turn only takes effect after it ends.
+  function resetCodexThread(projectId, tabId) {
+    const sessionKey = codexSessionKeyFor(projectId, tabId)
+    const cs = codexSessions.get(sessionKey)
+    if (cs) {
+      cs.codexThreadId = null
+      cs.scrollback = ''
+      cs.eventHistory = []
+      cs._hydratedFromRollout = false
+    }
+    try { store.updateTabMetadata?.(projectId, tabId, { codexThreadId: null }) } catch {}
+    return { ok: true, sessionKey, type: 'codex', reset: true }
+  }
+
   function attachClaudeSession(ws, { projectId, tabId, project }) {
     const sessionKey = sessionKeyFor(projectId, tabId)
     let cs = claudeSessions.get(sessionKey)
@@ -1560,6 +1579,21 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         currentProc: null,
         queue: [],
         inputBuffer: '',
+      }
+      // Hydrate history from the codex CLI rollout jsonl so an attaching client
+      // sees past conversation even on a fresh server (in-memory scrollback is
+      // empty until a turn runs). Only on first creation, only when the tab has
+      // a persisted codexThreadId, and only if nothing is in memory yet.
+      if (!cs.scrollback && cs.codexThreadId) {
+        try {
+          const hydrated = loadCodexScrollback(home, cs.codexThreadId)
+          if (hydrated) {
+            cs.scrollback = hydrated
+            cs._hydratedFromRollout = true
+          }
+        } catch (err) {
+          console.warn(`[codex:history] ${sessionKey}: rollout hydrate failed:`, err?.message || err)
+        }
       }
       codexSessions.set(sessionKey, cs)
     }
@@ -2095,5 +2129,6 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     disposeClaudeSessions,
     injectClaudeMessage,
     injectCodexMessage,
+    resetCodexThread,
   }
 }

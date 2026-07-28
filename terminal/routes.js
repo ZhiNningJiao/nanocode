@@ -1592,6 +1592,17 @@ export function createTerminalRoutes(store, opts = {}) {
     sessionController.handleReset(req, res)
   })
 
+  // Codex "/new": start a fresh codex thread (clears thread id + transcript so
+  // the next turn begins a new conversation). Frontend calls this for /new.
+  router.post('/api/projects/:id/tabs/:tabId/codex/new-thread', (req, res) => {
+    try {
+      const result = sessionController.resetCodexThread(req.params.id, req.params.tabId)
+      res.json(result)
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
   // ── Repo-scoped compare — works from a top-level (~zhining) launch ─────────
   // Independent of the project system: scans ~/code for git repos/worktrees
   // and diffs two refs in a selected repo. Server is read-only to repos

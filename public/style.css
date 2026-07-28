@@ -3661,6 +3661,11 @@ body.workspace-active .back-to-menu { display: inline-flex; }
      single-line textarea are 38px tall and both center their content,
      their visual centers (and thus baselines) line up. */
   align-items: center;
+  /* Allow the button cluster to wrap to a second line instead of
+     crushing the textarea to a sliver. On desktop there's ample width
+     so nothing wraps; on mobile the textarea takes a full first row
+     (flex-basis:100% in the media query) and the buttons wrap below. */
+  flex-wrap: wrap;
 }
 
 .input-wrap {
@@ -3911,7 +3916,21 @@ body.workspace-active .back-to-menu { display: inline-flex; }
      width .input-row so the panel "占满可用宽" and long command names
      (/permissions) are never clipped to /permis. */
   .input-row { position: relative; }
-  .input-wrap { position: static; }
+  /* Give the textarea the whole first row; the button cluster wraps to a second
+     row (.input-row has flex-wrap:wrap) instead of squeezing the input to ~87px.
+     This is the mobile "输入框太小" fix. */
+  .input-wrap { position: static; flex-basis: 100%; min-width: 0; }
+  /* Bigger, comfortable input on phones (auto-grows up to max-height). */
+  .chat-textarea { min-height: 46px; }
+  /* Keep the wrapped button row tidy and right-aligned under the input. */
+  .input-row > .send-btn,
+  .input-row > .model-badge,
+  .input-row > .mode-badge,
+  .input-row > .tts-btn,
+  .input-row > .tts-replay-btn,
+  .input-row > .compact-ctx-btn,
+  .input-row > .claude-stop-btn,
+  .input-row > .claude-bg-btn { margin-top: 2px; }
   /* R3: stack command name above hint so long names (/permissions) are never
      clipped to /permis by the flex row. Command name keeps full width and is
      never truncated; the hint wraps to a second line and truncates instead. */
