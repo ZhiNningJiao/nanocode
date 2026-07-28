@@ -1063,6 +1063,41 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     }
   }
 
+  // External inject for CODEX sessions — the codex counterpart of
+  // injectClaudeMessage. POST /api/sessions/:id/inject routes here when the
+  // sessionKey names a codex tab (`${projectId}:codex:${tabId}`). Reuses the
+  // EXACT same dispatch path as a real user message (echo `› text` to scrollback,
+  // then dispatchCodexTurn) so there is no separate code path. sendNow mirrors the
+  // "立刻发送" WS path: busy → enqueue + interrupt + _forceFlushQueue (the queued
+  // message flushes as the next turn now that the codex driver flushes on
+  // interrupt); idle → the message dispatches and runs immediately.
+  function injectCodexMessage(sessionKey, text, { sendNow = false } = {}) {
+    const cs = codexSessions.get(sessionKey)
+    if (!cs) return { ok: false, error: 'session not found' }
+    if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'empty text' }
+    const trimmed = text.trim()
+    appendCodexScrollback(cs, `› ${trimmed}\n`)
+    const wasBusy = sendNow === true && cs.busy && !!cs.currentProc
+    dispatchCodexTurn(cs, trimmed, sessionKey, cs.cwd)
+    if (wasBusy) {
+      try {
+        cs._forceFlushQueue = true
+        cs.currentProc._nanocodeInterrupted = true
+        cs.currentProc.kill('SIGINT')
+      } catch (err) {
+        console.error(`[codex:inject] ${sessionKey}: atomic interrupt failed:`, err?.message || err)
+      }
+    }
+    return {
+      ok: true,
+      sessionKey,
+      type: 'codex',
+      codexThreadId: cs.codexThreadId || null,
+      busy: !!cs.busy,
+      dispatched: true,
+    }
+  }
+
   function attachClaudeSession(ws, { projectId, tabId, project }) {
     const sessionKey = sessionKeyFor(projectId, tabId)
     let cs = claudeSessions.get(sessionKey)
@@ -1568,11 +1603,30 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
           return
         }
 
+        // Atomic "send now" (立刻发送) for codex — mirror the claude WS path
+        // (controller ~L1464). Capture busy BEFORE dispatching: a busy turn
+        // enqueues the message(s), then we interrupt it with _forceFlushQueue so
+        // the queued message flushes as the NEXT turn (the driver's finally now
+        // flushes on interrupt instead of discarding) rather than waiting out a
+        // possibly hour-long turn. Idle → the message dispatches and runs
+        // immediately; no interrupt (interrupting would kill the user's message).
+        const sendNow = msg.sendNow === true
+        const wasBusy = sendNow && cs.busy && !!cs.currentProc
+
         cs.inputBuffer += data
         const segments = cs.inputBuffer.split('\r')
         cs.inputBuffer = segments.pop() || ''
+        let dispatchedAny = false
         for (const segment of segments) {
+          if (segment.trim()) dispatchedAny = true
           flushCodexInput(segment)
+        }
+        if (wasBusy && dispatchedAny) {
+          try {
+            cs._forceFlushQueue = true
+            cs.currentProc._nanocodeInterrupted = true
+            cs.currentProc.kill('SIGINT')
+          } catch {}
         }
       } else if (msg.type === 'ping') {
         try { ws.send(JSON.stringify({ type: 'pong', id: msg.id })) } catch {}
@@ -2040,5 +2094,6 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     setClaudeSessionId,
     disposeClaudeSessions,
     injectClaudeMessage,
+    injectCodexMessage,
   }
 }
