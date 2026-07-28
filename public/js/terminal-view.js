@@ -469,6 +469,17 @@ const _SLASH_HINTS = {
 
 let CLAUDE_SLASH_COMMANDS = [..._SLASH_FALLBACK]
 
+// Codex slash commands for the dropdown. The codex SDK driver runs each turn as
+// a one-shot (no interactive REPL), so only commands the nanocode layer can
+// honor are offered — these map to nanocode actions, not literal codex REPL
+// commands. This is the "/ experience" that replaces the model-switch button.
+const CODEX_SLASH_COMMANDS = [
+  { cmd: '/model',  hint: '切换模型（选择器；或 /model <名称>）' },
+  { cmd: '/effort', hint: '推理强度 minimal|low|medium|high|xhigh' },
+  { cmd: '/new',    hint: '开启新对话（新建 codex 线程，清空上下文）' },
+  { cmd: '/clear',  hint: '清屏（不影响对话历史）' },
+]
+
 // Fetch live slash commands from the server (non-blocking)
 fetch('/api/claude/slash-commands')
   .then((r) => r.ok ? r.json() : null)
@@ -967,17 +978,12 @@ function setupChatInput() {
       return
     }
     if (isCodexTab) {
-      // Codex badge: tab override wins; global codex_model is the default.
-      const activeTab = (tabManager && tabManager.tabs)
-        ? (tabManager.tabs.find((t) => t.id === activeId) || null) : null
-      const model = _codexModelByTab.get(activeId)
-        || (activeTab && activeTab.modelOverride)
-        || _codexSettingsModel
-        || ''
-      modelBadgeEl.textContent = model ? _codexBadgeLabel(model) : 'model'
-      modelBadgeEl.title = t('composer.model.tooltip')
-      modelBadgeEl.hidden = false
-      modelBadgeEl.classList.add('model-badge--pickable')
+      // Codex model-switch badge retired: the "/model" slash command (picker +
+      // "/model <name>") now covers switching AND echoes the current model, so
+      // the button is redundant and just crowds the (esp. mobile) composer.
+      // Hide it — the slash menu is the single, discoverable entry point.
+      modelBadgeEl.hidden = true
+      modelBadgeEl.classList.remove('model-badge--pickable')
       return
     }
     // Non-agent tabs: hide the badge (no model concept / no picker).
@@ -1287,18 +1293,20 @@ function setupChatInput() {
   }
 
   function showSlashCommands(query) {
-    if (!isClaudeTab) return
+    if (!isClaudeTab && !isCodexTab) return
+    // Codex has its own curated command list (SDK layer, not a live REPL).
+    const activeList = isCodexTab ? CODEX_SLASH_COMMANDS : CLAUDE_SLASH_COMMANDS
     // query is the text after '/', e.g. '' or 'cl' or 'help'
     const q = query.toLowerCase()
 
     let matches
     if (!q) {
       // No query: show all commands, grouped
-      matches = CLAUDE_SLASH_COMMANDS.map((c) => ({ cmd: c, score: 0, matchRanges: [] }))
+      matches = activeList.map((c) => ({ cmd: c, score: 0, matchRanges: [] }))
     } else {
       // Fuzzy filter: match against command name (without leading /)
       const scored = []
-      for (const cmd of CLAUDE_SLASH_COMMANDS) {
+      for (const cmd of activeList) {
         const target = cmd.cmd.slice(1)  // command name without /
         const score = _slashFuzzyScore(target, q)
         // The scorer returns -1 for "no match" (not all query chars found) and
@@ -1375,7 +1383,7 @@ function setupChatInput() {
       for (const m of matches) appendItem(m)
     } else {
       // Unfiltered mode: show grouped
-      const { builtin, plugins } = _groupSlashCommands(CLAUDE_SLASH_COMMANDS)
+      const { builtin, plugins } = _groupSlashCommands(activeList)
 
       if (builtin.length) {
         appendGroupHeader('Built-in')
@@ -1880,6 +1888,59 @@ function setupChatInput() {
     chatInput.focus()
   }
 
+  const _CODEX_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh']
+  async function applyCodexEffort(level) {
+    const value = (level || '').trim().toLowerCase()
+    if (!_CODEX_EFFORTS.includes(value)) {
+      const el = document.createElement('div')
+      el.className = 'cbr-model-picker-confirm cbr-model-picker-error'
+      el.textContent = `Unknown effort "${level}". Use: ${_CODEX_EFFORTS.join(' | ')}`
+      _mountToast(el); setTimeout(() => el.remove(), 5000)
+      return
+    }
+    try {
+      const tabId = tabManager ? tabManager.activeId : null
+      if (!currentProjectId || !tabId) throw new Error('no active codex tab')
+      const r = await fetch(`/api/projects/${currentProjectId}/tabs/${tabId}/model`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ effortOverride: value }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const el = document.createElement('div')
+      el.className = 'cbr-model-picker-confirm'
+      el.textContent = `Codex reasoning effort set to ${value} (this tab). Takes effect on next message.`
+      _mountToast(el); setTimeout(() => el.remove(), 5000)
+    } catch (err) {
+      const el = document.createElement('div')
+      el.className = 'cbr-model-picker-confirm cbr-model-picker-error'
+      el.textContent = `Failed to set codex effort: ${err.message}`
+      _mountToast(el); setTimeout(() => el.remove(), 5000)
+    }
+    chatInput.focus()
+  }
+
+  async function codexNewThread() {
+    try {
+      const tabId = tabManager ? tabManager.activeId : null
+      if (!currentProjectId || !tabId) throw new Error('no active codex tab')
+      const r = await fetch(`/api/projects/${currentProjectId}/tabs/${tabId}/codex/new-thread`, { method: 'POST' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      // Clear the on-screen transcript; the next message starts a fresh thread.
+      if (activePane && typeof activePane.sendRaw === 'function') activePane.sendRaw('\x0c')
+      const el = document.createElement('div')
+      el.className = 'cbr-model-picker-confirm'
+      el.textContent = 'New codex conversation started — next message begins with no prior context.'
+      _mountToast(el); setTimeout(() => el.remove(), 5000)
+    } catch (err) {
+      const el = document.createElement('div')
+      el.className = 'cbr-model-picker-confirm cbr-model-picker-error'
+      el.textContent = `Failed to start new codex conversation: ${err.message}`
+      _mountToast(el); setTimeout(() => el.remove(), 5000)
+    }
+    chatInput.focus()
+  }
+
   async function applyCodexModelAndEffort(chosenModel, chosenEffort) {
     dismissModelPicker()
     try {
@@ -2147,6 +2208,29 @@ function setupChatInput() {
         showCodexModelPicker()
         return
       }
+      // /effort <level> — per-tab reasoning effort (minimal|low|medium|high|xhigh).
+      const effortArg = trimmed.match(/^\/effort\s+(\S+)\s*$/)
+      if (effortArg) {
+        chatInput.value = ''
+        autoResize(); hideSuggestions(); hideSlashCommands(); chatInput.focus()
+        applyCodexEffort(effortArg[1].trim())
+        return
+      }
+      // /new — start a fresh codex thread (clears server + tab codexThreadId so
+      // the next turn begins a new conversation with no prior context).
+      if (trimmed.match(/^\/new\s*$/)) {
+        chatInput.value = ''
+        autoResize(); hideSuggestions(); hideSlashCommands(); chatInput.focus()
+        codexNewThread()
+        return
+      }
+      // /clear — clear the on-screen scrollback (does NOT reset the conversation).
+      if (trimmed.match(/^\/clear\s*$/)) {
+        chatInput.value = ''
+        autoResize(); hideSuggestions(); hideSlashCommands(); chatInput.focus()
+        if (activePane && typeof activePane.sendRaw === 'function') activePane.sendRaw('\x0c')
+        return
+      }
     }
 
     // When Claude is busy: silently add to client-side pending queue.
@@ -2207,15 +2291,15 @@ function setupChatInput() {
     autoResize()
     resetHistoryNav()
     const val = chatInput.value
-    // Slash command mode for claude tabs
-    if (isClaudeTab && val.startsWith('/')) {
+    // Slash command mode for claude AND codex tabs
+    if ((isClaudeTab || isCodexTab) && val.startsWith('/')) {
       hideSuggestions()
       showSlashCommands(val.slice(1))
       return
     }
     hideSlashCommands()
-    // N43: codex tab — suppress history suggestion dropdown so "/" passes
-    // through cleanly to codex without nanocode dropdown intercepting Enter.
+    // N43: codex tab — suppress history suggestion dropdown for plain (non-slash)
+    // input so text passes through cleanly to codex.
     if (isCodexTab) {
       hideSuggestions()
       return
