@@ -626,6 +626,11 @@ const PATCH_RE = /^(?:apply_patch|edit_file|write_file|create_file|patch:)/i
 // Codex "turn" separator
 const TURN_SEP_RE = /^[─═]{10,}/
 
+// nanocode's own queue / interrupt status banners emitted by the codex SDK
+// driver via codexBroadcast (no corresponding codex-event). Surfaced as system
+// blocks even in SDK mode so the user gets queue/interrupt feedback.
+const NANOCODE_STATUS_BANNER_RE = /^\[(?:queued:|Resuming with |Queue cleared|Request interrupted|Error:)/
+
 // Box-drawing chars noise filter — codex update notification and TUI borders.
 // Two patterns:
 //   1. Lines that are purely box-drawing + spaces (╭─╮ ╰─╯ borders)
@@ -1064,9 +1069,19 @@ export class CodexBlockRenderer {
     }
 
     // SDK mode: when codex-event messages drive rendering, suppress PTY text
-    // to avoid duplicate blocks. The driver sends formatted text for the same
-    // events (command_execution, file_change, turn boundaries) — skip it.
-    if (this._sdkMode) return
+    // to avoid duplicate blocks (command_execution / file_change / turn
+    // boundaries all arrive as events). EXCEPTION: the driver's own queue /
+    // interrupt status banners have NO corresponding codex-event, so without
+    // this the user gets zero feedback that a message was queued or an
+    // interrupt fired (the "queue does nothing" bug). Surface just those.
+    if (this._sdkMode) {
+      const cleaned = stripAnsi(data)
+      for (const rawLine of cleaned.split('\n')) {
+        const line = rawLine.replace(/\r/g, '').trim()
+        if (NANOCODE_STATUS_BANNER_RE.test(line)) this._addSystemBlock(line)
+      }
+      return
+    }
 
     // ── Sync output (ESC[?2026h/l) boundary detection ───────────────────────
     // Codex CLI uses DEC private mode 2026 for frame-level batching.
