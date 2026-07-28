@@ -877,7 +877,7 @@ export class CodexBlockRenderer {
 
   // ── Public API ───────────────────────────────────────────────────────────────
 
-  sendInputWithEcho(text) {
+  sendInputWithEcho(text, opts = {}) {
     // Show user input as a prompt block
     this._finalizeCurrentBlock()
     this._finalizeAgentMessage()
@@ -886,7 +886,10 @@ export class CodexBlockRenderer {
     // prefix) can be deduplicated in _processLine instead of creating a
     // duplicate bash block.
     this._lastSentUserText = text
-    this._send({ type: 'input', data: text + '\r' })
+    // opts.sendNow (立刻发送): the server-side codex WS handler interrupts the
+    // running turn and flushes this message as the next turn instead of queuing
+    // it behind a possibly hour-long turn. Backward-compatible: absent = queue.
+    this._send({ type: 'input', data: text + '\r', sendNow: opts.sendNow === true })
     this._setThinking(true)
     // Reset response block tracking: new turn always starts a fresh block
     this._lastResponseBlockEl = null
