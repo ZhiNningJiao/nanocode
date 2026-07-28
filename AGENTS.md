@@ -38,3 +38,6 @@ better; they are helpers, NOT new SOP, and never override the HARD RULES above):
   reproduce the actual user scenario.
 - Code review of your own diff → `gs-review`; QA a behaviour → `gs-qa-only`.
 - Bottom line: verify by reproducing reality, not by trusting your own summary.
+
+## FLAG/REPORT 路径铁律（2026-07-24 秘书加，两起事故教训）
+任务书里的 FLAG_* / REPORT_* / run log 路径是**绝对路径合同**：touch/写入必须用任务书原文的完整路径（通常在 ~/codex_work/ 顶层），**绝不落在当前工作目录**。完成前自查一次 `ls <任务书里的FLAG绝对路径>`。落错路径 = 调度系统看不见你收工 = 白干重跑。
