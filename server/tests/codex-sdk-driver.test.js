@@ -278,7 +278,10 @@ describe('codex sdk driver', () => {
     assert.deepEqual(cs.queue, ['third'])
   })
 
-  it('emits interrupt fallback output and clears queued prompts after abort', async () => {
+  it('flushes queued prompts as one turn after interrupt (default auto-flush)', async () => {
+    // Root fix: a busy codex secretary interrupted mid-turn must NOT silently drop
+    // its queued messages. Default behavior now mirrors the claude path — flush the
+    // queue as the next turn instead of discarding it.
     const textEvents = []
     const reruns = []
     const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
@@ -316,6 +319,51 @@ describe('codex sdk driver', () => {
     assert.equal(typeof cs.currentProc?.kill, 'function')
     cs.currentProc.kill('SIGINT')
     await run
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.equal(reruns.length, 1)
+    assert.equal(reruns[0][1], 'queued after interrupt')
+    assert.deepEqual(cs.queue, [])
+    assert.deepEqual(textEvents, [
+      '› first\n',
+      '[queued: Message queued (position 1). Will run after current turn.]\n',
+      '[Request interrupted by user]\n',
+      '────────────\n',
+      '[Resuming with 1 queued message after interrupt…]\n',
+    ])
+  })
+
+  it('discards queued prompts on interrupt only when auto_flush_queue_on_interrupt=0', async () => {
+    const textEvents = []
+    const reruns = []
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    const store = {
+      getSetting(key) {
+        if (key === 'auto_flush_queue_on_interrupt') return '0'
+        return null
+      },
+    }
+    const FakeCodex = createCodexImplFactory([
+      { signalError: Object.assign(new Error('aborted'), { name: 'AbortError' }) },
+    ], calls)
+
+    const driver = createCodexSdkDriver({
+      store,
+      codexBroadcast: (_cs, text) => { textEvents.push(text) },
+      codexBroadcastEvent: () => {},
+      rerunTurn: (...args) => { reruns.push(args) },
+      CodexImpl: FakeCodex,
+    })
+
+    const cs = { codexThreadId: 'thread-existing', busy: false, turnCount: 1, queue: [], clients: new Set() }
+
+    const run = driver.runCodexTurn(cs, 'first', 'project-1:codex:tab-3', '/tmp/workspace')
+    await Promise.resolve()
+    await driver.runCodexTurn(cs, 'queued after interrupt', 'project-1:codex:tab-3', '/tmp/workspace')
+
+    cs.currentProc.kill('SIGINT')
+    await run
+    await new Promise((resolve) => setImmediate(resolve))
 
     assert.equal(reruns.length, 0)
     assert.deepEqual(cs.queue, [])
@@ -325,6 +373,52 @@ describe('codex sdk driver', () => {
       '[Request interrupted by user]\n',
       '────────────\n',
       '[Queue cleared (1 pending message discarded after interrupt).]\n',
+    ])
+  })
+
+  it('force-flushes queued prompts on "send now" interrupt even when auto-flush is disabled', async () => {
+    const textEvents = []
+    const reruns = []
+    const calls = { codexOptions: [], threadCalls: [], turnCalls: [] }
+    const store = {
+      getSetting(key) {
+        if (key === 'auto_flush_queue_on_interrupt') return '0'
+        return null
+      },
+    }
+    const FakeCodex = createCodexImplFactory([
+      { signalError: Object.assign(new Error('aborted'), { name: 'AbortError' }) },
+    ], calls)
+
+    const driver = createCodexSdkDriver({
+      store,
+      codexBroadcast: (_cs, text) => { textEvents.push(text) },
+      codexBroadcastEvent: () => {},
+      rerunTurn: (...args) => { reruns.push(args) },
+      CodexImpl: FakeCodex,
+    })
+
+    const cs = { codexThreadId: 'thread-existing', busy: false, turnCount: 1, queue: [], clients: new Set() }
+
+    const run = driver.runCodexTurn(cs, 'first', 'project-1:codex:tab-3', '/tmp/workspace')
+    await Promise.resolve()
+    await driver.runCodexTurn(cs, 'urgent send-now', 'project-1:codex:tab-3', '/tmp/workspace')
+
+    // "send now": mark force-flush then interrupt (mirrors the WS/inject path).
+    cs._forceFlushQueue = true
+    cs.currentProc.kill('SIGINT')
+    await run
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.equal(reruns.length, 1)
+    assert.equal(reruns[0][1], 'urgent send-now')
+    assert.deepEqual(cs.queue, [])
+    // force-flush suppresses the "[Resuming…]" banner (it's an explicit send-now).
+    assert.deepEqual(textEvents, [
+      '› first\n',
+      '[queued: Message queued (position 1). Will run after current turn.]\n',
+      '[Request interrupted by user]\n',
+      '────────────\n',
     ])
   })
 
