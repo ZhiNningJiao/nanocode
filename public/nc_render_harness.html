@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Codex Block Renderer Harness</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body { margin: 0; background: var(--bg, #1a1b26); color: #c0caf5; font-family: 'JetBrains Mono', monospace; }
+  #harness-container { width: 100vw; height: 100vh; overflow: hidden; }
+  .cbx-scroll { height: 100vh; }
+</style>
+<script defer src="/vendor/marked/marked.umd.js"></script>
+<script defer src="/vendor/dompurify/purify.min.js"></script>
+<script defer src="/vendor/highlight/highlight.min.js"></script>
+</head>
+<body>
+<div id="harness-container"></div>
+<script type="module">
+  import { CodexBlockRenderer } from '/js/codex-block-renderer.js';
+
+  const container = document.getElementById('harness-container');
+  // Suppress WS connection — we'll feed events directly
+  const renderer = new CodexBlockRenderer(container, {
+    projectId: 'test',
+    tabId: 'test',
+    onStatusChange: () => {}
+  });
+  // Kill the WS so it doesn't interfere
+  if (renderer._ws) { try { renderer._ws.close(); } catch {} renderer._ws = null; }
+
+  // Load captured events and replay them
+  async function replay() {
+    const resp = await fetch('/event_flow_before.jsonl');
+    const text = await resp.text();
+    const lines = text.trim().split('\n').filter(Boolean);
+    let delay = 30;
+    for (const line of lines) {
+      const msg = JSON.parse(line);
+      const t = msg.t;
+      if (t === 'output') {
+        renderer._handlePtyData(msg.data, false);
+      } else if (t === 'codex-event') {
+        renderer._handleCodexEvent(msg.event);
+      } else if (t === 'codex-stream-text') {
+        renderer._handleCodexStreamText(msg.itemId, msg.textDelta);
+      }
+      // Small delay to let rendering settle
+      await new Promise(r => setTimeout(r, delay));
+    }
+    // Finalize
+    renderer._finalizeCurrentBlock();
+    renderer._setThinking(false);
+    document.title = 'DONE: ' + lines.length + ' events replayed';
+  }
+
+  // Expose for external control
+  window.__harness = { renderer, replay, replayed: false };
+  replay().then(() => { window.__harness.replayed = true; }).catch(e => { document.title = 'ERROR: ' + e.message; });
+</script>
+</body>
+</html>
