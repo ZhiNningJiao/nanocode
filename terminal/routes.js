@@ -241,6 +241,19 @@ export function createTerminalRoutes(store, opts = {}) {
         lockHolderPort: result.lockHolderPort,
       })
     }
+    // Not a claude session → try codex (sessionKey shaped `${projectId}:codex:${tabId}`).
+    // Same wake/inject contract as claude: default queues behind a running turn,
+    // sendNow=true does an atomic interrupt+flush so the message lands immediately.
+    if (result.error === 'session not found') {
+      const codexResult = sessionController.injectCodexMessage(sessionKey, text, {
+        sendNow: sendNow === true,
+      })
+      if (codexResult.ok) return res.json(codexResult)
+      if (codexResult.error === 'empty text') {
+        return res.status(400).json({ ok: false, error: 'empty text' })
+      }
+      // codexResult.error === 'session not found' → fall through to bash below.
+    }
     // Fall through to bash PTY session: write raw bytes (equivalent to WS
     // 'input') if such a session exists.
     if (result.error === 'session not found') {

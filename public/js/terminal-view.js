@@ -758,7 +758,7 @@ function setupChatInput() {
       chatInput.placeholder = 'Message OpenCode… (/ for commands)'
     } else if (isCodexTab) {
       // N43: codex tab — "/" should pass through to codex, not trigger nanocode slash menu
-      chatInput.placeholder = 'Send to Codex… (/ for codex commands)'
+      chatInput.placeholder = 'Send to Codex… (Enter 排队 · Ctrl+Enter 立刻发送)'
     } else {
       chatInput.placeholder = 'Type a command...'
     }
@@ -2235,6 +2235,27 @@ function setupChatInput() {
       hideSlashCommands()
       if (isClaudeThinking || _pendingQueue.length > 0 || chatInput.value.trim()) {
         sendNowFlush()
+      }
+      return
+    }
+
+    // Ctrl/Cmd+Enter on a codex tab = "send now" (立刻发送): interrupt the running
+    // turn and submit the composer text immediately. The backend flushes it as the
+    // next turn (the codex driver now flushes queued messages on interrupt). Codex
+    // has no client-side _pendingQueue, so we just send the composer text.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && isCodexTab) {
+      if (e.isComposing || _isComposing || e.keyCode === 229) return
+      e.preventDefault()
+      hideSuggestions()
+      hideSlashCommands()
+      const text = chatInput.value
+      if (text.trim() && activePane) {
+        activePane.sendInputWithEcho(text, { sendNow: true })
+        pushHistory(text)
+        resetHistoryNav()
+        chatInput.value = ''
+        autoResize()
+        chatInput.focus()
       }
       return
     }

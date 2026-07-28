@@ -267,8 +267,25 @@ export function createCodexSdkDriver({
       }
 
       if (!Array.isArray(cs.queue)) cs.queue = []
+      // On interrupt, AUTO-FLUSH queued messages as ONE combined turn (mirrors the
+      // claude path, controller ~L933) instead of discarding them. Root fix for a
+      // busy codex secretary silently dropping every queued message when the user
+      // (or a "send now") interrupts the running turn: the queued messages are the
+      // thing the user most wants delivered, not thrown away. Discard survives only
+      // as an explicit opt-out (auto_flush_queue_on_interrupt='0'), and never for a
+      // "send now" force-flush (cs._forceFlushQueue).
+      const autoFlushOnInterrupt = store.getSetting('auto_flush_queue_on_interrupt') !== '0'
+      const forceFlush = cs._forceFlushQueue === true
+      cs._forceFlushQueue = false
       if (currentTurn._nanocodeInterrupted) {
-        if (cs.queue.length > 0) {
+        if (cs.queue.length > 0 && (forceFlush || autoFlushOnInterrupt)) {
+          const allQueued = cs.queue.splice(0)
+          const combinedText = allQueued.join('\n\n')
+          if (!forceFlush) {
+            codexBroadcast(cs, `[Resuming with ${allQueued.length} queued message${allQueued.length !== 1 ? 's' : ''} after interrupt…]\n`)
+          }
+          setImmediate(() => rerunTurn(cs, combinedText, sessionKey, cwd))
+        } else if (cs.queue.length > 0) {
           const discarded = cs.queue.length
           cs.queue = []
           codexBroadcast(cs, `[Queue cleared (${discarded} pending message${discarded > 1 ? 's' : ''} discarded after interrupt).]\n`)
