@@ -166,6 +166,7 @@ function makeServer(port, sharedHome, projectId, tabId, claudeSessionId) {
   const { router, handleTerminalWs } = createTerminalRoutes(store, {
     port,
     testQueryImpl: factory,
+    lockWatchIntervalMs: 50,
   })
   return { store, project, tab, handleTerminalWs, router, state, port }
 }
@@ -269,7 +270,7 @@ describe('session singleton lock — dual-server', () => {
     wsB.close()
   })
 
-  it('read-only server blocks input (no consumer spawned)', async () => {
+  it('read-only server auto-steals on WS input (user message, consumer spawned)', async () => {
     const sharedHome = makeTempDir('nanocode-dualsrv-ro-')
     const projectId = 'test-proj-ro'
     const tabId = 'test-tab-ro'
@@ -289,31 +290,35 @@ describe('session singleton lock — dual-server', () => {
       3000, 'B read-only'
     )
 
-    // Server B tries to send input — must be blocked.
+    const lockFile = path.join(sharedHome, '.nanocode', 'session-locks', `${claudeSessionId}.lock`)
+
+    // Server B sends a WS claude-input (user message) → must steal + spawn.
     const turnsBefore = serverB.state.turns
-    emitJson(wsB, { type: 'claude-input', text: 'hello from read-only server', _nonce: 'ro1' })
+    emitJson(wsB, { type: 'claude-input', text: 'user takes over COMPLETE', _nonce: 'ro1' })
 
-    // Give the server a moment to process (or reject) the input.
-    await delay(200)
+    // Lock stolen by B.
+    await waitUntil(
+      () => { try { return JSON.parse(readFileSync(lockFile, 'utf8')).port === 9478 } catch { return false } },
+      3000, 'lock stolen by B after WS input'
+    )
+    assert.equal(JSON.parse(readFileSync(lockFile, 'utf8')).port, 9478,
+      'WS user input must steal the lock')
 
-    // Assert: NO streaming session was created (turns counter unchanged).
-    assert.equal(serverB.state.turns, turnsBefore,
-      'read-only server must NOT spawn a consumer (turns unchanged)')
+    // B spawned a consumer (turn incremented).
+    await waitUntil(
+      () => serverB.state.turns > turnsBefore,
+      3000, 'B consumer spawned after steal'
+    )
+    assert.ok(serverB.state.turns > turnsBefore,
+      'read-only server must spawn a consumer after stealing the lock')
 
-    // Assert: server B's client received a "blocked" info message.
-    const blockedMsg = wsB.sent.find((m) =>
+    // B received a promotion event (read-only → editable).
+    const promoteEvent = wsB.sent.find((m) =>
       m.type === 'claude-event' &&
       m.event?.subtype === 'info' &&
-      typeof m.event?.text === 'string' &&
-      m.event.text.includes('只读模式')
+      m.event?._readonly === false
     )
-    assert.ok(blockedMsg, 'read-only server must tell the client input was blocked')
-
-    // Assert: server B's client received a result event (to exit thinking state).
-    const resultEvent = wsB.sent.find((m) =>
-      m.type === 'claude-event' && m.event?.type === 'result'
-    )
-    assert.ok(resultEvent, 'read-only server must send a result to unfreeze the UI')
+    assert.ok(promoteEvent, 'stealing server must receive a promotion event')
 
     serverA.store.close()
     serverB.store.close()
@@ -428,13 +433,12 @@ describe('session singleton lock — dual-server', () => {
     wsB.close()
   })
 
-  it('read-only server blocks the inject API (no consumer spawned); host still wakes', async () => {
+  it('read-only server blocks the NON-USER inject API (waker/secretary briefing, no steal); host still wakes', async () => {
     // Regression guard for the inject-bypass bug: the HTTP inject path
     // (POST /api/sessions/:id/inject, used by the crontab watchdog /
     // secretary-wake) is a SEPARATE entry point from the WS 'claude-input'
-    // path. Without the readOnly guard in injectClaudeMessage, a server that
-    // lost the lock would still spawn a second Claude consumer via inject —
-    // the exact "two secretaries" conflict the lock is meant to prevent.
+    // path. A NON-USER message (isUser:false, e.g. waker briefing) must NOT
+    // steal the lock — it stays read-only (returns 423, no consumer).
     const sharedHome = makeTempDir('nanocode-dualsrv-inject-')
     const projectId = 'test-proj-inject'
     const tabId = 'test-tab-inject'
@@ -456,26 +460,31 @@ describe('session singleton lock — dual-server', () => {
 
     const sessionKey = `${projectId}:claude:${tabId}`
 
-    // ── Read-only server (B): inject must be BLOCKED, no consumer spawned ──
+    // ── Read-only server (B): non-user inject must be BLOCKED, no steal ──
     const turnsBeforeB = serverB.state.turns
     const resB = await invokeRoute(serverB.router, 'POST',
       `/api/sessions/${sessionKey}/inject`,
-      { body: { text: 'wake from read-only server', sendNow: false } }
+      { body: { text: 'wake from read-only server', sendNow: false, isUser: false } }
     )
-    assert.equal(resB.statusCode, 423, 'read-only inject must return 423 Locked')
-    assert.equal(resB.payload.ok, false, 'read-only inject must report ok:false')
-    assert.equal(resB.payload.readOnly, true, 'read-only inject must set readOnly:true')
+    assert.equal(resB.statusCode, 423, 'non-user inject must return 423 Locked')
+    assert.equal(resB.payload.ok, false, 'non-user inject must report ok:false')
+    assert.equal(resB.payload.readOnly, true, 'non-user inject must set readOnly:true')
     assert.equal(resB.payload.lockHolderPort, 9477,
-      'read-only inject must identify the host port 9477')
+      'non-user inject must identify the host port 9477')
     await delay(150)
     assert.equal(serverB.state.turns, turnsBeforeB,
-      'read-only server must NOT spawn a consumer via inject (turns unchanged)')
+      'read-only server must NOT spawn a consumer via non-user inject (turns unchanged)')
+
+    // Verify B did NOT steal the lock (lock still held by A).
+    const lockFile = path.join(sharedHome, '.nanocode', 'session-locks', `${claudeSessionId}.lock`)
+    assert.equal(JSON.parse(readFileSync(lockFile, 'utf8')).port, 9477,
+      'non-user inject must NOT steal the lock')
 
     // ── Host server (A): inject must STILL WORK (legitimate watchdog wake) ──
     const turnsBeforeA = serverA.state.turns
     const resA = await invokeRoute(serverA.router, 'POST',
       `/api/sessions/${sessionKey}/inject`,
-      { body: { text: 'wake the host secretary COMPLETE', sendNow: false } }
+      { body: { text: 'wake the host secretary COMPLETE', sendNow: false, isUser: false } }
     )
     assert.equal(resA.statusCode, 200, 'host inject must return 200')
     assert.equal(resA.payload.ok, true, 'host inject must report ok:true')
@@ -485,6 +494,161 @@ describe('session singleton lock — dual-server', () => {
     )
     assert.ok(serverA.state.turns > turnsBeforeA,
       'host server must still spawn a consumer via inject (wake path intact)')
+
+    serverA.store.close()
+    serverB.store.close()
+    wsA.close()
+    wsB.close()
+  })
+
+  it('USER inject on read-only server auto-steals the lock, spawns a consumer, and degrades the old host', async () => {
+    // The core steal-on-user-priority scenario: a user message arrives at a
+    // non-lock-holding server. It must auto-steal the lock, spawn its own
+    // consumer, and process the message. The old host detects the steal via
+    // its lock-watch and gracefully degrades to read-only.
+    const sharedHome = makeTempDir('nanocode-dualsrv-steal-')
+    const projectId = 'test-proj-steal'
+    const tabId = 'test-tab-steal'
+    const claudeSessionId = '93cead89-steal-session'
+
+    const serverA = makeServer(9477, sharedHome, projectId, tabId, claudeSessionId)
+    const serverB = makeServer(9478, sharedHome, projectId, tabId, claudeSessionId)
+
+    // Server A → host (starts a consumer so it has a streaming session to tear down).
+    const wsA = attachClaude(serverA.handleTerminalWs, projectId, tabId)
+    await waitUntil(() => wsA.sent.find((m) => m.type === 'busy-state'), 3000, 'A busy-state')
+
+    // Give server A a running turn so it has an active consumer.
+    const turnsBeforeA = serverA.state.turns
+    emitJson(wsA, { type: 'claude-input', text: 'host is working', _nonce: 'host1' })
+    await waitUntil(() => serverA.state.turns > turnsBeforeA, 3000, 'A consumer spawned')
+    assert.ok(serverA.busy !== false || serverA.state.turns > turnsBeforeA,
+      'server A should have a consumer running')
+
+    // Server B → read-only.
+    const wsB = attachClaude(serverB.handleTerminalWs, projectId, tabId)
+    await waitUntil(
+      () => wsB.sent.find((m) => m.event?._readonly === true),
+      3000, 'B read-only banner'
+    )
+
+    const sessionKey = `${projectId}:claude:${tabId}`
+    const lockFile = path.join(sharedHome, '.nanocode', 'session-locks', `${claudeSessionId}.lock`)
+
+    // ── Server B receives a USER inject → must steal + spawn ──
+    const turnsBeforeB = serverB.state.turns
+    const resB = await invokeRoute(serverB.router, 'POST',
+      `/api/sessions/${sessionKey}/inject`,
+      { body: { text: 'user takes over COMPLETE', sendNow: false, isUser: true } }
+    )
+    assert.equal(resB.statusCode, 200, 'user inject after steal must return 200')
+    assert.equal(resB.payload.ok, true, 'user inject must report ok:true after steal')
+
+    // Lock file now reflects server B (the stealer).
+    assert.equal(JSON.parse(readFileSync(lockFile, 'utf8')).port, 9478,
+      'lock must be stolen by port 9478 after user inject')
+
+    // Server B spawned a consumer (turn incremented).
+    await waitUntil(
+      () => serverB.state.turns > turnsBeforeB,
+      3000, 'B consumer spawned after steal'
+    )
+    assert.ok(serverB.state.turns > turnsBeforeB,
+      'stealing server must spawn its own consumer')
+
+    // Server B's client received a promotion event (read-only → editable).
+    await waitUntil(
+      () => wsB.sent.find((m) =>
+        m.type === 'claude-event' &&
+        m.event?.subtype === 'info' &&
+        m.event?._readonly === false
+      ),
+      3000, 'B promotion event after steal'
+    )
+
+    // ── Old host (A) detects the steal via lock-watch and degrades ──
+    await waitUntil(
+      () => wsA.sent.find((m) =>
+        m.type === 'claude-event' &&
+        m.event?.subtype === 'info' &&
+        m.event?._readonly === true &&
+        typeof m.event?.text === 'string' &&
+        m.event.text.includes('接管')
+      ),
+      3000, 'A degradation banner after steal'
+    )
+    const degradeBanner = wsA.sent.find((m) =>
+      m.type === 'claude-event' &&
+      m.event?.subtype === 'info' &&
+      m.event?._readonly === true &&
+      typeof m.event?.text === 'string' &&
+      m.event.text.includes('接管')
+    )
+    assert.ok(degradeBanner, 'old host must receive a "taken over" read-only banner')
+    assert.equal(degradeBanner.event._lockHolderPort, 9478,
+      'degradation banner must identify the new host port 9478')
+
+    serverA.store.close()
+    serverB.store.close()
+    wsA.close()
+    wsB.close()
+  })
+
+  it('WS claude-input on read-only server auto-steals the lock (UI user message)', async () => {
+    // The WS 'claude-input' path (UI) is always a user message. A read-only
+    // server must auto-steal on WS input, not block.
+    const sharedHome = makeTempDir('nanocode-dualsrv-ws-steal-')
+    const projectId = 'test-proj-ws-steal'
+    const tabId = 'test-tab-ws-steal'
+    const claudeSessionId = '93cead89-ws-steal-session'
+
+    const serverA = makeServer(9477, sharedHome, projectId, tabId, claudeSessionId)
+    const serverB = makeServer(9478, sharedHome, projectId, tabId, claudeSessionId)
+
+    // Server A → host.
+    const wsA = attachClaude(serverA.handleTerminalWs, projectId, tabId)
+    await waitUntil(() => wsA.sent.find((m) => m.type === 'busy-state'), 3000, 'A busy-state')
+
+    // Server B → read-only.
+    const wsB = attachClaude(serverB.handleTerminalWs, projectId, tabId)
+    await waitUntil(
+      () => wsB.sent.find((m) => m.event?._readonly === true),
+      3000, 'B read-only banner'
+    )
+
+    const lockFile = path.join(sharedHome, '.nanocode', 'session-locks', `${claudeSessionId}.lock`)
+
+    // Server B sends a WS claude-input (user message) → must steal.
+    const turnsBeforeB = serverB.state.turns
+    emitJson(wsB, { type: 'claude-input', text: 'user via WS takes over COMPLETE', _nonce: 'ws1' })
+
+    // Lock stolen by B.
+    await waitUntil(
+      () => {
+        try { return JSON.parse(readFileSync(lockFile, 'utf8')).port === 9478 } catch { return false }
+      },
+      3000, 'lock stolen by B after WS input'
+    )
+    assert.equal(JSON.parse(readFileSync(lockFile, 'utf8')).port, 9478,
+      'WS user input must steal the lock')
+
+    // B spawned a consumer.
+    await waitUntil(
+      () => serverB.state.turns > turnsBeforeB,
+      3000, 'B consumer spawned after WS steal'
+    )
+    assert.ok(serverB.state.turns > turnsBeforeB,
+      'WS steal must spawn a consumer on the stealing server')
+
+    // B received a promotion event.
+    await waitUntil(
+      () => wsB.sent.find((m) =>
+        m.type === 'claude-event' &&
+        m.event?.subtype === 'info' &&
+        m.event?._readonly === false
+      ),
+      3000, 'B promotion event after WS steal'
+    )
 
     serverA.store.close()
     serverB.store.close()

@@ -14,9 +14,9 @@ import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
 import { copyTranscriptToTeam, teamModelDefaults } from './team-failover.js'
 import { loadPersonalConfig } from './personal-config.js'
-import { acquireSessionLock, releaseSessionLock } from './session-lock.js'
+import { acquireSessionLock, releaseSessionLock, stealSessionLock, getLockHolder } from './session-lock.js'
 
-export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl, port }) {
+export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl, port, lockWatchIntervalMs }) {
   const IS_WIN = platform() === 'win32'
   const SHELL = IS_WIN
     ? (process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe')
@@ -392,6 +392,114 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       _nonce: null,
     }
     claudeBroadcast(cs, userEvent)
+  }
+
+  // ── Session-lock: steal-on-user-message + lock-watch helpers ────────────────
+  // When a non-lock-holding server receives a USER message, it auto-steals the
+  // lock (overwrite). The old holder detects the steal via a periodic lock-watch
+  // poll and gracefully degrades: interrupt its running turn (q.interrupt(),
+  // never SIGKILL — red line), tear down its streaming session, set read-only,
+  // broadcast a banner. Non-user messages (waker/secretary briefings) do NOT
+  // steal — they stay read-only (return 423 to the caller).
+
+  const LOCK_WATCH_INTERVAL_MS = lockWatchIntervalMs ?? 3000
+
+  function _broadcastLockBanner(cs, readonly, holderPort, text) {
+    const event = {
+      type: 'system',
+      subtype: 'info',
+      text,
+      _readonly: readonly,
+    }
+    if (holderPort != null) event._lockHolderPort = holderPort
+    const msg = JSON.stringify({ type: 'claude-event', event })
+    for (const client of cs.clients) {
+      if (client.readyState === 1) try { client.send(msg) } catch {}
+    }
+  }
+
+  function _stopLockWatch(cs) {
+    if (cs._lockWatchTimer) {
+      clearInterval(cs._lockWatchTimer)
+      cs._lockWatchTimer = null
+    }
+  }
+
+  // Gracefully degrade to read-only after another server stole our lock.
+  function _loseLockToOther(cs, newHolder) {
+    console.warn(
+      `[claude:lock] :${port} ${cs.sessionKey}: lock stolen by :${newHolder?.port} (pid ${newHolder?.pid}). ` +
+      `Degrading to read-only.`
+    )
+    // Gracefully interrupt the running turn (q.interrupt(), never SIGKILL).
+    if (cs.busy && cs.currentProc) {
+      try {
+        Promise.resolve(_interruptRunningClaudeTurn(cs, { force: true })).catch(() => {})
+      } catch {}
+    }
+    // Tear down our streaming session so the old consumer stops.
+    try { sdkDriver.teardownStreamingSession(cs) } catch {}
+    cs._lockHeld = false
+    cs.readOnly = true
+    cs.lockHolder = newHolder
+    _stopLockWatch(cs)
+    _broadcastLockBanner(
+      cs, true, newHolder?.port,
+      `会话已被 :${newHolder?.port} 接管（只读模式）`
+    )
+  }
+
+  function _startLockWatch(cs) {
+    if (cs._lockWatchTimer) return
+    const timer = setInterval(() => {
+      if (!cs._lockHeld) { _stopLockWatch(cs); return }
+      // Use the stable lock session ID (captured at acquire/steal time) instead
+      // of cs.claudeSessionId, which is mutable — the SDK driver updates it from
+      // streaming events (event.session_id). Using the mutable value would make
+      // the lock-watch poll the wrong lock file after a session-id change.
+      const lockSid = cs._lockSessionId || cs.claudeSessionId
+      if (!lockSid) { _stopLockWatch(cs); return }
+      const holder = getLockHolder(lockSid, home)
+      // Lock file gone unexpectedly — try to re-acquire (best-effort).
+      if (!holder) {
+        console.log(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch: holder gone, re-acquiring`)
+        const result = acquireSessionLock(lockSid, { pid: process.pid, port }, home)
+        if (!result.acquired && result.holder) {
+          _loseLockToOther(cs, result.holder)
+        }
+        return
+      }
+      if (holder.pid !== process.pid || holder.port !== port) {
+        _loseLockToOther(cs, holder)
+      }
+    }, LOCK_WATCH_INTERVAL_MS)
+    if (timer.unref) timer.unref()
+    cs._lockWatchTimer = timer
+  }
+
+  // Steal the lock for a user message. Returns true if we now hold the lock
+  // (already host OR just stole it); false if the steal failed (stay read-only).
+  function _stealLockForUserMessage(cs) {
+    if (!cs.readOnly) return true
+    // Use the stable lock session ID if we previously held the lock, otherwise
+    // fall back to cs.claudeSessionId (which, for a read-only server that never
+    // started streaming, is still the original session ID).
+    const lockSid = cs._lockSessionId || cs.claudeSessionId
+    if (!lockSid) return false
+    const result = stealSessionLock(lockSid, { pid: process.pid, port }, home)
+    if (!result.acquired) return false
+    cs._lockSessionId = lockSid
+    console.log(
+      `[claude:lock] ${cs.sessionKey}: stole lock for session ${lockSid} ` +
+      `from :${result.holder?.port ?? '(none)'} (user message).`
+    )
+    cs._lockHeld = true
+    cs.readOnly = false
+    cs.lockHolder = null
+    cs._justPromoted = true
+    _broadcastLockBanner(cs, false, null, '会话已恢复为可编辑模式')
+    _startLockWatch(cs)
+    return true
   }
 
   function getClaudeDriver() {
@@ -1012,7 +1120,14 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // sub-agents, red line). When false (default), a busy session queues the
   // message behind the running turn like a normal typed message. A watchdog
   // firing on a stuck secretary should pass sendNow=true.
-  function injectClaudeMessage(sessionKey, text, { sendNow = false } = {}) {
+  //
+  // isUser (default true): a user-initiated message (UI / explicit HTTP inject)
+  // triggers an auto-steal when this server is read-only — the user's intent
+  // overrides the current holder, which degrades via its lock-watch. A
+  // non-user message (waker / secretary briefing, isUser=false) must NOT
+  // steal: it stays read-only and returns { readOnly: true } so the caller
+  // can route the wake to the host instead.
+  function injectClaudeMessage(sessionKey, text, { sendNow = false, isUser = true } = {}) {
     const cs = claudeSessions.get(sessionKey)
     if (!cs) return { ok: false, error: 'session not found' }
     if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'empty text' }
@@ -1023,16 +1138,34 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     // server that lost the lock would still spawn a second Claude consumer via
     // inject — exactly the "two secretaries" conflict the lock is meant to stop.
     if (cs.readOnly) {
-      const holderPort = cs.lockHolder?.port
-      console.warn(
-        `[claude:lock] ${sessionKey}: inject blocked — session ${cs.claudeSessionId} ` +
-        `is hosted by :${holderPort} (read-only mode).`
-      )
-      return {
-        ok: false,
-        error: `read-only: session hosted by :${holderPort}`,
-        readOnly: true,
-        lockHolderPort: holderPort,
+      // Non-user messages (waker/secretary briefings): stay read-only, do NOT steal.
+      if (!isUser) {
+        const holderPort = cs.lockHolder?.port
+        console.warn(
+          `[claude:lock] ${sessionKey}: inject blocked — session ${cs.claudeSessionId} ` +
+          `is hosted by :${holderPort} (read-only mode, non-user message).`
+        )
+        return {
+          ok: false,
+          error: `read-only: session hosted by :${holderPort}`,
+          readOnly: true,
+          lockHolderPort: holderPort,
+        }
+      }
+      // User message: auto-steal the lock. The old holder detects the steal
+      // via its lock-watch and gracefully degrades (interrupt + teardown).
+      if (!_stealLockForUserMessage(cs)) {
+        const holderPort = cs.lockHolder?.port
+        console.warn(
+          `[claude:lock] ${sessionKey}: steal failed — session ${cs.claudeSessionId} ` +
+          `stays hosted by :${holderPort} (read-only mode).`
+        )
+        return {
+          ok: false,
+          error: `read-only: could not steal lock from :${holderPort}`,
+          readOnly: true,
+          lockHolderPort: holderPort,
+        }
       }
     }
     const userEvent = {
@@ -1297,12 +1430,16 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       const result = acquireSessionLock(cs.claudeSessionId, lockOpts, home)
       if (result.acquired) {
         cs._lockHeld = true
+        cs._lockSessionId = cs.claudeSessionId
         if (cs.readOnly) {
           cs.readOnly = false
           cs.lockHolder = null
           cs._justPromoted = true
           console.log(`[claude:lock] ${sessionKey}: promoted to host for session ${cs.claudeSessionId}`)
         }
+        // Start watching for steals so a user message on another server
+        // triggers our graceful degradation (interrupt + teardown).
+        _startLockWatch(cs)
       } else {
         cs.readOnly = true
         cs.lockHolder = result.holder
@@ -1402,21 +1539,28 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         return
       }
       if (msg.type === 'claude-input' && typeof msg.text === 'string' && msg.text.trim()) {
-        // ── Read-only mode: block input when another server hosts the session ──
+        // ── Read-only mode: steal the lock for user input, or block ────────────
+        // A WS 'claude-input' is always a user message (the UI path). When
+        // read-only, auto-steal the lock so the user can take over the session
+        // without manually reconnecting to the host. If the steal fails (rare
+        // filesystem error), fall back to the read-only block banner.
         if (cs.readOnly) {
-          try { ws.send(JSON.stringify({ type: 'claude-event', event: { type: 'result', subtype: 'success' } })) } catch {}
-          try {
-            ws.send(JSON.stringify({
-              type: 'claude-event',
-              event: {
-                type: 'system',
-                subtype: 'info',
-                text: `会话由 :${cs.lockHolder?.port} 托管，无法发送消息（只读模式）`,
-                _readonly: true,
-              },
-            }))
-          } catch {}
-          return
+          if (!_stealLockForUserMessage(cs)) {
+            try { ws.send(JSON.stringify({ type: 'claude-event', event: { type: 'result', subtype: 'success' } })) } catch {}
+            try {
+              ws.send(JSON.stringify({
+                type: 'claude-event',
+                event: {
+                  type: 'system',
+                  subtype: 'info',
+                  text: `会话由 :${cs.lockHolder?.port} 托管，无法发送消息（只读模式）`,
+                  _readonly: true,
+                },
+              }))
+            } catch {}
+            return
+          }
+          // Steal succeeded — cs.readOnly is now false; fall through to dispatch.
         }
         // ── /resume interception ─────────────────────────────────────────────
         // claude --print (non-interactive) blocks /resume with "isn't available
@@ -1538,8 +1682,11 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       // Release the session singleton lock when the last client disconnects,
       // so another server can promote from read-only to host.
       if (cs.clients.size === 0 && cs._lockHeld) {
-        releaseSessionLock(cs.claudeSessionId, { pid: process.pid, port }, home)
+        const lockSid = cs._lockSessionId || cs.claudeSessionId
+        releaseSessionLock(lockSid, { pid: process.pid, port }, home)
         cs._lockHeld = false
+        cs._lockSessionId = null
+        _stopLockWatch(cs)
       }
       // Release in-process ownership when the last client disconnects, so a
       // displaced tab can promote back to host on its next attach. Without
@@ -2103,10 +2250,12 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // process by design and is unaffected (tmux-routed cs have no _streamingSession).
   function disposeClaudeSessions() {
     for (const cs of claudeSessions.values()) {
+      _stopLockWatch(cs)
       try { sdkDriver.teardownStreamingSession(cs) } catch {}
       // Release the session singleton lock on shutdown.
       if (cs._lockHeld) {
-        try { releaseSessionLock(cs.claudeSessionId, { pid: process.pid, port }, home) } catch {}
+        const lockSid = cs._lockSessionId || cs.claudeSessionId
+        try { releaseSessionLock(lockSid, { pid: process.pid, port }, home) } catch {}
       }
     }
     claudeSessions.clear()
