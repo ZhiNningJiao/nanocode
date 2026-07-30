@@ -40,6 +40,9 @@ export function createTerminalRoutes(store, opts = {}) {
     // Test seam only: forwarded to createClaudeSdkDriver so send-now race
     // tests can inject a deterministic mock query. Undefined in production.
     testQueryImpl: opts?.testQueryImpl,
+    // Test seam only: speed up the lock-watch poll for fast integration tests.
+    // Undefined in production (defaults to 3s in the controller).
+    lockWatchIntervalMs: opts?.lockWatchIntervalMs,
   })
   // On server shutdown / test end, tear down all in-process SDK streaming
   // sessions so their child-process handles release and the process can exit.
@@ -273,11 +276,15 @@ export function createTerminalRoutes(store, opts = {}) {
     // Express already URL-decodes path params once, so this works whether the
     // caller sends raw colons (uuid:claude:uuid) or percent-encoded (%3A).
     const sessionKey = req.params.id
-    const { text, sendNow } = req.body || {}
+    const { text, sendNow, isUser } = req.body || {}
     // Claude session (primary use case: secretary wake). Reuses the exact
     // WS 'claude-input' dispatch path via injectClaudeMessage.
+    // isUser defaults to true (UI / explicit user inject) — a user message
+    // auto-steals the lock when this server is read-only. The waker passes
+    // isUser:false so secretary briefings stay read-only (no steal).
     const result = sessionController.injectClaudeMessage(sessionKey, text, {
       sendNow: sendNow === true,
+      isUser: isUser !== false,
     })
     if (result.ok) return res.json(result)
     // Read-only server (lost the session singleton lock): the session is alive

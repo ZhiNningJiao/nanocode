@@ -145,7 +145,7 @@ async function injectViaHttp(baseUrl, sessionKey, text) {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, sendNow: false }),
+      body: JSON.stringify({ text, sendNow: false, isUser: false }),
       signal: AbortSignal.timeout(5000),
     })
     const data = await resp.json()
