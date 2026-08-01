@@ -499,6 +499,19 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     cs._justPromoted = true
     _broadcastLockBanner(cs, false, null, '会话已恢复为可编辑模式')
     _startLockWatch(cs)
+    // In-process twin takeover: if this cs was displaced by another tab in
+    // THIS process (same pid+port), the file lock is re-entrant, so the old
+    // host's lock-watch can never detect the steal (holder still reads as
+    // ours). Without migrating the in-process registry here, the old host
+    // keeps readOnly=false and BOTH tabs spawn consumers for the same
+    // claudeSessionId — exactly the twin bug the registry exists to stop.
+    // Re-claim ownership: the previous in-process host is demoted to
+    // read-only (same demotion semantics as an attach-time displacement).
+    if (cs._displacedBy) {
+      cs._displacedBy = null
+      const [projectId, , tabId] = cs.sessionKey.split(':')
+      claimClaudeSessionOwnership(cs, cs.sessionKey, projectId, tabId, cs.tabLabel || '')
+    }
     return true
   }
 
