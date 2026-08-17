@@ -23,13 +23,14 @@ import { builtinPlugin } from '../public/js/plugins-registry.js'
 import { exportToEvents } from './opencode-adapter.js'
 import { listOpencodeSessions } from './opencode-sessions.js'
 import { createReposRoutes } from './repos-routes.js'
+import { createClaudeModelProbe, claudeSdkVersion } from './claude-models-probe.js'
 
 /**
  * Create terminal routes backed by the given store.
  */
 export function createTerminalRoutes(store, opts = {}) {
   const router = Router()
-  const home = homedir()
+  const home = opts?.home || homedir()
   const recentAgents = createRecentAgentsService({ home })
   const sessionController = createClaudeSessionController({
     store,
@@ -39,6 +40,9 @@ export function createTerminalRoutes(store, opts = {}) {
     // Test seam only: forwarded to createClaudeSdkDriver so send-now race
     // tests can inject a deterministic mock query. Undefined in production.
     testQueryImpl: opts?.testQueryImpl,
+    // Test seam only: speed up the lock-watch poll for fast integration tests.
+    // Undefined in production (defaults to 3s in the controller).
+    lockWatchIntervalMs: opts?.lockWatchIntervalMs,
   })
   // On server shutdown / test end, tear down all in-process SDK streaming
   // sessions so their child-process handles release and the process can exit.
@@ -54,6 +58,55 @@ export function createTerminalRoutes(store, opts = {}) {
     sessionController,
   })
   const remoteSsh = createRemoteSshHandler(store)
+
+  // ── Claude model-list probe + cache ───────────────────────────────────────
+  // The claude picker's source of truth is the SDK's live supportedModels()
+  // (see claude-models-probe.js), not a hardcoded list. The probe spawns a
+  // short-lived zero-turn query, so it is cached per SDK-version + TTL to avoid
+  // re-probing on every picker open. `opts.claudeModelProbe` (an async fn →
+  // raw ModelInfo[]) is a test seam: when injected the cache is bypassed so
+  // unit tests get deterministic per-call behaviour (success / throw / bad
+  // entries) without ever spawning the SDK.
+  const claudeModelProbe = opts?.claudeModelProbe ?? null
+  const _claudeRealProbe = claudeModelProbe ? null : createClaudeModelProbe({ home, cwd: opts?.claudeProbeCwd })
+  let _claudeModelsCache = null // { ts, raw, version }
+  const CLAUDE_MODELS_TTL_MS = 10 * 60 * 1000
+
+  async function _resolveClaudeModels() {
+    // Injected probe (tests): bypass cache for deterministic per-call results.
+    if (claudeModelProbe) return claudeModelProbe()
+    const version = claudeSdkVersion()
+    if (_claudeModelsCache && _claudeModelsCache.version === version &&
+        Date.now() - _claudeModelsCache.ts < CLAUDE_MODELS_TTL_MS) {
+      return _claudeModelsCache.raw
+    }
+    const raw = await _claudeRealProbe()
+    _claudeModelsCache = { ts: Date.now(), raw, version }
+    return raw
+  }
+
+  // Whitelist + coerce a raw ModelInfo[] into a picker-safe list. A single
+  // bad entry (value missing / non-string / blank) is dropped, never allowed
+  // to reach the frontend as value:undefined (escapeHtml(undefined) would
+  // throw inside the picker loop and take the whole picker down — the exact
+  // F1 failure from the codex round). Display fields are coerced to safe
+  // strings so a bad sibling can't break rendering of the good entries.
+  function _whitelistClaudeModels(raw) {
+    const all = Array.isArray(raw) ? raw : []
+    return all
+      .filter((m) => m && typeof m.value === 'string' && m.value.trim() !== '')
+      .map((m) => ({
+        value: m.value,
+        displayName: typeof m.displayName === 'string' && m.displayName.trim() !== ''
+          ? m.displayName
+          : m.value,
+        description: typeof m.description === 'string' ? m.description : '',
+        supportsEffort: m.supportsEffort === true,
+        supportedEffortLevels: Array.isArray(m.supportedEffortLevels)
+          ? m.supportedEffortLevels.filter((l) => typeof l === 'string' && l.trim() !== '')
+          : [],
+      }))
+  }
 
   /** Parse ~/.ssh/config into an array of host objects. */
   function parseSshConfig(content) {
@@ -223,11 +276,15 @@ export function createTerminalRoutes(store, opts = {}) {
     // Express already URL-decodes path params once, so this works whether the
     // caller sends raw colons (uuid:claude:uuid) or percent-encoded (%3A).
     const sessionKey = req.params.id
-    const { text, sendNow } = req.body || {}
+    const { text, sendNow, isUser } = req.body || {}
     // Claude session (primary use case: secretary wake). Reuses the exact
     // WS 'claude-input' dispatch path via injectClaudeMessage.
+    // isUser defaults to true (UI / explicit user inject) — a user message
+    // auto-steals the lock when this server is read-only. The waker passes
+    // isUser:false so secretary briefings stay read-only (no steal).
     const result = sessionController.injectClaudeMessage(sessionKey, text, {
       sendNow: sendNow === true,
+      isUser: isUser !== false,
     })
     if (result.ok) return res.json(result)
     // Read-only server (lost the session singleton lock): the session is alive
@@ -1045,6 +1102,112 @@ export function createTerminalRoutes(store, opts = {}) {
       console.warn('[codex/config] failed to read config.toml:', err.message)
     }
     res.json({ model })
+  })
+
+  // ── GET /api/codex/models ─────────────────────────────────────────────────
+  //
+  // Read ~/.codex/models_cache.json (the authoritative model list the codex CLI
+  // itself caches after fetching from the API) and return the user-selectable
+  // models. This is the source of truth for the codex model picker so the
+  // frontend never ships a stale hardcoded list (e.g. gpt-5.6 / gpt-5-codex
+  // that no longer exist). Response shape:
+  //   { fetched_at, client_version, configModel, models: [...], fallback }
+  // `models` excludes visibility:"hide" entries (internal models like the auto
+  // review model). `configModel` mirrors /api/codex/config so the picker can
+  // flag the config.toml default in a single round-trip. On any error or a
+  // missing cache file the response is `{ models: [], configModel, fallback: true }`
+  // and the frontend falls back to its built-in curated list.
+  router.get('/api/codex/models', (req, res) => {
+    const cachePath = join(home, '.codex', 'models_cache.json')
+    const configPath = join(home, '.codex', 'config.toml')
+    let configModel = null
+    try {
+      if (existsSync(configPath)) {
+        const content = readFileSync(configPath, 'utf8')
+        const match = content.match(/^model\s*=\s*"([^"]+)"/m)
+        if (match) configModel = match[1]
+      }
+    } catch (err) {
+      console.warn('[codex/models] failed to read config.toml:', err.message)
+    }
+    try {
+      if (!existsSync(cachePath)) {
+        return res.json({ fetched_at: null, client_version: null, configModel, models: [], fallback: true })
+      }
+      const raw = readFileSync(cachePath, 'utf8')
+      const parsed = JSON.parse(raw)
+      const all = Array.isArray(parsed && parsed.models) ? parsed.models : []
+      // Keep only user-facing models (visibility:"list"); drop hidden/internal
+      // ones. Preserve the cache's own ordering (priority then slug).
+      //
+      // A single bad cache entry (e.g. slug missing / non-string / blank) would
+      // otherwise reach the frontend as slug:undefined → escapeHtml(undefined)
+      // throws inside the picker loop and the whole picker fails to render. So
+      // drop any entry whose slug is not a non-empty trimmed string, and coerce
+      // the other display fields to safe strings so no bad sibling breaks the
+      // picker for the good entries.
+      const models = all
+        .filter((m) => m && m.visibility !== 'hide' && typeof m.slug === 'string' && m.slug.trim() !== '')
+        .map((m) => ({
+          slug: m.slug,
+          display_name: typeof m.display_name === 'string' && m.display_name.trim() !== '' ? m.display_name : m.slug,
+          description: typeof m.description === 'string' ? m.description : '',
+          default_reasoning_level: typeof m.default_reasoning_level === 'string' && m.default_reasoning_level
+            ? m.default_reasoning_level
+            : null,
+          supported_reasoning_levels: Array.isArray(m.supported_reasoning_levels)
+            ? m.supported_reasoning_levels
+                .map((l) => (l && typeof l === 'object' ? l.effort : l))
+                .filter((l) => typeof l === 'string' && l.trim() !== '')
+            : [],
+        }))
+      res.json({
+        fetched_at: parsed && parsed.fetched_at ? parsed.fetched_at : null,
+        client_version: parsed && parsed.client_version ? parsed.client_version : null,
+        configModel,
+        models,
+        fallback: false,
+      })
+    } catch (err) {
+      console.warn('[codex/models] failed to read models_cache.json:', err.message)
+      res.json({ fetched_at: null, client_version: null, configModel, models: [], fallback: true })
+    }
+  })
+
+  // ── GET /api/claude/models ─────────────────────────────────────────────────
+  //
+  // The authoritative claude model list, sourced live from the Claude Agent
+  // SDK's `Query.supportedModels()` (not a hardcoded list). The SDK's baked-in
+  // list ships stale — e.g. 0.3.165 knew Opus 4.8 but not Opus 5 — so a picker
+  // that trusts a hardcoded list cannot offer Opus 5 even after an SDK upgrade.
+  // `supportedModels()` returns whatever the *current* SDK + account actually
+  // offer, so the picker always reflects the real version (the only source of
+  // truth the picker should trust).
+  //
+  // The probe spawns a short-lived zero-turn streaming-input query, asks for
+  // the model list, and tears down (see claude-models-probe.js). The result is
+  // cached per SDK-version + TTL (10 min) to avoid re-probing on every picker
+  // open — the list only changes when the SDK is upgraded or the account's
+  // entitlements change, both rare. `opts.claudeModelProbe` is a test seam
+  // (an async fn → raw ModelInfo[]) that bypasses the cache so unit tests get
+  // deterministic per-call behaviour without spawning the SDK.
+  //
+  // Response shape: { models: [...], fallback, sdk_version }
+  // A single bad entry (value missing / non-string / blank) is dropped, never
+  // allowed to reach the frontend as value:undefined (escapeHtml(undefined)
+  // would throw inside the picker loop and take the whole picker down — the
+  // exact F1 failure the codex side hit). On any error the response is
+  // `{ models: [], fallback: true }` and the frontend falls back to its
+  // built-in curated list, matching the codex route's failure contract.
+  router.get('/api/claude/models', async (_req, res) => {
+    try {
+      const raw = await _resolveClaudeModels()
+      const models = _whitelistClaudeModels(raw)
+      res.json({ models, fallback: false, sdk_version: claudeSdkVersion() })
+    } catch (err) {
+      console.warn('[claude/models] probe failed:', err.message)
+      res.json({ models: [], fallback: true, sdk_version: claudeSdkVersion() })
+    }
   })
 
   // ── 需求1 plugin routes ────────────────────────────────────────────────────

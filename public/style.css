@@ -6571,6 +6571,34 @@ body.workspace-active .landing-overlay { display: none; }
   border-color: var(--error, #f87171);
   color: var(--error, #f87171);
 }
+/* Terminal-mode codex tabs have no conversation scroll to flow the picker into,
+   so _mountPicker falls back to the .pane-terminal container and adds --floating.
+   Anchor the picker as a bottom overlay with its own scroll so it doesn't
+   disturb xterm's dimension calc (the pane keeps its size; the picker floats). */
+.terminal-track > .pane-terminal { position: relative; }
+.cbr-model-picker--floating {
+  position: absolute;
+  left: var(--s-2, 8px);
+  right: var(--s-2, 8px);
+  bottom: var(--s-2, 8px);
+  max-height: 62%;
+  overflow: auto;
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+/* Terminal-mode codex tabs have no conversation scroll, so model-set
+   confirmation / save-failed toasts (._mountToast) float above the xterm as a
+   small bottom-anchored banner instead of being silently dropped. The base
+   .cbr-model-picker-confirm supplies padding/bg/border; this only adds the
+   overlay positioning so it stays visible without covering the picker. */
+.cbr-model-picker-confirm--floating {
+  position: absolute;
+  left: var(--s-2, 8px);
+  right: var(--s-2, 8px);
+  bottom: var(--s-2, 8px);
+  z-index: 21;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+}
 
 /* ── Code block ────────────────────────────────────────────────── */
 

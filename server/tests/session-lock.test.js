@@ -18,6 +18,7 @@ import {
   getLockHolder,
   isLockHeldByOther,
   isPidAlive,
+  stealSessionLock,
 } from '../../terminal/session-lock.js'
 
 let tmpHome
@@ -188,6 +189,65 @@ describe('session-lock', () => {
       const b = acquireSessionLock('sess-s2', { pid: 2000, port: 9478 }, tmpHome)
       assert.equal(a.acquired, true)
       assert.equal(b.acquired, true)
+    })
+  })
+
+  describe('stealSessionLock', () => {
+    it('steals a lock held by another live process (unconditional overwrite)', () => {
+      // Server A (live pid, port 9477) acquires.
+      acquireSessionLock('steal-a', { pid: process.pid, port: 9477 }, tmpHome)
+      // Server B (same pid, port 9478) steals — must succeed even though A is alive.
+      const result = stealSessionLock('steal-a', { pid: process.pid, port: 9478 }, tmpHome)
+      assert.equal(result.acquired, true)
+      assert.ok(result.holder, 'steal must report the previous holder')
+      assert.equal(result.holder.pid, process.pid)
+      assert.equal(result.holder.port, 9477)
+      // Lock file now reflects B.
+      const holder = getLockHolder('steal-a', tmpHome)
+      assert.equal(holder.port, 9478)
+    })
+
+    it('is a no-op re-acquire when we already hold the lock', () => {
+      acquireSessionLock('steal-b', { pid: 1000, port: 9477 }, tmpHome)
+      const result = stealSessionLock('steal-b', { pid: 1000, port: 9477 }, tmpHome)
+      assert.equal(result.acquired, true)
+      assert.equal(result.holder, null, 're-entrant steal reports null previous holder')
+    })
+
+    it('steals a lock with no previous holder (absent lock file)', () => {
+      const result = stealSessionLock('steal-c', { pid: process.pid, port: 9477 }, tmpHome)
+      assert.equal(result.acquired, true)
+      assert.equal(result.holder, null)
+      const holder = getLockHolder('steal-c', tmpHome)
+      assert.equal(holder.port, 9477)
+    })
+
+    it('overwrites a stale lock and reports the dead holder', () => {
+      acquireSessionLock('steal-d', { pid: 999_999, port: 9477 }, tmpHome)
+      const result = stealSessionLock('steal-d', { pid: process.pid, port: 9478 }, tmpHome)
+      assert.equal(result.acquired, true)
+      assert.ok(result.holder, 'steal reports the stale (dead-pid) previous holder')
+      assert.equal(result.holder.pid, 999_999)
+    })
+
+    it('overwrites a corrupt lock file', () => {
+      const dir = `${tmpHome}/.nanocode/session-locks`
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(`${dir}/steal-e.lock`, 'not-json{')
+      const result = stealSessionLock('steal-e', { pid: process.pid, port: 9477 }, tmpHome)
+      assert.equal(result.acquired, true)
+      const holder = getLockHolder('steal-e', tmpHome)
+      assert.equal(holder.port, 9477)
+    })
+
+    it('differs from acquireSessionLock: acquire rejects, steal succeeds', () => {
+      acquireSessionLock('steal-f', { pid: process.pid, port: 9477 }, tmpHome)
+      // acquire must fail (held by another live process on a different port).
+      const acq = acquireSessionLock('steal-f', { pid: process.pid, port: 9478 }, tmpHome)
+      assert.equal(acq.acquired, false)
+      // steal must succeed.
+      const stl = stealSessionLock('steal-f', { pid: process.pid, port: 9478 }, tmpHome)
+      assert.equal(stl.acquired, true)
     })
   })
 })

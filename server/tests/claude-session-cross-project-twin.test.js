@@ -18,12 +18,16 @@
  *  1. Cross-project resume: project A (host) → project B attaches same
  *     sessionId → A is displaced to read-only, B becomes the host.
  *  2. The displaced tab's client receives a displacement banner.
- *  3. Input from the displaced tab is blocked (no consumer spawned).
- *  4. The host tab can still send input.
+ *  3. A USER message on a displaced tab takes over (commit 0f6ca6a: user
+ *     message auto-steals the singleton lock): the displacing tab is demoted
+ *     to read-only, ownership migrates — at any moment exactly ONE host.
+ *  4. The takeover works in both directions (B steals back from A).
  *  5. When the host's last client disconnects, the displaced tab promotes
  *     back to host (clears read-only, can send input).
  *  6. Two tabs with different sessions do not conflict (both hosts).
- *  7. The inject API is blocked on a displaced tab.
+ *  7. Inject API on a displaced tab: a NON-user message (waker, isUser:false)
+ *     is blocked (423, no consumer); a USER inject takes over (ownership
+ *     migrates, old host demoted); the host's inject keeps working.
  *  8. Dirty-data fallback: two tabs pre-persisted with the same sessionId
  *     (e.g. after a server restart) — the most-recent to attach wins.
  */
@@ -281,7 +285,7 @@ describe('cross-project resume twin guard (in-process ownership)', () => {
     wsB.close()
   })
 
-  it('displaced tab blocks input (no consumer spawned); host still works', async () => {
+  it('displaced tab user input takes over: A steals, B demoted — exactly one host at a time', async () => {
     const sharedHome = makeTempDir('nanocode-xproj-block-')
     const claudeSessionId = 'd1ffad35-block-session'
     const server = makeDualProjectServer(
@@ -298,31 +302,65 @@ describe('cross-project resume twin guard (in-process ownership)', () => {
       3000, 'A displaced'
     )
 
-    // Displaced A tries to send input — must be blocked.
+    // Displaced A sends USER input → takes over (commit 0f6ca6a semantics:
+    // a WS claude-input is always a user message and auto-steals the lock).
     const turnsBefore = server.state.turns
-    emitJson(wsA, { type: 'claude-input', text: 'hello from displaced tab', _nonce: 'dis1' })
-    await delay(200)
-    assert.equal(server.state.turns, turnsBefore,
-      'displaced tab must NOT spawn a consumer (turns unchanged)')
+    emitJson(wsA, { type: 'claude-input', text: 'takeover from displaced A COMPLETE', _nonce: 'dis1' })
+    await waitUntil(
+      () => server.state.turns > turnsBefore,
+      3000, 'A consumer spawned after takeover'
+    )
+    assert.ok(server.state.turns > turnsBefore,
+      'user input on a displaced tab must spawn a consumer (takeover)')
 
-    // Assert: A's client received a "blocked" info message.
-    const blockedMsg = wsA.sent.find((m) =>
+    // Assert: A's client received a promotion info message (read-only cleared).
+    const promoMsg = wsA.sent.find((m) =>
       m.type === 'claude-event' &&
       m.event?.subtype === 'info' &&
-      typeof m.event?.text === 'string' &&
-      m.event.text.includes('只读')
+      m.event?._readonly === false
     )
-    assert.ok(blockedMsg, 'displaced tab must tell the client input was blocked')
+    assert.ok(promoMsg, 'taking-over tab must tell the client it is editable again')
 
-    // Host B can still send input (consumer spawned).
+    // Assert: ownership migrated back to A — the takeover is registered.
+    assert.equal(
+      server.sessionController.claudeSessionOwners.get(claudeSessionId),
+      'projA:claude:tabA',
+      'ownership must migrate to the taking-over tab (registry stays consistent)'
+    )
+
+    // Assert: the OLD host B was demoted — displacement banner referencing A.
+    // Without this, both tabs would spawn consumers for the same session
+    // (the exact twin bug this guard exists to stop).
+    const bDisplaced = wsB.sent.find((m) =>
+      m.type === 'claude-event' &&
+      m.event?._readonly === true &&
+      m.event?._displacedTo
+    )
+    assert.ok(bDisplaced, 'old host must be demoted to read-only after the takeover')
+    assert.equal(bDisplaced.event._displacedTo.tabId, 'tabA',
+      'old host displacement banner must reference the new host tab')
+    assert.ok(bDisplaced.event.text.includes('只读'),
+      'old host displacement banner must mention read-only mode')
+
+    // Flip-flop: B (now displaced) sends USER input → steals back, A demoted.
     const turnsBeforeB = server.state.turns
-    emitJson(wsB, { type: 'claude-input', text: 'hello from host COMPLETE', _nonce: 'host1' })
+    emitJson(wsB, { type: 'claude-input', text: 'steal back from B COMPLETE', _nonce: 'tk2' })
     await waitUntil(
       () => server.state.turns > turnsBeforeB,
-      3000, 'host consumer spawned'
+      3000, 'B consumer spawned after stealing back'
     )
-    assert.ok(server.state.turns > turnsBeforeB,
-      'host tab must still be able to spawn a consumer')
+    assert.equal(
+      server.sessionController.claudeSessionOwners.get(claudeSessionId),
+      'projB:claude:tabB',
+      'ownership must migrate back to B on the steal-back'
+    )
+    const aDisplacedAgain = wsA.sent.filter((m) =>
+      m.type === 'claude-event' &&
+      m.event?._readonly === true &&
+      m.event?._displacedTo
+    )
+    assert.equal(aDisplacedAgain.length, 2,
+      'A must be demoted again after B steals back (single-host invariant both ways)')
 
     server.store.close()
     wsA.close()
@@ -430,7 +468,7 @@ describe('cross-project resume twin guard (in-process ownership)', () => {
     wsB.close()
   })
 
-  it('inject API blocked on displaced tab (no consumer spawned); host inject still works', async () => {
+  it('inject on displaced tab: non-user blocked (423); user inject takes over; host inject still works', async () => {
     const sharedHome = makeTempDir('nanocode-xproj-inject-')
     const claudeSessionId = 'd1ffad35-inject-session'
     const server = makeDualProjectServer(
@@ -450,18 +488,24 @@ describe('cross-project resume twin guard (in-process ownership)', () => {
     const sessionKeyA = 'projA:claude:tabA'
     const sessionKeyB = 'projB:claude:tabB'
 
-    // ── Displaced tab (A): inject must be BLOCKED, no consumer spawned ──
+    // ── Displaced tab (A): NON-user inject (waker/secretary briefing,
+    //    isUser:false) must be BLOCKED — machine wakes never steal the lock ──
     const turnsBefore = server.state.turns
     const resA = await invokeRoute(server.router, 'POST',
       `/api/sessions/${sessionKeyA}/inject`,
-      { body: { text: 'wake from displaced tab', sendNow: false } }
+      { body: { text: 'wake from displaced tab', sendNow: false, isUser: false } }
     )
-    assert.equal(resA.statusCode, 423, 'displaced inject must return 423 Locked')
-    assert.equal(resA.payload.ok, false, 'displaced inject must report ok:false')
-    assert.equal(resA.payload.readOnly, true, 'displaced inject must set readOnly:true')
+    assert.equal(resA.statusCode, 423, 'non-user inject on displaced tab must return 423 Locked')
+    assert.equal(resA.payload.ok, false, 'non-user inject must report ok:false')
+    assert.equal(resA.payload.readOnly, true, 'non-user inject must set readOnly:true')
     await delay(150)
     assert.equal(server.state.turns, turnsBefore,
-      'displaced tab must NOT spawn a consumer via inject (turns unchanged)')
+      'non-user inject on displaced tab must NOT spawn a consumer (turns unchanged)')
+    assert.equal(
+      server.sessionController.claudeSessionOwners.get(claudeSessionId),
+      'projB:claude:tabB',
+      'ownership must stay with the host after a blocked non-user inject'
+    )
 
     // ── Host tab (B): inject must STILL WORK ──
     const turnsBeforeB = server.state.turns
@@ -477,6 +521,33 @@ describe('cross-project resume twin guard (in-process ownership)', () => {
     )
     assert.ok(server.state.turns > turnsBeforeB,
       'host tab must still spawn a consumer via inject')
+
+    // ── Displaced tab (A): USER inject (default isUser:true) TAKES OVER
+    //    (commit 0f6ca6a semantics) — ownership migrates to A, B demoted ──
+    const turnsBeforeA2 = server.state.turns
+    const resA2 = await invokeRoute(server.router, 'POST',
+      `/api/sessions/${sessionKeyA}/inject`,
+      { body: { text: 'user takeover from displaced tab COMPLETE', sendNow: false } }
+    )
+    assert.equal(resA2.statusCode, 200, 'user inject on displaced tab must take over (200)')
+    assert.equal(resA2.payload.ok, true, 'user inject on displaced tab must report ok:true')
+    await waitUntil(
+      () => server.state.turns > turnsBeforeA2,
+      3000, 'A consumer spawned after inject takeover'
+    )
+    assert.equal(
+      server.sessionController.claudeSessionOwners.get(claudeSessionId),
+      'projA:claude:tabA',
+      'ownership must migrate to the taking-over tab (registry stays consistent)'
+    )
+    const bDisplaced = wsB.sent.find((m) =>
+      m.type === 'claude-event' &&
+      m.event?._readonly === true &&
+      m.event?._displacedTo
+    )
+    assert.ok(bDisplaced, 'old host must be demoted to read-only after the inject takeover')
+    assert.equal(bDisplaced.event._displacedTo.tabId, 'tabA',
+      'old host displacement banner must reference the new host tab')
 
     server.store.close()
     wsA.close()

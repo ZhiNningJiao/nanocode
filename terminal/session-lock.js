@@ -199,3 +199,37 @@ export function isLockHeldByOther(sessionId, opts = {}, home) {
   if (holder.pid === pid && holder.port === port) return null
   return holder
 }
+
+/**
+ * Steal (forcibly overwrite) a session lock regardless of who holds it.
+ *
+ * Used when a USER message arrives at a read-only server: the user's intent
+ * overrides the current holder, which will detect the steal via its lock
+ * watch and gracefully degrade (interrupt its running turn + teardown its
+ * streaming session). Non-user messages (waker/secretary briefings) must
+ * NOT call this — they stay read-only.
+ *
+ * Unlike acquireSessionLock, this NEVER fails on "held by another live
+ * process" — it overwrites unconditionally. A re-entrant steal (same pid +
+ * port) is a no-op that still returns acquired=true.
+ *
+ * @returns {{ acquired: boolean, holder?: { pid: number, port: *, timestamp: number } | null }}
+ *   - acquired=true  → we now hold the lock; `holder` is the previous
+ *                      holder (or null if the lock was absent / stale / ours)
+ */
+export function stealSessionLock(sessionId, opts = {}, home) {
+  const pid = opts.pid ?? process.pid
+  const port = opts.port ?? null
+  const lockDir = resolveLockDir(home)
+  ensureLockDir(lockDir)
+  const filePath = lockPath(sessionId, lockDir)
+  const data = JSON.stringify({ pid, port, timestamp: Date.now() })
+
+  const previous = readLock(filePath)
+  if (previous && previous.pid === pid && previous.port === port) {
+    return { acquired: true, holder: null }
+  }
+
+  writeLockOverwrite(filePath, data)
+  return { acquired: true, holder: previous || null }
+}

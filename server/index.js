@@ -5,7 +5,7 @@ import { createConnection } from 'net'
 import { fileURLToPath } from 'url'
 import path from 'path'
 import os from 'os'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, statSync, writeFileSync } from 'fs'
 import { execFile, execSync } from 'child_process'
 import { promisify } from 'util'
 const execFileAsync = promisify(execFile)
@@ -715,6 +715,31 @@ app.get('/api/historian/waker/control', asyncWrap(async (_req, res) => {
   const state = await getWakerControlState()
   res.json(state)
 }))
+
+// ─── Secretary duty status (~/code/duty-status.json) ─────────────────────────
+// Read-only snapshot of the secretary team handoff file written by
+// switch-secretary.sh (see tools/secretary/). Fail-loud by design: a missing
+// or unparseable duty file means "duty unknown" — we answer 503 instead of
+// fabricating a duty state, so monitors can alert on it.
+
+const DUTY_STATUS_PATH = path.join(os.homedir(), 'code', 'duty-status.json')
+
+app.get('/api/duty', (_req, res) => {
+  let raw, mtimeMs
+  try {
+    mtimeMs = statSync(DUTY_STATUS_PATH).mtimeMs
+    raw = readFileSync(DUTY_STATUS_PATH, 'utf8')
+  } catch (err) {
+    return res.status(503).json({ ok: false, error: `duty status file unreadable (${DUTY_STATUS_PATH}): ${err.message}` })
+  }
+  let duty
+  try {
+    duty = JSON.parse(raw)
+  } catch (err) {
+    return res.status(503).json({ ok: false, error: `duty status file is not valid JSON: ${err.message}` })
+  }
+  res.json({ ok: true, duty, age_seconds: Math.floor((Date.now() - mtimeMs) / 1000) })
+})
 
 app.get('/api/agents', asyncWrap(async (_req, res) => {
   // P1: async handler wrapped with asyncWrap — an unhandled rejection from
