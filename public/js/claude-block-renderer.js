@@ -601,6 +601,10 @@ export class ClaudeBlockRenderer {
     // Used to suppress per-block rAF scrolls and TTS dispatches during bulk replay.
     this._replayMode = false
 
+    // True after dispose(); long-running work (chunked history replay) checks
+    // this between batches and bails out instead of rendering into a dead pane.
+    this._disposed = false
+
     // Streaming render throttle: rAF handle for pending live-block markdown update.
     // Prevents running marked.parse() on every WS chunk (can be 10s/sec).
     this._streamRafPending = false
@@ -771,6 +775,7 @@ export class ClaudeBlockRenderer {
   }
 
   dispose() {
+    this._disposed = true
     clearTimeout(this._reconnectTimer)
     this._stopPing()
     this._removeHistorySentinel()
@@ -854,11 +859,36 @@ export class ClaudeBlockRenderer {
     // ── Render the initial slice in batch replay mode ────────────────────────
     // Suppress per-block _scrollBottom() rAF callbacks and TTS dispatches;
     // do a single scroll-to-bottom at the end.
+    //
+    // P-mobile-lag ①b: this used to be one synchronous loop over up to
+    // INITIAL_HISTORY_BLOCKS events, each doing marked.parse() + DOMPurify +
+    // innerHTML — a single multi-second long task on mobile CPUs (measured:
+    // 37.7 s single long task on a real 4x-throttled Pixel 5 profile, blocking
+    // all input/UI). We now render in time-budgeted chunks (~32 ms of work,
+    // then yield one macrotask) so input / paint / WS handling can interleave.
+    // Total wall time is nearly unchanged (yields are ~0-4 ms each); worst
+    // contiguous long task drops from "whole replay" to ~one chunk.
     this._replayMode = true
     try {
+      const CHUNK_BUDGET_MS = 32
+      let chunkStart = performance.now()
       for (let i = initialStart; i < totalEvents; i++) {
         this._handleEvent(events[i], { fromReplay: true })
+        if (performance.now() - chunkStart >= CHUNK_BUDGET_MS) {
+          // Yield to the event loop between batches so the page stays
+          // responsive while a big history replays in the background.
+          if (this._disposed || !this._scroll.isConnected) {
+            break
+          }
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          chunkStart = performance.now()
+          if (this._disposed || !this._scroll.isConnected) {
+            break
+          }
+        }
       }
+      // If the pane was torn down mid-replay, stop quietly.
+      if (this._disposed || !this._scroll.isConnected) return
     } finally {
       this._replayMode = false
     }
@@ -867,6 +897,7 @@ export class ClaudeBlockRenderer {
     // Reset _userScrolledUp so auto-scroll resumes from a clean state after history load.
     this._userScrolledUp = false
     requestAnimationFrame(() => {
+      if (this._disposed || !this._scroll || !this._scroll.isConnected) return
       this._scroll.scrollTop = this._scroll.scrollHeight
       this._updateScrollBtn()
     })
