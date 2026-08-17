@@ -10,6 +10,8 @@ import { TabManager, TYPE_ICON_SVG } from './tab-manager.js'
 import { createExplorer } from './explorer.js'
 import { initRightPanel, showRightPanelTab } from './right-panel.js'
 import { t } from './i18n.js'
+import { mountFloatingEl } from './model-picker-mount.js'
+import { claudeBadgeText } from './model-badge.js'
 
 const mobileQuery = window.matchMedia('(max-width: 768px)')
 const isMobile = () => mobileQuery.matches
@@ -963,16 +965,22 @@ function setupChatInput() {
       return
     }
     if (isBlockAgentTab) {
-      const model = _modelByTab.get(activeId)
-      if (model) {
-        // "claude-fable-5" → "fable-5": keep the pill short (mobile-friendly).
-        modelBadgeEl.textContent = model.replace(/^claude-/, '')
-        modelBadgeEl.title = t('composer.model.tooltip')
-      } else {
-        // No reply yet — still show a tappable "model" affordance on claude tabs.
-        modelBadgeEl.textContent = 'model'
-        modelBadgeEl.title = t('composer.model.tooltip')
-      }
+      // Claude (block) badge: the model ACTUALLY generating the last reply wins
+      // (filled by the block renderer's nanocode:claude-model dispatch on each
+      // assistant message_start); fall back to the tab's modelOverride (the
+      // picker's per-tab pick) so the user sees their selection immediately, even
+      // before the first turn / after a page reload. Root fix for the badge being
+      // stuck on 'model' after picking — the old code read _modelByTab only, so a
+      // tab with an override but no turn yet always rendered the bare 'model'
+      // affordance. Mirrors the codex branch's reported > override > 'model'
+      // priority. claudeBadgeText strips a `claude-` prefix but keeps `[1m]`.
+      const activeTab = (tabManager && tabManager.tabs)
+        ? (tabManager.tabs.find((t) => t.id === activeId) || null) : null
+      modelBadgeEl.textContent = claudeBadgeText({
+        reportedModel: _modelByTab.get(activeId),
+        modelOverride: activeTab && activeTab.modelOverride,
+      })
+      modelBadgeEl.title = t('composer.model.tooltip')
       modelBadgeEl.hidden = false
       modelBadgeEl.classList.add('model-badge--pickable')
       return
@@ -1012,9 +1020,15 @@ function setupChatInput() {
   }
 
   document.addEventListener('nanocode:claude-model', (e) => {
+    // Reported model from a real reply (always non-empty) OR the picker's
+    // choice (may be '' = clear override). On clear, DELETE the entry so the
+    // badge falls back to modelOverride (which the picker cleared) → 'model';
+    // a stale reported model must never linger after the user clears the pick.
+    // Symmetric with the codex listener's set-on-value / delete-on-empty.
     const { tabId, model } = e.detail || {}
-    if (!tabId || !model) return
-    _modelByTab.set(tabId, model)
+    if (!tabId) return
+    if (model) _modelByTab.set(tabId, model)
+    else _modelByTab.delete(tabId)
     _updateModelBadge()
   })
 
@@ -1631,7 +1645,11 @@ function setupChatInput() {
   // Applies only to claude tabs. If the user typed /model <name> directly, we
   // still pass it through to the backend interception for backward compat.
 
-  // Available Claude models for the picker (canonical list; kept short and real).
+  // Available Claude models for the picker. FALLBACK ONLY — the authoritative
+  // list is the SDK's live supportedModels() served by GET /api/claude/models
+  // (see _fetchClaudeModels). This hardcoded list goes stale (e.g. it knew
+  // Opus 4.8 but not Opus 5), so the picker prefers the live list and only uses
+  // this when the probe fails or the endpoint is unreachable.
   const _MODEL_PICKER_LIST = [
     { id: 'claude-fable-5',          label: 'Claude Fable 5',          hint: 'Latest · recommended' },
     { id: 'claude-opus-4-8',         label: 'Claude Opus 4.8',         hint: 'Powerful · complex tasks' },
@@ -1640,6 +1658,8 @@ function setupChatInput() {
     { id: '',                        label: '(CLI default)',            hint: 'Use whatever claude CLI defaults to' },
   ]
 
+  // Effort list FALLBACK ONLY — the authoritative set is the model's
+  // supportedEffortLevels from the live probe (see _claudeEffortPickerList).
   const _EFFORT_PICKER_LIST = [
     { id: 'xhigh', label: 'xhigh', hint: 'Max thinking budget · slowest · most thorough' },
     { id: 'high',  label: 'high',  hint: 'Extended reasoning · thorough' },
@@ -1670,9 +1690,103 @@ function setupChatInput() {
     return true
   }
 
-  async function showModelPicker() {
-    dismissModelPicker()
+  // Mount the model picker. Block-mode agent panes have a conversation scroll
+  // (.cbr-scroll / .cbx-scroll) where the picker flows inline at the bottom.
+  // Terminal-mode codex tabs have NO such scroll (the pane is an xterm), so the
+  // picker would never mount and the badge click silently did nothing. Fall
+  // back to the .pane-terminal container and flag the picker as --floating so
+  // CSS anchors it as an overlay (position:absolute, bottom-anchored, own
+  // scroll). The pane is made a positioning context via .terminal-track scope.
+  //
+  // _mountOverlay is the shared safe-mount used by BOTH the picker and the
+  // success/error toasts (see _mountToast). Previously the toasts only called
+  // _appendToScroll, which returns false in a terminal pane — so a codex
+  // terminal tab gave zero feedback after a model/effort change. Reusing the
+  // same scroll-or-float logic guarantees the toast mounts in terminal mode.
+  function _mountOverlay(el, floatingClass) {
+    return mountFloatingEl(el, {
+      scroll: _getPickerScroll(),
+      container: activePane?.container || null,
+      floatingClass,
+    })
+  }
 
+  function _mountPicker(picker) {
+    return _mountOverlay(picker, 'cbr-model-picker--floating')
+  }
+
+  // Toasts (model-set confirmation / save-failed error) reuse the same
+  // safe-mount as the picker so they are visible in terminal mode too. The
+  // --floating variant is a small bottom-anchored banner, not the full picker
+  // overlay, so it doesn't cover the xterm.
+  function _mountToast(el) {
+    return _mountOverlay(el, 'cbr-model-picker-confirm--floating')
+  }
+
+  // Claude model list source of truth: the SDK's live supportedModels(),
+  // served by GET /api/claude/models. The hardcoded _MODEL_PICKER_LIST above
+  // is a FALLBACK ONLY — it ships stale (e.g. knew Opus 4.8 but not Opus 5), so
+  // the picker prefers the live probe. The SDK values are arbitrary strings
+  // (e.g. `opus[1m]`, `claude-fable-5[1m]`, aliases like `default`/`sonnet`)
+  // and are passed through to options.model unchanged — no parsing/rewriting.
+  // Cached per-session after the first fetch; refreshed on picker open so a
+  // newly-upgraded SDK shows up without a page reload.
+  let _claudeModelsCache = null // { models, fallback, sdk_version } | null
+
+  async function _fetchClaudeModels() {
+    try {
+      const r = await fetch('/api/claude/models')
+      if (!r.ok) return null
+      const j = await r.json()
+      if (!j || !Array.isArray(j.models)) return null
+      _claudeModelsCache = j
+      return j
+    } catch { return null }
+  }
+
+  // Build the model picker list. Uses the live cache when available; falls back
+  // to the curated hardcoded list otherwise. Always appends a "(CLI default)"
+  // entry (id='') so the user can clear the override.
+  function _claudeModelPickerList() {
+    if (_claudeModelsCache && !_claudeModelsCache.fallback && _claudeModelsCache.models.length) {
+      const list = _claudeModelsCache.models.map((m) => {
+        const hint = m.description || ''
+        return { id: m.value, label: m.displayName || m.value, hint }
+      })
+      list.push({ id: '', label: '(CLI default)', hint: 'Use the SDK default model (no override)' })
+      return list
+    }
+    return _MODEL_PICKER_LIST.slice()
+  }
+
+  const _CLAUDE_EFFORT_HINTS = {
+    max: 'Maximum reasoning depth · hardest problems',
+    xhigh: 'Extra high reasoning · complex problems',
+    high: 'Extended reasoning · thorough',
+    medium: 'Balanced speed vs depth',
+    low: 'Fast · light reasoning',
+  }
+
+  // Build the effort picker list for a chosen model. If the model is in the
+  // live cache, use its supportedEffortLevels (the authoritative set — some
+  // models support max, others only up to high). Otherwise fall back to the
+  // curated _EFFORT_PICKER_LIST. Always appends a "(none)" entry. A model with
+  // supportsEffort === false (e.g. haiku) yields only the "(none)" entry.
+  function _claudeEffortPickerList(modelValue) {
+    const m = _claudeModelsCache && !_claudeModelsCache.fallback
+      ? _claudeModelsCache.models.find((x) => x.value === modelValue)
+      : null
+    if (m && Array.isArray(m.supportedEffortLevels) && m.supportedEffortLevels.length) {
+      const list = m.supportedEffortLevels.map((ef) => ({
+        id: ef, label: ef, hint: _CLAUDE_EFFORT_HINTS[ef] || '',
+      }))
+      list.push({ id: '', label: '(none / CLI default)', hint: 'No --effort flag passed to claude' })
+      return list
+    }
+    return _EFFORT_PICKER_LIST.slice()
+  }
+
+  async function showModelPicker() {
     // Per-tab model: the active tab's modelOverride/effortOverride take priority
     // over the global claude_model/claude_effort default (root fix for the
     // cross-tab /model sync bug — the choice is persisted on the tab, not the
@@ -1683,7 +1797,10 @@ function setupChatInput() {
     let curModel = ''
     let curEffort = ''
     try {
+      // Refresh the model cache every open so a newly-upgraded SDK shows up
+      // without a page reload. Falls back to the hardcoded list on error.
       const res = await fetch('/api/settings')
+      await _fetchClaudeModels()
       if (res.ok) {
         const s = await res.json()
         // tab override wins; global is the default
@@ -1695,11 +1812,19 @@ function setupChatInput() {
     if (!curModel && activeTab && activeTab.modelOverride) curModel = activeTab.modelOverride
     if (!curEffort && activeTab && activeTab.effortOverride) curEffort = activeTab.effortOverride
 
+    dismissModelPicker()
+
     const picker = document.createElement('div')
     picker.className = 'cbr-model-picker'
     _modelPickerEl = picker
 
-    // Build step 1: model selection
+    function currentHeader() {
+      const curLabel = curModel || '(CLI default)'
+      const curEff = curEffort ? ` · effort: ${curEffort}` : ''
+      return `Current: ${curLabel}${curEff}`
+    }
+
+    // Build step 1: model selection (live list + Custom… free-form)
     function buildModelStep() {
       picker.innerHTML = ''
       const header = document.createElement('div')
@@ -1707,10 +1832,16 @@ function setupChatInput() {
       header.textContent = 'Select model (step 1 of 2)'
       picker.appendChild(header)
 
+      const cur = document.createElement('div')
+      cur.className = 'cbr-model-picker-hint'
+      cur.textContent = currentHeader()
+      picker.appendChild(cur)
+
       const grid = document.createElement('div')
       grid.className = 'cbr-model-picker-grid'
 
-      for (const m of _MODEL_PICKER_LIST) {
+      const modelList = _claudeModelPickerList()
+      for (const m of modelList) {
         const btn = document.createElement('button')
         btn.className = 'cbr-model-picker-btn' + (m.id === curModel ? ' cbr-model-picker-active' : '')
         btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(m.label)}</span>` +
@@ -1721,6 +1852,19 @@ function setupChatInput() {
         })
         grid.appendChild(btn)
       }
+
+      // Custom… button: the SDK accepts arbitrary model strings (e.g.
+      // opus[1m], claude-fable-5[1m], or a raw model id the user knows), so
+      // offer a free-form escape hatch beyond the live list.
+      const customBtn = document.createElement('button')
+      customBtn.className = 'cbr-model-picker-btn' + (modelList.some((m) => m.id === curModel) ? '' : ' cbr-model-picker-active')
+      customBtn.innerHTML = `<span class="cbr-model-picker-name">Custom…</span>` +
+                            `<span class="cbr-model-picker-hint">Type any model name (e.g. opus[1m], claude-fable-5)</span>`
+      customBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault()
+        buildCustomModelStep()
+      })
+      grid.appendChild(customBtn)
 
       picker.appendChild(grid)
 
@@ -1737,6 +1881,63 @@ function setupChatInput() {
       if (scroll) scroll.scrollTop = scroll.scrollHeight
     }
 
+    function buildCustomModelStep() {
+      picker.innerHTML = ''
+      const header = document.createElement('div')
+      header.className = 'cbr-model-picker-header'
+      header.textContent = 'Custom model (step 1 of 2)'
+      picker.appendChild(header)
+
+      const cur = document.createElement('div')
+      cur.className = 'cbr-model-picker-hint'
+      cur.textContent = currentHeader()
+      picker.appendChild(cur)
+
+      const inputRow = document.createElement('div')
+      inputRow.className = 'cbr-model-picker-cancel-row'
+      const input = document.createElement('input')
+      input.type = 'text'
+      input.className = 'rp-input'
+      input.placeholder = 'e.g. opus[1m]'
+      input.value = curModel
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          const v = input.value.trim()
+          buildEffortStep({ id: v, label: v || '(CLI default)', hint: '' })
+        }
+      })
+      const nextBtn = document.createElement('button')
+      nextBtn.className = 'cbr-queue-btn'
+      nextBtn.textContent = 'Next →'
+      nextBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault()
+        const v = input.value.trim()
+        buildEffortStep({ id: v, label: v || '(CLI default)', hint: '' })
+      })
+      inputRow.appendChild(input)
+      inputRow.appendChild(nextBtn)
+      picker.appendChild(inputRow)
+
+      const cancelRow = document.createElement('div')
+      cancelRow.className = 'cbr-model-picker-cancel-row'
+      const backBtn = document.createElement('button')
+      backBtn.className = 'cbr-queue-btn'
+      backBtn.textContent = '← Back'
+      backBtn.addEventListener('mousedown', (e) => { e.preventDefault(); buildModelStep() })
+      const cancelBtn = document.createElement('button')
+      cancelBtn.className = 'cbr-queue-btn cbr-queue-cancel'
+      cancelBtn.textContent = 'Cancel'
+      cancelBtn.addEventListener('mousedown', (e) => { e.preventDefault(); dismissModelPicker(); chatInput.focus() })
+      cancelRow.appendChild(backBtn)
+      cancelRow.appendChild(cancelBtn)
+      picker.appendChild(cancelRow)
+
+      setTimeout(() => input.focus(), 0)
+      const scroll = _getPickerScroll()
+      if (scroll) scroll.scrollTop = scroll.scrollHeight
+    }
+
     function buildEffortStep(chosenModel) {
       picker.innerHTML = ''
       const header = document.createElement('div')
@@ -1747,7 +1948,7 @@ function setupChatInput() {
       const grid = document.createElement('div')
       grid.className = 'cbr-model-picker-grid'
 
-      for (const ef of _EFFORT_PICKER_LIST) {
+      for (const ef of _claudeEffortPickerList(chosenModel.id)) {
         const btn = document.createElement('button')
         btn.className = 'cbr-model-picker-btn' + (ef.id === curEffort ? ' cbr-model-picker-active' : '')
         btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(ef.label)}</span>` +
@@ -1795,20 +1996,39 @@ function setupChatInput() {
           body: JSON.stringify({ modelOverride: chosenModel.id, effortOverride: chosenEffort.id }),
         })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        // Optimistically sync the active tab's override so the badge (which
+        // falls back to modelOverride) is correct immediately, before the
+        // server's tabs:update broadcast arrives — and so clearing the override
+        // leaves no stale residue: the badge reads '' → 'model' at once. The
+        // broadcast will confirm these fields shortly (and overwrites on any
+        // real divergence), same optimistic-flip pattern as the star toggle.
+        const activeTab = (tabManager && tabManager.tabs)
+          ? (tabManager.tabs.find((t) => t.id === tabId) || null) : null
+        if (activeTab) {
+          activeTab.modelOverride = chosenModel.id || ''
+          activeTab.effortOverride = chosenEffort.id || ''
+        }
+        // Notify the badge live, without waiting for the next turn. model:'' =
+        // clear override → the nanocode:claude-model listener deletes the cache
+        // entry so the badge falls back to the (now-cleared) modelOverride →
+        // 'model'. Symmetric with codex's _dispatchCodexModelEvent.
+        document.dispatchEvent(new CustomEvent('nanocode:claude-model', {
+          detail: { tabId, model: chosenModel.id || '' },
+        }))
         // Show confirmation as a system info message rendered inline
         const confirmEl = document.createElement('div')
         confirmEl.className = 'cbr-model-picker-confirm'
         const modelLabel = chosenModel.label || '(CLI default)'
         const effortLabel = chosenEffort.id ? ` · effort: ${chosenEffort.label}` : ''
         confirmEl.textContent = `Model set to ${modelLabel}${effortLabel} (this tab). Takes effect on next message.`
-        _appendToScroll(confirmEl)
+        _mountToast(confirmEl)
         setTimeout(() => confirmEl.remove(), 5000)
       } catch (err) {
         console.error('[model-picker] failed to save settings:', err)
         const errEl = document.createElement('div')
         errEl.className = 'cbr-model-picker-confirm cbr-model-picker-error'
         errEl.textContent = `Failed to save model: ${err.message}`
-        _appendToScroll(errEl)
+        _mountToast(errEl)
         setTimeout(() => errEl.remove(), 5000)
       }
       chatInput.focus()
@@ -1816,8 +2036,7 @@ function setupChatInput() {
 
     buildModelStep()
 
-    if (!_appendToScroll(picker)) {
-      // No CBR scroll available (plain terminal tab) — fall back to clearing input
+    if (!_mountPicker(picker)) {
       _modelPickerEl = null
     }
   }
@@ -1853,6 +2072,72 @@ function setupChatInput() {
     { id: '',       label: '(none / config default)', hint: 'No override — use config.toml effort' },
   ]
 
+  // Codex model list source of truth: ~/.codex/models_cache.json, served by
+  // GET /api/codex/models. The hardcoded _CODEX_MODEL_PICKER_LIST above is a
+  // FALLBACK ONLY — it goes stale (e.g. gpt-5.6 / gpt-5-codex no longer exist),
+  // so the picker prefers the live cache. Cached per-session after the first
+  // fetch; refreshed on picker open if the cache is empty or marked stale.
+  let _codexModelsCache = null // { models, configModel, fallback } | null
+
+  async function _fetchCodexModels() {
+    try {
+      const r = await fetch('/api/codex/models')
+      if (!r.ok) return null
+      const j = await r.json()
+      if (!j || !Array.isArray(j.models)) return null
+      _codexModelsCache = j
+      return j
+    } catch { return null }
+  }
+
+  // Build the model picker list. Uses the live cache when available; falls back
+  // to the curated hardcoded list otherwise. Always appends a "(CLI default)"
+  // entry (id='') so the user can clear the override. "Custom…" is rendered
+  // separately by the caller (it has the free-form input step).
+  function _codexModelPickerList() {
+    const cfgModel = _codexModelsCache?.configModel || null
+    if (_codexModelsCache && !_codexModelsCache.fallback && _codexModelsCache.models.length) {
+      const list = _codexModelsCache.models.map((m) => {
+        const hint = (m.description || '') + (m.slug === cfgModel ? ' · default in config.toml' : '')
+        return { id: m.slug, label: m.slug, hint }
+      })
+      list.push({ id: '', label: '(CLI default)', hint: 'Use config.toml model (no override)' })
+      return list
+    }
+    // Fallback: mark the hardcoded entry that matches config.toml.
+    return _CODEX_MODEL_PICKER_LIST.map((m) => ({
+      ...m,
+      hint: m.id && m.id === cfgModel ? (m.hint ? m.hint.replace(/ · default in config\.toml.*$/, '') + ' · default in config.toml' : 'default in config.toml') : m.hint,
+    }))
+  }
+
+  // Build the effort picker list for a chosen model. If the model is in the
+  // live cache, use its supported_reasoning_levels (the authoritative set —
+  // some models support max/ultra, others only up to xhigh). Otherwise fall back
+  // to the curated _CODEX_EFFORT_PICKER_LIST. Always appends a "(none)" entry.
+  const _CODEX_EFFORT_HINTS = {
+    ultra: 'Maximum reasoning + automatic task delegation',
+    max: 'Maximum reasoning depth · hardest problems',
+    xhigh: 'Extra high reasoning · complex problems',
+    high: 'Extended reasoning · thorough',
+    medium: 'Balanced speed vs depth',
+    low: 'Fast · light reasoning',
+    minimal: 'Fastest · minimal thinking',
+  }
+  function _codexEffortPickerList(modelSlug) {
+    const m = _codexModelsCache && !_codexModelsCache.fallback
+      ? _codexModelsCache.models.find((x) => x.slug === modelSlug)
+      : null
+    if (m && Array.isArray(m.supported_reasoning_levels) && m.supported_reasoning_levels.length) {
+      const list = m.supported_reasoning_levels.map((ef) => ({
+        id: ef, label: ef, hint: _CODEX_EFFORT_HINTS[ef] || '',
+      }))
+      list.push({ id: '', label: '(none / config default)', hint: 'No override — use config.toml effort' })
+      return list
+    }
+    return _CODEX_EFFORT_PICKER_LIST
+  }
+
   function _dispatchCodexModelEvent(tabId, model) {
     document.dispatchEvent(new CustomEvent('nanocode:codex-model', { detail: { tabId, model } }))
   }
@@ -1876,13 +2161,13 @@ function setupChatInput() {
       confirmEl.className = 'cbr-model-picker-confirm'
       const label = value || '(CLI default)'
       confirmEl.textContent = `Codex model set to ${label} (this tab). Takes effect on next message.`
-      _appendToScroll(confirmEl)
+      _mountToast(confirmEl)
       setTimeout(() => confirmEl.remove(), 5000)
     } catch (err) {
       const errEl = document.createElement('div')
       errEl.className = 'cbr-model-picker-confirm cbr-model-picker-error'
       errEl.textContent = `Failed to set codex model: ${err.message}`
-      _appendToScroll(errEl)
+      _mountToast(errEl)
       setTimeout(() => errEl.remove(), 5000)
     }
     chatInput.focus()
@@ -1958,14 +2243,14 @@ function setupChatInput() {
       const modelLabel = chosenModel.label || '(CLI default)'
       const effortLabel = chosenEffort.id ? ` · effort: ${chosenEffort.label}` : ''
       confirmEl.textContent = `Codex model set to ${modelLabel}${effortLabel} (this tab). Takes effect on next message.`
-      _appendToScroll(confirmEl)
+      _mountToast(confirmEl)
       setTimeout(() => confirmEl.remove(), 5000)
     } catch (err) {
       console.error('[codex-model-picker] failed to save settings:', err)
       const errEl = document.createElement('div')
       errEl.className = 'cbr-model-picker-confirm cbr-model-picker-error'
       errEl.textContent = `Failed to save codex model: ${err.message}`
-      _appendToScroll(errEl)
+      _mountToast(errEl)
       setTimeout(() => errEl.remove(), 5000)
     }
     chatInput.focus()
@@ -1984,6 +2269,9 @@ function setupChatInput() {
       const [sRes, cRes] = await Promise.all([
         fetch('/api/settings').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
         fetch('/api/codex/config').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        // Refresh the model cache every open so a newly-fetched models_cache.json
+        // shows up without a page reload. Falls back to the hardcoded list on error.
+        _fetchCodexModels(),
       ])
       const activeTab = (typeof tabManager !== 'undefined' && tabManager && tabManager.tabs)
         ? (tabManager.tabs.find((t) => t.id === tabManager.activeId) || null)
@@ -1991,7 +2279,9 @@ function setupChatInput() {
       // tab override wins; global codex_model / codex_effort are the defaults
       curModel = (activeTab && activeTab.modelOverride) ? activeTab.modelOverride : (sRes.codex_model || '')
       curEffort = (activeTab && activeTab.effortOverride) ? activeTab.effortOverride : (sRes.codex_effort || '')
-      configModel = cRes?.model || null
+      // configModel: prefer the value carried by the models endpoint (single
+      // source of truth), fall back to the dedicated /api/codex/config one.
+      configModel = (_codexModelsCache && _codexModelsCache.configModel) || cRes?.model || null
     } catch { /* picker still works, just no prefill */ }
 
     dismissModelPicker()
@@ -2022,7 +2312,8 @@ function setupChatInput() {
       const grid = document.createElement('div')
       grid.className = 'cbr-model-picker-grid'
 
-      for (const m of _CODEX_MODEL_PICKER_LIST) {
+      const modelList = _codexModelPickerList()
+      for (const m of modelList) {
         const btn = document.createElement('button')
         btn.className = 'cbr-model-picker-btn' + (m.id === curModel ? ' cbr-model-picker-active' : '')
         btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(m.label)}</span>` +
@@ -2037,7 +2328,7 @@ function setupChatInput() {
       // Custom… button: codex accepts any model string, so offer a free-form
       // escape hatch (the curated list is just convenience).
       const customBtn = document.createElement('button')
-      customBtn.className = 'cbr-model-picker-btn' + (_CODEX_MODEL_PICKER_LIST.some((m) => m.id === curModel) ? '' : ' cbr-model-picker-active')
+      customBtn.className = 'cbr-model-picker-btn' + (modelList.some((m) => m.id === curModel) ? '' : ' cbr-model-picker-active')
       customBtn.innerHTML = `<span class="cbr-model-picker-name">Custom…</span>` +
                             `<span class="cbr-model-picker-hint">Type any model name (e.g. gpt-5.6-sol, o7)</span>`
       customBtn.addEventListener('mousedown', (e) => {
@@ -2128,7 +2419,7 @@ function setupChatInput() {
       const grid = document.createElement('div')
       grid.className = 'cbr-model-picker-grid'
 
-      for (const ef of _CODEX_EFFORT_PICKER_LIST) {
+      for (const ef of _codexEffortPickerList(chosenModel.id)) {
         const btn = document.createElement('button')
         btn.className = 'cbr-model-picker-btn' + (ef.id === curEffort ? ' cbr-model-picker-active' : '')
         btn.innerHTML = `<span class="cbr-model-picker-name">${escapeHtml(ef.label)}</span>` +
@@ -2162,8 +2453,9 @@ function setupChatInput() {
 
     buildModelStep()
 
-    if (!_appendToScroll(picker)) {
-      // No CBR scroll available — fall back to clearing the picker ref.
+    if (!_mountPicker(picker)) {
+      // No scroll AND no pane container — clear the picker ref so dismissModelPicker
+      // stays consistent. Should not happen in practice (every tab has a pane).
       _modelPickerEl = null
     }
   }
