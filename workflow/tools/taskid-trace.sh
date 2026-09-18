@@ -57,10 +57,10 @@ else
     --out "$OUT/info" || { echo "staging info failed" >&2; exit 2; }
 fi
 
-# ② Loki three-stage log pull (lib/loki.py: AIGW MCP transport by default,
+# ② Loki three-stage log pull (lib/loki_pull.py staging shell over verbatim lib/loki.py:
 #    direct-Loki fallback when LOKI_URL is set; key read per README contract).
 LOKI_MSG=""
-if LOKI_MSG=$(python3 "$LIB/loki.py" "$TASK_ID" --since "$SINCE" --out "$OUT/logs"); then
+if LOKI_MSG=$(python3 "$LIB/loki_pull.py" "$TASK_ID" --since "$SINCE" --out "$OUT/logs"); then
   echo "loki: $LOKI_MSG"
 else
   RC=$?
