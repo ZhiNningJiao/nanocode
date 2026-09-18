@@ -12,8 +12,15 @@
 | HANDOFF 模板 + 交接协议 | workflow-docs-tidy-1335/candidates | 本仓 `workflow/handoff/` ✅ |
 | Astra 复盘 + 脚本化清单 | astra-retro-rootcause-1335 | 本仓 `workflow/retro/` ✅（全文仍指源文件） |
 | CURRENT_WORKFLOW.v2（重排版，不新增规则） | workflow-docs-tidy-1335/candidates | 第二批：待 owner 批 v2 生效后迁 `workflow/workflow-v2.md` |
+| 甘特派单板数据关系（akari lens `zhining/akari-gantt-mvp-0918`@`1d029e820` 候选） | REPORT_gantt_ui_r3_1620.md + 双腿 QA | 本仓 `workflow/gantt-map.md` ✅（只沉淀数据关系文档，**不搬 lens UI/dist 进 nanocode**） |
 
 ## 第二批（应真迁进仓的脚本）
+
+> 本轮（workflow-refresh-1910）核实：第二批脚本**尚未迁入**，上述路径仍是本机运行体；
+> 各类实际依赖：waker 依赖 tmux+feishu 桥与 cron 环境；qa_gate_* 依赖 worker-core/
+> ragas-gate 本机文件；切换三件依赖 `~/code/secretary-takeover.sh` + secretary-home.env
+> （env 留本机，见下节）。搬迁步骤仍按 shim 方案：仓内正本 + 原位置 `exec bash <仓内路径> "$@"`
+> shim，cron/任务书路径零改动。**在 shim 落地前，不得声称任何脚本已迁。**
 
 - `waker.sh` + `waker_core.py`（史官本体，workflow 核心）——迁 `workflow/scripts/historian/`
 - `qa_gate_mechanical.py`（验收门）——迁 `workflow/scripts/gates/`

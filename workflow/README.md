@@ -32,7 +32,7 @@
 ## 一天怎么转
 
 1. owner 在飞书/会话丢想法 → 秘书当天入想法板（飞书 Base，唯一业务台账）。
-2. 秘书写任务书（模板见 `dispatch/TASK_TEMPLATE.md`）→ 经 `akari_dispatch.sh` 派车
+2. 秘书写任务书（模板见 `dispatch/README.md`，内嵌任务书模板）→ 经 `akari_dispatch.sh` 派车
    （武器库段自动前置：CodeKG 速查 + ARSENAL_INDEX + memq 考古）。
 3. worker 开工三查（memq 决策 / CodeKG 地形 / 武器库）→ 干活 → `cmd 2>&1 | tee run.log`
    → grep 干净 → REPORT（每条断言带 `证据: 文件:行号`）→ 落 FLAG（push 在前 FLAG 在后）
@@ -73,6 +73,9 @@ work-log 最近5条 + INBOX）→ 5. 扫信号 `ls -t ~/codex_work | grep -E '^(
 - `rules/verification.md` — 防假过验收门
 - `rules/reporting.md` — 汇报与通知分级
 - `rules/archive.md` — 归档规则 v1
+- `rules/measurement.md` — 实验计时/测量口径（算法 vs HTTP、案例命名）
+- `gantt-map.md` — 甘特派单板数据关系映射（已实现候选 vs 当前部署分离）
+- `scripts/check_docs.sh` — 文档链接+泄漏轻量体检（零依赖）
 - `MIGRATION.md` — 哪些实体应真迁进仓、哪些留本机
 - `retro/2026-09-18-astra.md` — Astra 班次复盘摘要与脚本化清单
 - `scripts/INDEX.md` — 脚本入口表（只登记路径，不复制本体）
