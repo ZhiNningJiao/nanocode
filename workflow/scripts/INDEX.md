@@ -18,6 +18,17 @@
 
 **明确未迁**（仍在本机，见 MIGRATION.md 第二批）：akari_dispatch.sh、auto-qa-dispatcher.sh、
 feishu-secretary-bridge.sh、史官/交接/复活链（`tools/secretary/` 仅为 0801 逐字节归档，非移植）。
+三者各自的「入口 shim 落地方案」（env 化清单 / 耦合点 / 最小改动路径 / 验证命令）已沉淀于
+`../SHIM_PLAN.md`（workflow-docs-2258）；shim 落地前不得声称已切换到仓内运行。
+
+## 工作流文档（协议正文，非脚本）
+
+| 文档 | 干什么 |
+|---|---|
+| `../DISPATCH.md` | 派单唯一入口合同：参数表 / 三条路由 / 信号文件协议 / 失败四分类 / rules32 |
+| `../ACCEPTANCE.md` | 完成声明验收法：成熟度五级 / 退回规则 / 独立抽证清单 |
+| `../HANDOFF.md` | 秘书交接协议：duty-status 四证 / 上任卸任六步 / 薄指引定位 / 在飞刷新纪律 |
+| `../SHIM_PLAN.md` | 三份不迁脚本的 shim 落地方案与切换声明纪律 |
 
 ## 调度 / 派单
 

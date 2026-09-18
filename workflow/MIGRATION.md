@@ -30,6 +30,12 @@
 > - `auto-qa-dispatcher.sh`（358 行）：依赖 worker-core runner 族与本机 QA worktree 约定。
 > - `feishu-secretary-bridge.sh`（445 行）：**现场秘书配置**（chat 白名单/tmux 注入/
 >   systemd unit），owner 令禁止拷贝 live secretary config——不迁。
+>
+> **2026-09-18 workflow-docs-2258 更新**：三份脚本的「入口 shim 落地方案」（env 化清单/
+> 耦合点/最小改动路径/验证命令）已沉淀为本仓 `workflow/SHIM_PLAN.md`；派单合同/验收法/
+> 交接协议正文沉淀为 `workflow/DISPATCH.md` / `workflow/ACCEPTANCE.md` /
+> `workflow/HANDOFF.md`（纯文档，脚本本体仍未迁）。**shim 落地前，不得声称任何脚本
+> 已切换到仓内运行。**
 > - 史官链 waker.sh/waker_core.py、secretary-takeover 三件：同上（`tools/secretary/`
 >   仅为 2026-08-01 归档，不是移植；现场版更动过，以本机为准）。
 > - linear_comment.sh 族、CodeKG/memq 速查：跨机依赖本机索引资产，登记即可。
