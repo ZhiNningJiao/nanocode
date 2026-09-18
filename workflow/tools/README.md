@@ -15,7 +15,16 @@
    - 兼容上游 `task_asset_msctl.py` 契约：`--config-dir` 必须绝对路径、显式 profile。
 2. **staging**：web/v2 管理 API token，经环境变量 `MESHY_TASK_TOKEN`
    （可用 `TASKID_TRACE_TOKEN_ENV` 换名）。凭据只从 env 读，绝不写进仓/日志/报告。
-3. **Loki**：`LOKI_URL`、`LOKI_TOKEN`（缺省 URL 为集群内 `loki.monitoring.svc:3100`）。
+3. **Loki（fix_1615 起）**：默认走 **AIGW MCP 传输**（与本机
+   `code/bin/loki_mcp_query.sh` 同一真实接口：initialize → initialized →
+   `tools/call Grafana_Cloud_SRE-query_loki_logs`，datasource `grafanacloud-logs`）。
+   **AIGW key 是硬前置**，只从以下位置读取（按序，绝不打印/拷贝/落日志）：
+   1. env `AIGW_KEY`
+   2. env `AIGW_KEY_FILE` 指向的文件
+   3. `~/.config/meshy-aigw.key`（默认路径）
+   key 缺失/401 → fail-loud `{"state":"missing_credentials"|"auth"}` rc=2，
+   不静默、不猜凭据。
+   仅当显式设 `LOKI_URL` 时改走集群内 Loki HTTP API（可选 `LOKI_TOKEN`）。
 4. 依赖：Python 3.10+（stdlib only）、bash、coreutils。无第三方包。
 
 ## lib/ 说明（源码副本 policy）
@@ -23,12 +32,24 @@
 - `lib/task_asset_fetch.py`、`lib/task_asset_msctl.py`：**verbatim 源码副本**，
   上游 `/jfs/home/zhiningjiao/code/task-asset-fetch-0918/`，文件头保留 provenance
   注释（上游路径 + 拷贝日期 + 上游 sha256）。上游更新时重拷并更新头部 sha。
-- `lib/loki.py`：**临时适配器**（stdlib HTTP range query，三段 selector）。
-  任务书原定迁移 `~/codex_work/retab/loki.py`，该文件在本 lane 不可达（NEEDSIG 已打）；
-  原 loki.py 可达后请以其副本替换本文件（保持 `query_range()` 入口），并删除本临时版。
-- 不入库：msctl 二进制、auth-prod 目录、任何 token/config。
+- `lib/loki.py`：AIGW MCP 传输实现（行为对齐本机 `bin/loki_mcp_query.sh`）。
+  ⚠ 任务书原定 verbatim 迁移 `~/codex_work/retab/loki.py`——该文件在本机不可达
+  （两轮全盘搜索确认，fix_1615 报告有据），verbatim+sha256 硬门本轮无法满足，
+  以接口等价实现顶替；原版可达后请以其副本替换并核对 sha256。
+- 不入库：msctl 二进制、auth-prod 目录、任何 token/config/key。
 
-## 干跑记录（2026-09-18）
+## --assets 解析（fix_1615）
 
-- prod info-only：`01a0ae93-c6dc-7770-8737-8988db5dfc7c`（本机 auth-prod 凭据），
-  结果与失败态见 `REPORT_taskid_tools_nanocode_1410.md` 的干跑节。
+`msctl tasks ls <task>/output/` 的真实行格式是
+`2026-09-17 08:55:31    4454524 Character_output.fbx`
+（行首是**时间戳+大小**，不是 `output/` 前缀）。解析按「末列名字」取 key 再加
+`output/` 前缀。listing 子进程 stderr 落 `assets-listing.stderr` 且不吞；
+returncode 非零 → `{"state":"listing_failed","rc":N}` 退出非零（fail-loud）；
+listing 成功但零 key → `{"state":"no_keys"}` 退出 0（与失败可区分）。
+
+## 干跑记录
+
+- 2026-09-18（1410 轮）：prod info-only `01a0ae93-…` 成功（见
+  `REPORT_taskid_tools_nanocode_1410.md`）。
+- 2026-09-18（fix_1615 轮）：--assets 真拉 ≥1 件、loki 失败 fail-loud JSON、
+  反例 N1-N4，见 `REPORT_taskid_tools_fix_1615.md` 干跑节（以日志 grep 计数为准）。

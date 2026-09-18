@@ -57,54 +57,83 @@ else
     --out "$OUT/info" || { echo "staging info failed" >&2; exit 2; }
 fi
 
-# ② Loki three-stage log pull (loki.py reads LOKI_URL/LOKI_TOKEN itself).
-if LOCI_OUT=$(python3 "$LIB/loki.py" "$TASK_ID" --since "$SINCE" --out "$OUT/logs"); then
-  echo "loki: $LOCI_OUT"
+# ② Loki three-stage log pull (lib/loki.py: AIGW MCP transport by default,
+#    direct-Loki fallback when LOKI_URL is set; key read per README contract).
+LOKI_MSG=""
+if LOKI_MSG=$(python3 "$LIB/loki.py" "$TASK_ID" --since "$SINCE" --out "$OUT/logs"); then
+  echo "loki: $LOKI_MSG"
 else
   RC=$?
-  echo "WARN: loki pull failed rc=$RC (see $OUT/logs state above)" >&2
+  # Fail-loud, machine-readable: this JSON must land in trace.log and stdout.
+  echo "{\"state\": \"loki_failed\", \"rc\": $RC, \"detail\": ${LOKI_MSG:-\"(no output)\"}}"
+  echo "FAIL: loki pull failed rc=$RC (state JSON above)" >&2
 fi
 
 # ③ optional --assets: download output/ keys into a fresh directory.
 if [ "$ASSETS" = "1" ]; then
   python3 - "$TASK_ID" "$ENVIRONMENT" "$OUT" "$LIB" "$MSCTL_BIN" "$MSCTL_AUTH_DIR" <<'PY'
-import json, subprocess, sys, os
+import json, os, re, subprocess, sys
 task, environment, out, lib, msctl, auth = sys.argv[1:7]
 keys = []
 if environment == "prod":
-    # List output/ via the official CLI (explicit auth dir; stderr suppressed).
-    listing = subprocess.run([msctl, "--config-dir", auth, "--profile", "prod",
-                              "tasks", "ls", task + "/output/"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, timeout=120)
+    # List output/ via the official CLI (explicit auth dir). Real line format:
+    #   "2026-09-17 08:55:31    4454524 Character_output.fbx"
+    # i.e. "<date> <time> <size> <name>" — leading timestamp, NOT an output/
+    # prefix. Parse the trailing name column and re-prefix output/.
+    listing = subprocess.run(
+        [msctl, "--config-dir", auth, "--profile", "prod",
+         "tasks", "ls", task + "/output/"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, timeout=300)
+    err = listing.stderr.decode(errors="replace").strip()
+    if err:
+        open(os.path.join(out, "assets-listing.stderr"), "w",
+             encoding="utf-8").write(err + "\n")
+    if listing.returncode != 0:
+        # Listing failure must be distinguishable from "no keys" and loud.
+        print(json.dumps({"state": "listing_failed",
+                          "rc": listing.returncode,
+                          "stderr": err[-400:] if err else "(suppressed)"}))
+        raise SystemExit(2)
+    pat = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\s+\d+\s+(.+)$")
     for line in listing.stdout.decode(errors="replace").splitlines():
-        line = line.strip()
-        if line.startswith("output/"):
-            keys.append(line)
+        m = pat.match(line.strip())
+        if m:
+            name = m.group(1).strip()
+            if name and not name.endswith("/"):
+                keys.append("output/" + name)
 else:
     manifest_path = os.path.join(out, "info", "manifest.json")
+    if not os.path.exists(manifest_path):
+        print(json.dumps({"state": "listing_failed",
+                          "rc": 1, "stderr": "staging manifest.json missing"}))
+        raise SystemExit(2)
     with open(manifest_path, encoding="utf-8") as stream:
         for entry in json.load(stream).get("listing", {}).get("entries", []):
             key = entry.get("key", "")
             if key.startswith("output/") and not key.endswith("/"):
                 keys.append(key)
-cmd = [sys.executable, os.path.join(lib, "task_asset_msctl.py"), task,
-       "--config-dir", auth, "--profile", "prod", "--msctl", msctl,
-       "--out", os.path.join(out, "assets")]
-if environment == "staging":
+if environment == "prod":
+    cmd = [sys.executable, os.path.join(lib, "task_asset_msctl.py"), task,
+           "--config-dir", auth, "--profile", "prod", "--msctl", msctl,
+           "--out", os.path.join(out, "assets")]
+else:
     cmd = [sys.executable, os.path.join(lib, "task_asset_fetch.py"), task,
            "--env", "staging", "--token-env",
            os.environ.get("TASKID_TRACE_TOKEN_ENV", "MESHY_TASK_TOKEN"),
            "--out", os.path.join(out, "assets")]
+if not keys:
+    # Listing succeeded but nothing to fetch — a distinct, non-failure state.
+    print(json.dumps({"state": "no_keys",
+                      "note": "listing ok, zero output/ file keys"}))
+    raise SystemExit(0)
 for key in keys[:20]:
     cmd += ["--key", key]
-if not keys:
-    print("assets: no output/ keys found; nothing downloaded")
-    raise SystemExit(0)
-proc = subprocess.run(cmd, stdin=subprocess.DEVNULL,
-                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=1800)
-print("assets:", proc.stdout.decode(errors="replace").strip())
-raise SystemExit(proc.returncode)
+proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, timeout=1800)
+if proc.returncode != 0:
+    print(json.dumps({"state": "download_failed", "rc": proc.returncode}))
+    raise SystemExit(proc.returncode)
+print(json.dumps({"state": "downloaded", "count": len(keys[:20])}))
 PY
 fi
 
@@ -117,8 +146,9 @@ manifest_path = os.path.join(out, "info", "manifest.json")
 if os.path.exists(manifest_path):
     with open(manifest_path, encoding="utf-8") as stream:
         info = json.load(stream).get("task_info", {})
-logs = sorted(f for f in os.listdir(os.path.join(out, "logs")) if f.endswith(".log")) \
-       if os.path.isdir(os.path.join(out, "logs")) else []
+logdir = os.path.join(out, "logs")
+logs = sorted(f for f in os.listdir(logdir) if f.endswith(".log")) \
+       if os.path.isdir(logdir) else []
 assets = sorted(os.listdir(os.path.join(out, "assets"))) \
          if os.path.isdir(os.path.join(out, "assets")) else []
 NOW = os.popen('date "+%F %T"').read().strip()
