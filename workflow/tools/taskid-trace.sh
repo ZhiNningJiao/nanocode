@@ -30,10 +30,19 @@ esac
 case "$ENVIRONMENT" in prod|staging) ;; *) echo "--env must be prod or staging" >&2; exit 2 ;; esac
 case "$SINCE" in *[!0-9smhd]*) echo "bad --since" >&2; exit 2 ;; esac
 
-# Deployment knobs (explicit; no implicit home reads). Defaults point at the
-# upstream tool checkout on this machine; override via environment.
-MSCTL_BIN="${MSCTL_BIN:-/jfs/home/zhiningjiao/code/task-asset-fetch-0918/bin/msctl}"
-MSCTL_AUTH_DIR="${MSCTL_AUTH_DIR:-/jfs/home/zhiningjiao/code/task-asset-fetch-0918/auth-prod}"
+# Deployment knobs (explicit; no machine-specific defaults, fail-loud).
+# Point MSCTL_BIN/MSCTL_AUTH_DIR at your task-asset-fetch checkout in the env
+# (or an env file sourced by the caller); nothing about this machine is baked in.
+MSCTL_BIN="${MSCTL_BIN:?taskid-trace: MSCTL_BIN missing (path to msctl binary)}"
+MSCTL_AUTH_DIR="${MSCTL_AUTH_DIR:?taskid-trace: MSCTL_AUTH_DIR missing (dir holding config.toml with profiles)}"
+# Unified entry (scripts_resume_2241): BOTH environments go through the official
+# msctl adapter. The shipped config.toml carries [profiles.prod] and [profiles.stg]
+# in the SAME auth dir, so staging reuses the existing msctl session with
+# --profile stg — no MESHY_TASK_TOKEN, no browser tokens, no fresh auth.
+PROFILE="prod"
+case "$ENVIRONMENT" in
+  staging) PROFILE="${MSCTL_STG_PROFILE:-stg}" ;;
+esac
 OUT_BASE="${TASKID_TRACE_OUT:-/tmp/taskid-trace}"
 STAMP="$(date +%Y%m%dT%H%M%S)"
 OUT="$OUT_BASE/${TASK_ID}-$STAMP"
@@ -43,19 +52,12 @@ exec > >(tee -a "$LOG") 2>&1
 echo "== taskid-trace $TASK_ID env=$ENVIRONMENT since=$SINCE assets=$ASSETS start=$(date '+%F %T')"
 
 INFO_MANIFEST="$OUT/info/manifest.json"
-if [ "$ENVIRONMENT" = "prod" ]; then
-  # ① prod: official msctl companion, info-only (explicit CLI-owned auth).
-  [ -x "$MSCTL_BIN" ] || { echo "MSCTL_BIN not executable: $MSCTL_BIN" >&2; exit 2; }
-  [ -d "$MSCTL_AUTH_DIR" ] || { echo "MSCTL_AUTH_DIR missing: $MSCTL_AUTH_DIR" >&2; exit 2; }
-  python3 "$LIB/task_asset_msctl.py" "$TASK_ID" \
-    --config-dir "$MSCTL_AUTH_DIR" --profile prod --msctl "$MSCTL_BIN" \
-    --out "$OUT/info" || { echo "msctl info failed" >&2; exit 2; }
-else
-  # ① staging: bounded web/v2 management API client; token from env only.
-  python3 "$LIB/task_asset_fetch.py" "$TASK_ID" --env staging \
-    --token-env "${TASKID_TRACE_TOKEN_ENV:-MESHY_TASK_TOKEN}" \
-    --out "$OUT/info" || { echo "staging info failed" >&2; exit 2; }
-fi
+# ① unified: official msctl companion, info-only (explicit CLI-owned auth).
+[ -x "$MSCTL_BIN" ] || { echo "MSCTL_BIN not executable: $MSCTL_BIN" >&2; exit 2; }
+[ -d "$MSCTL_AUTH_DIR" ] || { echo "MSCTL_AUTH_DIR missing: $MSCTL_AUTH_DIR" >&2; exit 2; }
+python3 "$LIB/task_asset_msctl.py" "$TASK_ID" \
+  --config-dir "$MSCTL_AUTH_DIR" --profile "$PROFILE" --msctl "$MSCTL_BIN" \
+  --out "$OUT/info" || { echo "msctl info failed (profile=$PROFILE)" >&2; exit 2; }
 
 # ② Loki three-stage log pull (lib/loki_pull.py staging shell over verbatim lib/loki.py:
 #    direct-Loki fallback when LOKI_URL is set; key read per README contract).
@@ -71,57 +73,39 @@ fi
 
 # ③ optional --assets: download output/ keys into a fresh directory.
 if [ "$ASSETS" = "1" ]; then
-  python3 - "$TASK_ID" "$ENVIRONMENT" "$OUT" "$LIB" "$MSCTL_BIN" "$MSCTL_AUTH_DIR" <<'PY'
+python3 - "$TASK_ID" "$PROFILE" "$OUT" "$LIB" "$MSCTL_BIN" "$MSCTL_AUTH_DIR" <<'PY'
 import json, os, re, subprocess, sys
-task, environment, out, lib, msctl, auth = sys.argv[1:7]
+task, profile, out, lib, msctl, auth = sys.argv[1:7]
 keys = []
-if environment == "prod":
-    # List output/ via the official CLI (explicit auth dir). Real line format:
-    #   "2026-09-17 08:55:31    4454524 Character_output.fbx"
-    # i.e. "<date> <time> <size> <name>" — leading timestamp, NOT an output/
-    # prefix. Parse the trailing name column and re-prefix output/.
-    listing = subprocess.run(
-        [msctl, "--config-dir", auth, "--profile", "prod",
-         "tasks", "ls", task + "/output/"],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, timeout=300)
-    err = listing.stderr.decode(errors="replace").strip()
-    if err:
-        open(os.path.join(out, "assets-listing.stderr"), "w",
-             encoding="utf-8").write(err + "\n")
-    if listing.returncode != 0:
-        # Listing failure must be distinguishable from "no keys" and loud.
-        print(json.dumps({"state": "listing_failed",
-                          "rc": listing.returncode,
-                          "stderr": err[-400:] if err else "(suppressed)"}))
-        raise SystemExit(2)
-    pat = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\s+\d+\s+(.+)$")
-    for line in listing.stdout.decode(errors="replace").splitlines():
-        m = pat.match(line.strip())
-        if m:
-            name = m.group(1).strip()
-            if name and not name.endswith("/"):
-                keys.append("output/" + name)
-else:
-    manifest_path = os.path.join(out, "info", "manifest.json")
-    if not os.path.exists(manifest_path):
-        print(json.dumps({"state": "listing_failed",
-                          "rc": 1, "stderr": "staging manifest.json missing"}))
-        raise SystemExit(2)
-    with open(manifest_path, encoding="utf-8") as stream:
-        for entry in json.load(stream).get("listing", {}).get("entries", []):
-            key = entry.get("key", "")
-            if key.startswith("output/") and not key.endswith("/"):
-                keys.append(key)
-if environment == "prod":
-    cmd = [sys.executable, os.path.join(lib, "task_asset_msctl.py"), task,
-           "--config-dir", auth, "--profile", "prod", "--msctl", msctl,
-           "--out", os.path.join(out, "assets")]
-else:
-    cmd = [sys.executable, os.path.join(lib, "task_asset_fetch.py"), task,
-           "--env", "staging", "--token-env",
-           os.environ.get("TASKID_TRACE_TOKEN_ENV", "MESHY_TASK_TOKEN"),
-           "--out", os.path.join(out, "assets")]
+# List output/ via the official CLI (explicit auth dir + profile). Real line
+# format: "2026-09-17 08:55:31    4454524 Character_output.fbx" i.e.
+# "<date> <time> <size> <name>" — leading timestamp, NOT an output/ prefix.
+# Parse the trailing name column and re-prefix output/.
+listing = subprocess.run(
+    [msctl, "--config-dir", auth, "--profile", profile,
+     "tasks", "ls", task + "/output/"],
+    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE, timeout=300)
+err = listing.stderr.decode(errors="replace").strip()
+if err:
+    open(os.path.join(out, "assets-listing.stderr"), "w",
+         encoding="utf-8").write(err + "\n")
+if listing.returncode != 0:
+    # Listing failure must be distinguishable from "no keys" and loud.
+    print(json.dumps({"state": "listing_failed",
+                      "rc": listing.returncode,
+                      "stderr": err[-400:] if err else "(suppressed)"}))
+    raise SystemExit(2)
+pat = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\s+\d+\s+(.+)$")
+for line in listing.stdout.decode(errors="replace").splitlines():
+    m = pat.match(line.strip())
+    if m:
+        name = m.group(1).strip()
+        if name and not name.endswith("/"):
+            keys.append("output/" + name)
+cmd = [sys.executable, os.path.join(lib, "task_asset_msctl.py"), task,
+       "--config-dir", auth, "--profile", profile, "--msctl", msctl,
+       "--out", os.path.join(out, "assets")]
 if not keys:
     # Listing succeeded but nothing to fetch — a distinct, non-failure state.
     print(json.dumps({"state": "no_keys",

@@ -16,19 +16,28 @@
 
 ## 第二批（应真迁进仓的脚本）
 
-> 本轮（workflow-refresh-1910）核实：第二批脚本**尚未迁入**，上述路径仍是本机运行体；
-> 各类实际依赖：waker 依赖 tmux+feishu 桥与 cron 环境；qa_gate_* 依赖 worker-core/
-> ragas-gate 本机文件；切换三件依赖 `~/code/secretary-takeover.sh` + secretary-home.env
-> （env 留本机，见下节）。搬迁步骤仍按 shim 方案：仓内正本 + 原位置 `exec bash <仓内路径> "$@"`
-> shim，cron/任务书路径零改动。**在 shim 落地前，不得声称任何脚本已迁。**
-
-- `waker.sh` + `waker_core.py`（史官本体，workflow 核心）——迁 `workflow/scripts/historian/`
-- `qa_gate_mechanical.py`（验收门）——迁 `workflow/scripts/gates/`
-- `secretary-takeover.sh` / `switch-secretary.sh` / `handover-failsafe.sh`（交接三件）——迁 `workflow/scripts/handoff/`
-- `akari_dispatch.sh` / `pick-worker-model.sh` / `dispatch-worktree.sh`——迁 `workflow/scripts/dispatch/`
-- `board_upsert.sh` / `board_flag_sync.sh`（想法板七档）——迁 `workflow/scripts/board/`
-- `linear_comment.sh` 族——迁 `workflow/scripts/linear/`（或 upstream nanocode 已有则注册表引用）
-- 迁移方式：复制进仓后在原位置留一行 shim（`exec bash <仓内路径> "$@"`）或软链，cron/任务书路径零改动过渡。
+> **2026-09-18 scripts_resume_2241 进度**：qa_gate_mechanical.py（gates/）、
+> pick-free-model.sh / pick-worker-model.sh / dispatch-worktree.sh（dispatch/）、
+> board_upsert.sh / board_plan.py / board_flag_sync.sh + board_env.sh（board/）、
+> start/run_team2_observable.sh（observability/）、aigw-errors.sh / aigw-free-health.sh
+> （aigw/）已迁入 `workflow/scripts/`（env 化可移植配置，凭据/板坐标留本机
+> `~/.config/nanocode-board.env`，模板见 board_env.sh.example；shim 未建，
+> cron/任务书仍指本机原位，见「迁移方式」）。详见 `scripts/INDEX.md`「已迁入本仓」节。
+>
+> **仍未迁**（本机运行体，依赖重/含现场配置，逐类记录）：
+> - `akari_dispatch.sh`（511 行）：深耦合 tmux 会话命名、lane 注册表、任务书模板、
+>   board 钩子、AIGW key 路径——需独立一轮按 env 化改造后迁。
+> - `auto-qa-dispatcher.sh`（358 行）：依赖 worker-core runner 族与本机 QA worktree 约定。
+> - `feishu-secretary-bridge.sh`（445 行）：**现场秘书配置**（chat 白名单/tmux 注入/
+>   systemd unit），owner 令禁止拷贝 live secretary config——不迁。
+> - 史官链 waker.sh/waker_core.py、secretary-takeover 三件：同上（`tools/secretary/`
+>   仅为 2026-08-01 归档，不是移植；现场版更动过，以本机为准）。
+> - linear_comment.sh 族、CodeKG/memq 速查：跨机依赖本机索引资产，登记即可。
+>
+> 其余各类实际依赖：waker 依赖 tmux+feishu 桥与 cron 环境；qa_gate 依赖已解除
+> （stdlib-only，已迁）；切换三件依赖 `~/code/secretary-takeover.sh` + secretary-home.env
+> （env 留本机，见下节）。搬迁步骤仍按 shim 方案：仓内正本 + 原位置 `exec bash <仓内路径> "$@"
+> shim，cron/任务书路径零改动。**在 shim 落地前，不得声称任何脚本已切换到仓内运行。**
 
 ## 留本机（绝不进仓）
 

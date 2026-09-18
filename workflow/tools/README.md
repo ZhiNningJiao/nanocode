@@ -13,8 +13,14 @@
    - `MSCTL_AUTH_DIR`（默认 `.../task-asset-fetch-0918/auth-prod`，**目录本体不上仓**；
      仅 msctl 子进程读它，本工具不读、不提取凭据）
    - 兼容上游 `task_asset_msctl.py` 契约：`--config-dir` 必须绝对路径、显式 profile。
-2. **staging**：web/v2 管理 API token，经环境变量 `MESHY_TASK_TOKEN`
-   （可用 `TASKID_TRACE_TOKEN_ENV` 换名）。凭据只从 env 读，绝不写进仓/日志/报告。
+2. **staging（scripts_resume_2241 统一入口）**：与 prod **同一条 msctl 适配链**，
+   仅 profile 不同——`MSCTL_AUTH_DIR` 里的 `config.toml` 同时携带
+   `[profiles.prod]` 与 `[profiles.stg]`，既有 msctl 会话直接复用
+   （`--profile stg`，profile 名可用 `MSCTL_STG_PROFILE` 覆盖）。
+   **不再要求 `MESHY_TASK_TOKEN`**；绝不导出浏览器 token、绝不索要新登录。
+   （实测：伪 task id 经 stg profile 返回 404 "Task not found" = 已认证可达，
+   非鉴权失败。）`lib/task_asset_fetch.py` 保留：它是 `task_asset_msctl.py` 的
+   import 依赖，也可作直连 web/v2 API 的独立客户端。
 3. **Loki（fix_1615 起）**：默认走 **AIGW MCP 传输**（与本机
    `code/bin/loki_mcp_query.sh` 同一真实接口：initialize → initialized →
    `tools/call Grafana_Cloud_SRE-query_loki_logs`，datasource `grafanacloud-logs`）。

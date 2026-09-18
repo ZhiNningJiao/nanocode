@@ -1,8 +1,23 @@
-# scripts/INDEX — 脚本入口表（只登记路径，不复制本体）
+# scripts/ — 脚本目录（登记 + 已迁正本）
 
 > 维护原则：本目录**不复制脚本本体**，只登记「名 / 一句话 / 位置 / 触发方式」。
 > 标 ⭐ 的建议后续真迁入仓（见 MIGRATION.md）。来源盘点：`~/code/*.sh`（90 个）+
 > `~/codex_work` + `~/code/worker-core/*.sh`（盘点日 2026-09-18）。
+
+## 已迁入本仓的脚本正本（scripts_resume_2241 落地，可执行、显式依赖、凭据零入仓）
+
+| 位置 | 脚本 | 干什么 | 移植要点 |
+|---|---|---|---|
+| `dispatch/` | pick-free-model.sh | 免费模型探活选模 | `AIGW_KEY_FILE`/`AIGW_BASE` 可配，key 缺失 fail-loud |
+| `dispatch/` | pick-worker-model.sh | 三级选模梯（免费→Claude 降级→NEEDSIG） | 全部本机路径 env 化（CODEX_WORK_DIR/WORKER_CORE_DIR 等） |
+| `dispatch/` | dispatch-worktree.sh | worktree-per-worker 隔离，出三元组 | `DISPATCH_WORKTREE_ROOT` 必填；无 origin 远端也可用 |
+| `gates/` | qa_gate_mechanical.py | 机械验收门（裸断言=打回） | verbatim（本就 stdlib-only 可移植） |
+| `board/` | board_upsert.sh / board_plan.py / board_flag_sync.sh / board_env.sh(.example) | 想法板机械流转三件+纯决策芯 | 板坐标改经 `BOARD_ENV_FILE`（默认 `~/.config/nanocode-board.env`）读取，缺失 fail-loud rc=2；坐标/凭据不入仓 |
+| `observability/` | start_team2_observable.sh + run_team2_observable.sh | Team2 tmux 启动器 + stream-json 循环 runner | `CODEX_WORK_DIR`/`WORKER_CORE_DIR`/`AKARI_PORT` 可配；去硬编码 HOME |
+| `aigw/` | aigw-errors.sh / aigw-free-health.sh | AIGW 排障第一站 / 免费模型探活看板 | `SLACK_TOKEN_FILE`/`AIGW_KEY_FILE`/`AIGW_HEALTH_MODELS` 等显式可配，凭据不入仓 |
+
+**明确未迁**（仍在本机，见 MIGRATION.md 第二批）：akari_dispatch.sh、auto-qa-dispatcher.sh、
+feishu-secretary-bridge.sh、史官/交接/复活链（`tools/secretary/` 仅为 0801 逐字节归档，非移植）。
 
 ## 调度 / 派单
 

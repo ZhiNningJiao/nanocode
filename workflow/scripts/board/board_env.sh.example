@@ -1,0 +1,16 @@
+# board_env.sh.example — Owner想法追踪板坐标模板（复制为
+# `$HOME/.config/nanocode-board.env`（或设 BOARD_ENV_FILE 指向它）后填真值；
+# 该文件属于机器部署配置，绝不入仓。凭据纪律同 MIGRATION.md「留本机」节。）
+
+# ── 板坐标 ──
+# 生产板: Owner想法追踪板 (唯一视图 vewRjuMWzh, 按「主线」分组 — 红线: 绝不另起视图/绝不改分组)
+BOARD_BASE_TOKEN=<base-app token>
+BOARD_TABLE_ID=<table id>
+BOARD_AS=<lark-cli identity name>
+
+# 可选覆盖（默认值见 board_env.sh）:
+# BOARD_TAG_FIELD=机器TAG
+# BOARD_STATE_FIELD=机器状态
+# BOARD_EXEC_FIELD=机器执行人
+# BOARD_NOTE_FIELD=机器备注
+# BOARD_LARK_TIMEOUT=25
