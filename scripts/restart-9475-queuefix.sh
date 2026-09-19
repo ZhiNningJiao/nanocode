@@ -30,5 +30,5 @@ health=$(curl -s http://127.0.0.1:9475/api/health)
 echo "$(date '+%F %T') new server pid=$NEW_PID http=$code health=$health"
 
 curl -s -d "nanocode 9475 已重启部署 queuefix(原子强打断) http=$code | 9476 稳定版v1.6.0在跑 | 详报 ~/code/reports/NANOFIX_20260707.md" \
-  ${NTFY_URL:-<NTFY_URL>} >/dev/null 2>&1
+  http://10.18.8.55/zhiningwork >/dev/null 2>&1
 echo "=== done"

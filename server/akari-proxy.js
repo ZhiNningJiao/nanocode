@@ -1,7 +1,7 @@
 /**
  * akari dispatch-server proxy (MES-14049).
  *
- * The akari server (axum) at http://<INTERNAL_HOST>:9481 exposes its control surface
+ * The akari server (axum) at http://10.18.8.55:9481 exposes its control surface
  * over HTTP but sets NO CORS headers, so a browser on the nanocode port cannot
  * reach it directly. This module proxies the four read-only observability
  * endpoints through the nanocode server (same-origin), keeps the server URL

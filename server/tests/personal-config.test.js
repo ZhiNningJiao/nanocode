@@ -56,7 +56,7 @@ describe('personal-config: remote.machines loading', () => {
       remote: {
         machines: [
           { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster', note: 'win dev box' },
-          { alias: 'dev-box', type: 'ssh', host: '<INTERNAL_HOST>', user: 'zhining', port: 22, key: '~/.ssh/id_cluster' },
+          { alias: 'dev-box', type: 'ssh', host: '10.18.8.55', user: 'zhining', port: 22, key: '~/.ssh/id_cluster' },
         ],
       },
     })
@@ -66,7 +66,7 @@ describe('personal-config: remote.machines loading', () => {
     assert.equal(cfg.remote.machines[0].host, '172.30.20.212')
     assert.equal(cfg.remote.machines[0].user, 'Administrator')
     assert.equal(cfg.remote.machines[0].key, '~/.ssh/id_cluster')
-    assert.equal(cfg.remote.machines[1].host, '<INTERNAL_HOST>')
+    assert.equal(cfg.remote.machines[1].host, '10.18.8.55')
   })
 
   it('drops entries missing alias/host/user', () => {
@@ -315,8 +315,8 @@ describe('personal-config: akari server/lens URLs (MES-14049)', () => {
 
   it('defaults to the documented internal akari server + lens URLs when not declared', () => {
     const cfg = loadPersonalConfig({ home: tmp })
-    assert.equal(cfg.akari.serverUrl, 'http://<INTERNAL_HOST>:9481')
-    assert.equal(cfg.akari.lensUrl, 'http://<INTERNAL_HOST>:9482')
+    assert.equal(cfg.akari.serverUrl, 'http://10.18.8.55:9481')
+    assert.equal(cfg.akari.lensUrl, 'http://10.18.8.55:9482')
   })
 
   it('loads akari.serverUrl + akari.lensUrl from the personal file', () => {
@@ -329,8 +329,8 @@ describe('personal-config: akari server/lens URLs (MES-14049)', () => {
   it('ignores non-string / empty akari fields and falls back to the default', () => {
     writePersonal(tmp, { akari: { serverUrl: '', lensUrl: 123 } })
     const cfg = loadPersonalConfig({ home: tmp })
-    assert.equal(cfg.akari.serverUrl, 'http://<INTERNAL_HOST>:9481')
-    assert.equal(cfg.akari.lensUrl, 'http://<INTERNAL_HOST>:9482')
+    assert.equal(cfg.akari.serverUrl, 'http://10.18.8.55:9481')
+    assert.equal(cfg.akari.lensUrl, 'http://10.18.8.55:9482')
   })
 
   it('projects akari serverUrl + lensUrl IN FULL for personal.akari (not secrets)', () => {

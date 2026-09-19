@@ -24,7 +24,7 @@
 import WebSocket from 'ws'
 import http from 'http'
 
-const BASE = process.env.TEST_URL || 'http://<INTERNAL_HOST>:3088'
+const BASE = process.env.TEST_URL || 'http://10.18.8.55:3088'
 const WS_BASE = BASE.replace(/^http/, 'ws')
 
 function delay(ms) {

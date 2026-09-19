@@ -108,7 +108,7 @@ New Opus session independently re-verified the entire integration from scratch.
 | `/` (index) | 200 |
 
 ### Akari proxy faithfulness (direct vs proxy, byte-for-byte match)
-- Direct `curl <INTERNAL_HOST>:9481/api/health` → v=0.7.0 build=efb142f1e caps={lane_cap:4, max_vision_workers:6, model:litellm/SGLang-GLM-5.2} ac={in_flight:0, permits:4}
+- Direct `curl 10.18.8.55:9481/api/health` → v=0.7.0 build=efb142f1e caps={lane_cap:4, max_vision_workers:6, model:litellm/SGLang-GLM-5.2} ac={in_flight:0, permits:4}
 - Proxy `curl 127.0.0.1:9476/api/akari/state` health → **IDENTICAL**
 - Direct concurrency → {running:0, peak:2, open_lanes:0}
 - Proxy concurrency → **IDENTICAL**

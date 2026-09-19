@@ -2,7 +2,7 @@
 akari
 Lens ↗
 ↻
-http://<INTERNAL_HOST>:9481 · 11:50
+http://10.18.8.55:9481 · 11:50
 Health
 version
 0.7.0
