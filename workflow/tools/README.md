@@ -9,7 +9,7 @@
 ## 前置条件
 
 1. **prod（默认）**：官方 CLI `msctl` + 已登录的 auth 目录。
-   - `MSCTL_BIN`（默认 `/jfs/home/zhiningjiao/code/task-asset-fetch-0918/bin/msctl`）
+   - `MSCTL_BIN`（默认 `<HOST_HOME>/code/task-asset-fetch-0918/bin/msctl`）
    - `MSCTL_AUTH_DIR`（默认 `.../task-asset-fetch-0918/auth-prod`，**目录本体不上仓**；
      仅 msctl 子进程读它，本工具不读、不提取凭据）
    - 兼容上游 `task_asset_msctl.py` 契约：`--config-dir` 必须绝对路径、显式 profile。
@@ -36,7 +36,7 @@
 ## lib/ 说明（源码副本 policy）
 
 - `lib/task_asset_fetch.py`、`lib/task_asset_msctl.py`：**verbatim 源码副本**，
-  上游 `/jfs/home/zhiningjiao/code/task-asset-fetch-0918/`，文件头保留 provenance
+  上游 `<HOST_HOME>/code/task-asset-fetch-0918/`，文件头保留 provenance
   注释（上游路径 + 拷贝日期 + 上游 sha256）。上游更新时重拷并更新头部 sha。
 - `lib/loki.py`：AIGW MCP 传输实现（行为对齐本机 `bin/loki_mcp_query.sh`）。
   ⚠ 任务书原定 verbatim 迁移 `~/codex_work/retab/loki.py`——该文件在本机不可达

@@ -31,7 +31,7 @@
 
 ### 1.3 秘书派单 / 收旗现在靠什么
 
-- 派单唯一入口：`/jfs/home/zhiningjiao/code/akari_dispatch.sh`（头部注释即合同，511 行；
+- 派单唯一入口：`<HOST_HOME>/code/akari_dispatch.sh`（头部注释即合同，511 行；
   参数 `TAG WORKDIR FLAG PROMPTFILE LOG [MODEL] [MAX_SECONDS]`；三路由 claude-tmux / akari fleet / run_loop 兜底；
   派单正门自动注入武器库段；rules32 并发 32 上限 + 失败四分类）。
 - 合同沉淀：nanocode fork `workflow/DISPATCH.md`（脚本本体不迁仓）。

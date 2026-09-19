@@ -1,5 +1,5 @@
 # PROVENANCE: verbatim source copy (upstream not modified; only this header prepended)
-# upstream: /jfs/home/zhiningjiao/code/task-asset-fetch-0918/task_asset_msctl.py
+# upstream: <HOST_HOME>/code/task-asset-fetch-0918/task_asset_msctl.py
 # copied: 2026-09-18, task taskid_tools_nanocode_1410
 # upstream_sha256: 996fe32a60457d0e94c9e6b0d50afc5155d43b80b294490678f38a57196d9821
 """Bounded msctl companion: explicit CLI-owned auth, no credential extraction."""

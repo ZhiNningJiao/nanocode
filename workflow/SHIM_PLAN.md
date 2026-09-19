@@ -66,8 +66,8 @@ opus 路由 / 并发 32 只 warn / dry-run 零文件）。**本机原件未替�
 切换步骤（原位置薄壳，cron/任务书零改动）：
 
 ```bash
-cp /jfs/home/zhiningjiao/code/akari_dispatch.sh /jfs/home/zhiningjiao/code/akari_dispatch.sh.bak-pre-shim
-cat > /jfs/home/zhiningjiao/code/akari_dispatch.sh <<'EOF'
+cp <HOST_HOME>/code/akari_dispatch.sh <HOST_HOME>/code/akari_dispatch.sh.bak-pre-shim
+cat > <HOST_HOME>/code/akari_dispatch.sh <<'EOF'
 #!/usr/bin/env bash
 export AKARI_CLI="${AKARI_CLI:-$HOME/code/akari/packages/dispatch/src/cli.ts}"
 export DISPATCH_HEADER_FILE="${DISPATCH_HEADER_FILE:-$HOME/code/worker-core/DISPATCH_HEADER.md}"
@@ -79,8 +79,8 @@ EOF
 # 观察窗：先 --dry-run 对照（同参输出除时间戳/绝对路径前缀外 diff=0），再放真单。
 ```
 
-回滚步骤：`mv /jfs/home/zhiningjiao/code/akari_dispatch.sh.bak-pre-shim \
-/jfs/home/zhiningjiao/code/akari_dispatch.sh`（原件一字未动，即刻还原）。
+回滚步骤：`mv <HOST_HOME>/code/akari_dispatch.sh.bak-pre-shim \
+<HOST_HOME>/code/akari_dispatch.sh`（原件一字未动，即刻还原）。
 
 ## 2. auto-qa-dispatcher.sh（358 行，FLAG→双审 QA 自动派发）
 

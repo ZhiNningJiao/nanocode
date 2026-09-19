@@ -1,5 +1,5 @@
 # PROVENANCE: verbatim source copy (upstream not modified; only this header prepended)
-# upstream: /jfs/home/zhiningjiao/code/task-asset-fetch-0918/task_asset_fetch.py
+# upstream: <HOST_HOME>/code/task-asset-fetch-0918/task_asset_fetch.py
 # copied: 2026-09-18, task taskid_tools_nanocode_1410
 # upstream_sha256: 5a110e9329c89c9932ef36173fca621cee85b8b15656dbb87176de8ae873c400
 """Bounded, read-only Meshy task file retrieval. No implicit credentials."""
