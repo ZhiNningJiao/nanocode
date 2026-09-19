@@ -12,7 +12,7 @@ import json, time, os, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-BASE_URL = "http://<INTERNAL_HOST>:3001"
+BASE_URL = "http://10.18.8.55:3001"
 SCREENSHOTS_DIR = Path("/storage/home/zhiningjiao/code/nanocode/fold_test_screenshots")
 SCREENSHOTS_DIR.mkdir(exist_ok=True)
 

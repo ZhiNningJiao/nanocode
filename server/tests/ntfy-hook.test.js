@@ -58,14 +58,14 @@ describe('qa-watcher ntfy AI-hook plumbing (MES-13740 需求13 Initialize + AI h
 
   it('pushNtfyMessage posts to <base>/<topic> with Title/Priority/Tags headers and returns ok', async () => {
     mockFetch(async (url, opts) => {
-      assert.equal(url, '${NTFY_URL:-<NTFY_URL>}')
+      assert.equal(url, 'http://10.18.8.55/zhiningwork')
       assert.equal(opts.method, 'POST')
       assert.equal(opts.headers.Title, 'Nanocode AI')
       assert.equal(opts.headers.Priority, '3')
       assert.equal(opts.body, 'task done')
       return { ok: true, status: 200 }
     })
-    setNtfyStore(fakeStore({ ntfy_url: 'http://<INTERNAL_HOST>', ntfy_topic: 'zhiningwork' }))
+    setNtfyStore(fakeStore({ ntfy_url: 'http://10.18.8.55', ntfy_topic: 'zhiningwork' }))
     const r = await pushNtfyMessage({ message: 'task done', title: 'Nanocode AI', tags: ['robot', 'bell'] })
     assert.equal(r.ok, true)
     assert.equal(_fetchCalls.length, 1)

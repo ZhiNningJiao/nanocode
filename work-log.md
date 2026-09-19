@@ -631,7 +631,7 @@ commit 03beb00
 - 健康巡检（`tee -a run_nano_maint.log`）：
   - 9475 = 200（未触碰，按红线不动 9475）
   - 9476 = 200；/api/health = ok；/api/services：nanocode up / akari up（mblend·dccpipeline·regression·TTS down，非 nanocode 维护面，预期，与 R1-R10 一致）；/api/sessions 经 localhost = 200 `{"sessions":[]}`
-  - 注：外部 IP <INTERNAL_HOST>:9476/api/sessions 返回 403——服务器按设计将 /api/sessions 限定 localhost 访问（CSRF/origin 守卫），非回归；历轮均 curl localhost 故记 200
+  - 注：外部 IP 10.18.8.55:9476/api/sessions 返回 403——服务器按设计将 /api/sessions 限定 localhost 访问（CSRF/origin 守卫），非回归；历轮均 curl localhost 故记 200
 - 前端报错巡检（Playwright headless 加载 http://localhost:9476/，networkidle+2.5s，脚本 _fe_check.mjs 仓内起、用后即删）：
   - title="Nanocode"，console error/warning = 0，pageerror = 0，failed request = 0
 - npm test（`tee run_nano_maint.log`）：`node --test server/tests/*.test.js` → 653 pass / 0 fail

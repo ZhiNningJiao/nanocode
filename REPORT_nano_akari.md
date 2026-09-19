@@ -2,7 +2,7 @@
 
 ## Summary
 Implemented a nanocode plugin that inspects the self-hosted akari dispatch server
-(`http://<INTERNAL_HOST>:9481`), rendering health / concurrency / workers / fleet lanes
+(`http://10.18.8.55:9481`), rendering health / concurrency / workers / fleet lanes
 in a dedicated Monitor tab with gentle 10s polling and graceful degradation.
 
 ## Commits (pushed to fork)
@@ -53,10 +53,10 @@ Also added `public/akari_harness.html` so smoke screenshots are reproducible fro
 
 ## Smoke tests (real data, 0 console errors)
 
-### Good server (port 9479, real akari at <INTERNAL_HOST>:9481)
+### Good server (port 9479, real akari at 10.18.8.55:9481)
 Panel renders real health data (verified via Playwright text dump, 0 console errors):
 ```
-akari · http://<INTERNAL_HOST>:9481 · 07:53
+akari · http://10.18.8.55:9481 · 07:53
 Health: version 0.7.0 · build efb142f1e · agent cap 4 · vision cap 6 · lane cap 4
        · in-flight 0 · permits 4 · fallback on · tok in 0 · tok out 0
        · model: litellm/SGLang-GLM-5.2
@@ -71,10 +71,10 @@ Lanes / Fleet (0): no lanes open
 - **0 console errors**
 - Screenshot: `codex_work/nano_akari/akari_panel_good.png`
 
-### Degraded server (port 9483, bad URL http://<INTERNAL_HOST>:9999)
+### Degraded server (port 9483, bad URL http://10.18.8.55:9999)
 Panel renders calm unreachable state (verified via Playwright text dump, 0 console errors):
 ```
-akari · http://<INTERNAL_HOST>:9999 · unreachable · 07:53
+akari · http://10.18.8.55:9999 · unreachable · 07:53
 akari server unreachable — the panel will retry quietly and recover automatically.
 health: fetch failed · concurrency: fetch failed · workers: fetch failed · lanes: fetch failed
 ```
@@ -150,7 +150,7 @@ Fresh full verification (reproducing reality, not trusting the prior FLAG):
     open_lanes 2} · 4 lanes mix Free/InUse, head d6804691, @main ✓) — faithful
     passthrough confirmed
   - panel text dump (Playwright): all sections render, **0 console errors**
-- degraded 9483 → fake `AKARI_SERVER_URL=http://<INTERNAL_HOST>:9999`:
+- degraded 9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`:
   - `/api/services` → `akari: {status: "down"}` (first probe cycle)
   - `/api/akari/state` → `reachable:false`, all sections null, per-section
     "fetch failed"; panel calm "unreachable", **0 console errors (no spam)**
@@ -194,14 +194,14 @@ Good smoke (9479 → real akari 9481, started via `PORT=9479 setsid node server/
   4 Free lanes, head d6804691, @main true) — faithful passthrough confirmed
 - `/api/services` → `akari: {status: "up", checkedAt: ...}` (driven by real
   /api/health probe — task contract "up/down 用 /api/health" satisfied)
-- `/api/services-config` → managed `akari` row `{host <INTERNAL_HOST>, port 9481,
+- `/api/services-config` → managed `akari` row `{host 10.18.8.55, port 9481,
   managed: true, kind: http}` (read-only, derived from live URL)
 - `akari-panel.js` + `akari_harness.html` → HTTP 200 (served)
 - Playwright panel dump: all sections render (Health/Concurrency/Workers/Lanes),
   **0 console errors**; screenshot `codex_work/nano_akari/akari_panel_good.png`
   (566×1000, 217KB, fresh 17:34)
 
-Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://<INTERNAL_HOST>:9999`):
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`):
 - `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
 - `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
   "fetch failed" (structured bundle, no thrown error)
@@ -272,7 +272,7 @@ Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
   head d6804691, @main true) — faithful passthrough confirmed
 - `/api/services` → `akari: {status: "up", checkedAt: ...}` (driven by real
   /api/health probe — task contract "up/down 用 /api/health" satisfied)
-- `/api/services-config` → `managed: [{name akari, host <INTERNAL_HOST>, port 9481,
+- `/api/services-config` → `managed: [{name akari, host 10.18.8.55, port 9481,
   managed true, kind http}]` (read-only, derived from live URL — Port Health grid
   shows an akari row without a stale persisted entry)
 - `akari-panel.js` + `akari_harness.html` → HTTP 200 (served)
@@ -284,7 +284,7 @@ Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
   **0 console errors**; screenshot `codex_work/nano_akari/akari_panel_good.png`
   (217KB, fresh 17:57)
 
-Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://<INTERNAL_HOST>:9999`, setsid):
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`, setsid):
 - `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
 - `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
   "fetch failed" (structured bundle, no thrown error)
@@ -299,7 +299,7 @@ Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://<INTERNAL_HOST>:9999`, se
   green dot + URL 9481, Lens↗ button, version 0.7.0 + build efb142f1e, agent cap 4
   / vision cap 6 / lane cap 4, Concurrency running 0/peak 2/open lanes 0, Workers
   section, Lanes/Fleet lists 4 lanes 0–3).
-- degraded `akari_panel_degraded.png` → `VERDICT: PASS` — header "http://<INTERNAL_HOST>:9999 · unreachable · 10:00",
+- degraded `akari_panel_degraded.png` → `VERDICT: PASS` — header "http://10.18.8.55:9999 · unreachable · 10:00",
   reassuring "retry quietly and recover automatically", all 4 sections "fetch
   failed", NO red banner / stack trace / error spam (graceful degradation).
 
@@ -348,7 +348,7 @@ Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
   wf-parallel-2w-smoke:robot:* head d6804691 @main ✓; Lens↗ button present),
   **0 console errors**; screenshot `akari_panel_good.png` (217KB, fresh 18:46)
 
-Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://<INTERNAL_HOST>:9999`, setsid):
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`, setsid):
 - `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
 - `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
   "fetch failed" (structured bundle, no thrown error)
@@ -467,7 +467,7 @@ Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
   present), **0 console errors**; screenshot
   `codex_work/nano_akari/akari_panel_good.png` (208KB, fresh 19:06)
 
-Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://<INTERNAL_HOST>:9999`, setsid):
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`, setsid):
 - `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
 - `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
   "fetch failed" (structured bundle, no thrown error)
@@ -552,7 +552,7 @@ Good smoke (9479 → real akari 9481, `PORT=9479 setsid env ... node`):
   present (count 1, href 9482)), **0 console errors**; screenshot
   `codex_work/nano_akari/akari_panel_good.png` (460×1000, real PNG, fresh)
 
-Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://<INTERNAL_HOST>:9999`, setsid):
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`, setsid):
 - `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
 - `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
   "fetch failed" (structured bundle, no thrown error)
@@ -613,7 +613,7 @@ Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
 - `/api/akari/config` → 200 `{serverUrl 9481, lensUrl 9482}` (config-driven defaults)
 - `/api/services` → `akari: {status: "up"}` (driven by real /api/health probe —
   task contract "up/down 用 /api/health" satisfied)
-- `/api/services-config` → managed `akari` row `{host <INTERNAL_HOST>, port 9481,
+- `/api/services-config` → managed `akari` row `{host 10.18.8.55, port 9481,
   managed true, kind http}` (read-only, derived from live URL)
 - `/api/akari/state` → 200 `reachable:true`; every field **IDENTICAL** to direct
   `curl 9481` side-by-side (version 0.7.0 · build efb142f1e · dispatch_caps
@@ -629,7 +629,7 @@ Good smoke (9479 → real akari 9481, `PORT=9479 setsid node server/index.js`):
   markers wf-parallel-2w-smoke:robot:* head d6804691 @main ✓; Lens↗ button
   present), **0 console errors**; screenshot `akari_panel_good.png` (208KB, fresh 11:37)
 
-Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://<INTERNAL_HOST>:9999`):
+Degraded smoke (9483 → fake `AKARI_SERVER_URL=http://10.18.8.55:9999`):
 - `/api/akari/config` → `{serverUrl 9999, lensUrl 9482}` (env override works)
 - `/api/akari/state` → 200 `reachable:false`, all sections null, per-section
   "fetch failed" (structured bundle, no thrown error)
@@ -673,7 +673,7 @@ verdict PASS both panels, pushed to fork, Linear MES-14049 self-reported.
 - npm test: 562 pass / 0 fail (run_nano_akari.log, grep clean, 0 "not ok").
 - live smoke 9479 → real akari 9481 (常驻 akari-server pid 96180 + lens bun
   pid 96189 untouched): `/api/akari/config {9481,9482}`, `/api/services`
-  akari=up, `/api/services-config` managed akari {host <INTERNAL_HOST> port 9481
+  akari=up, `/api/services-config` managed akari {host 10.18.8.55 port 9481
   managed true kind http}, `/api/akari/state` reachable=true fields IDENTICAL
   to direct curl 9481 side-by-side (v0.7.0 build efb142f1e caps {lane_cap 4
   max_vision_workers 6 model litellm/SGLang-GLM-5.2} agent_concurrency
@@ -706,7 +706,7 @@ verdict PASS both panels, pushed to fork, Linear MES-14049 self-reported.
 - npm test: 562 pass / 0 fail (run_nano_akari.log, grep clean, 0 "not ok").
 - live smoke 9479 → real akari 9481 (常驻 server untouched):
   `/api/akari/config {9481,9482}`, `/api/services` akari=up,
-  `/api/services-config` managed akari {host <INTERNAL_HOST> port 9481 managed true
+  `/api/services-config` managed akari {host 10.18.8.55 port 9481 managed true
   kind http}, `/api/akari/state` reachable=true fields IDENTICAL to direct
   curl 9481 side-by-side (v0.7.0 build efb142f1e caps {lane_cap 4
   max_vision_workers 6 model litellm/SGLang-GLM-5.2} agent_concurrency
@@ -746,7 +746,7 @@ it is real and aligned with the LATEST akari.
   ok", no MISMATCH/NaN/AssertionError); 26 akari-proxy tests pass.
 - live smoke 9479 → real akari 9481 (常驻 akari-server pid 96180 + lens bun
   pid 96189 untouched): `/api/akari/config {9481,9482}`, `/api/services`
-  akari=up, `/api/services-config` managed akari {host <INTERNAL_HOST> port 9481
+  akari=up, `/api/services-config` managed akari {host 10.18.8.55 port 9481
   managed true kind http}, `/api/plugin/config?plugin=akari` ok,
   `/api/akari/state` reachable=true with fields **IDENTICAL** to direct curl
   9481 side-by-side — concurrency/workers/lanes/version ALL MATCH direct curl

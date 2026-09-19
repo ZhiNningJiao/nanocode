@@ -330,7 +330,7 @@ Go to **Monitor > Plugin Manager**. Toggle the switch for each plugin. Disabled 
 
 **Cause**: akari dispatch server is down or the URL is wrong.
 **Fix**:
-1. Check directly: `curl http://<INTERNAL_HOST>:9481/api/health`
+1. Check directly: `curl http://10.18.8.55:9481/api/health`
 2. Verify URL in personal config: `~/.nanocode/personal.json` > `akari.serverUrl`
 3. The panel auto-recovers when akari comes back (polls every 10s)
 

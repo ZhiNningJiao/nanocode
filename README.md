@@ -201,7 +201,7 @@ True "session loss" = metadata file corrupted on write. That is prevented by the
 - `npm start` or `npm run dev` — runs `node server/index.js` directly.
 - Port defaults to `3000` (override with `PORT=`).
 - Data stored in `data/nanocode.json` relative to the repo.
-- The working instance at port `3001` on `<INTERNAL_HOST>` is the live server. Do not kill or restart it without explicit instruction.
+- The working instance at port `3001` on `10.18.8.55` is the live server. Do not kill or restart it without explicit instruction.
 
 **System / multi-user mode (`NANOCODE_SYSTEM=1`):**
 - `scripts/install.sh` (requires root) copies the app to `/usr/lib/nanocode/`, creates a `nanocode` system user, installs a setuid helper (`helper/nanocode-spawn`), and installs a systemd unit.

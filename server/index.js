@@ -551,9 +551,9 @@ app.get('/api/tts/status', asyncWrap(async (_req, res) => {
 
 const SERVICES_CONFIG_PATH = path.join(__dirname, 'services-config.json')
 const DEFAULT_SERVICES = [
-  { name: 'mblend',      host: '<INTERNAL_HOST>', port: 5050 },
-  { name: 'dccpipeline', host: '<INTERNAL_HOST>', port: 8765 },
-  { name: 'regression',  host: '<INTERNAL_HOST>', port: 8000 },
+  { name: 'mblend',      host: '10.18.8.55', port: 5050 },
+  { name: 'dccpipeline', host: '10.18.8.55', port: 8765 },
+  { name: 'regression',  host: '10.18.8.55', port: 8000 },
   { name: 'nanocode',    host: 'localhost',  port: 9475 },
   { name: 'TTS',         host: 'localhost',  port: 9880 },
 ]
@@ -567,7 +567,7 @@ for (const s of watchedServices) serviceStatus[s.name] = { status: 'unknown', ch
 
 // ─── akari dispatch server (MES-14049) ───────────────────────────────────────
 // The akari server URL is personal-config driven (personal.akari.serverUrl /
-// AKARI_SERVER_URL, default http://<INTERNAL_HOST>:9481). Re-read on each call so an
+// AKARI_SERVER_URL, default http://10.18.8.55:9481). Re-read on each call so an
 // operator URL change propagates without a server restart. The akari row in the
 // Port Health grid is a MANAGED entry (up/down via the real /api/health HTTP
 // probe, not a bare TCP connect) — injected into /api/services-config fresh on
