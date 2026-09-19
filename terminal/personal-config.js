@@ -16,8 +16,8 @@
  *   remote.machines -> personal.remote.machines[]  -> null (no dev machines declared)
  *   claude.teams   -> personal.claude.teams[]       -> null (auto-discover ~/.claude + ~/.claude-team*)
  *   ntfy.url       -> personal.ntfy.url            -> null (backend still reads store setting ntfy_url)
- *   akari.serverUrl-> personal.akari.serverUrl     -> $AKARI_SERVER_URL -> http://10.18.8.55:9481
- *   akari.lensUrl  -> personal.akari.lensUrl       -> $AKARI_LENS_URL   -> http://10.18.8.55:9482
+ *   akari.serverUrl-> personal.akari.serverUrl     -> $AKARI_SERVER_URL -> http://<INTERNAL_HOST>:9481
+ *   akari.lensUrl  -> personal.akari.lensUrl       -> $AKARI_LENS_URL   -> http://<INTERNAL_HOST>:9482
  *
  * The loader NEVER throws — a missing/parse-broken personal file degrades to
  * the scattered fallbacks. Secrets are only the same secrets the caller could
@@ -49,8 +49,8 @@ export const DEFAULT_AIGW_BUDGET_USD = 1000
 // an internal dispatch server), so it is projected to the frontend in full for
 // display + the lens jump button. Env overrides let operators repoint without a
 // personal.json edit.
-export const DEFAULT_AKARI_SERVER_URL = 'http://10.18.8.55:9481'
-export const DEFAULT_AKARI_LENS_URL = 'http://10.18.8.55:9482'
+export const DEFAULT_AKARI_SERVER_URL = 'http://<INTERNAL_HOST>:9481'
+export const DEFAULT_AKARI_LENS_URL = 'http://<INTERNAL_HOST>:9482'
 
 // Cache keyed by resolved path so repeated calls in one request don't re-read
 // the tiny file. Reset via `resetPersonalConfigCache()` in tests.

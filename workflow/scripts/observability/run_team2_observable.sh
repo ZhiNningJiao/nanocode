@@ -99,4 +99,4 @@ done
 RESULT=$([ -f "$FLAG" ] && echo MET || echo TIMEOUT)
 echo "=== $TAG LOOP_DONE flag=$RESULT iters=$i $(date) ===" | tee -a "$LOG"
 curl -s -m 5 -d "worker[$TAG] LOOP_DONE $RESULT iters=$i" \
-  http://10.18.8.55/zhiningwork >/dev/null 2>&1
+  ${NTFY_URL:-<NTFY_URL>} >/dev/null 2>&1

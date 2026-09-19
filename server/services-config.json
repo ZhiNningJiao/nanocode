@@ -1,17 +1,17 @@
 [
   {
     "name": "mblend",
-    "host": "10.18.8.55",
+    "host": "<INTERNAL_HOST>",
     "port": 5050
   },
   {
     "name": "dccpipeline",
-    "host": "10.18.8.55",
+    "host": "<INTERNAL_HOST>",
     "port": 8765
   },
   {
     "name": "regression",
-    "host": "10.18.8.55",
+    "host": "<INTERNAL_HOST>",
     "port": 8000
   },
   {

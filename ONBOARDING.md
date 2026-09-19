@@ -19,12 +19,12 @@ nanocode 是主人（zhiningjiao）自研的 **Web 终端工作区**，基于 No
 cd /storage/home/zhiningjiao/code/nanocode
 npm install                     # 装依赖（node-pty 需要原生编译）
 PORT=3001 node server/index.js  # 启开发实例（3001 是主人开发实例）
-curl http://10.18.8.55:3001/api/health   # 预期返回 {"status":"ok"}
+curl http://<INTERNAL_HOST>:3001/api/health   # 预期返回 {"status":"ok"}
 ```
 
 > **系统服务** 跑在 2333（`NANOCODE_SYSTEM=1`），3001 是主人开发实例，平时改代码只动 3001。
 
-打开浏览器 → `http://10.18.8.55:3001` → 左侧选择一个 project → 点 `+` 新建 claude tab → 开始对话。
+打开浏览器 → `http://<INTERNAL_HOST>:3001` → 左侧选择一个 project → 点 `+` 新建 claude tab → 开始对话。
 
 ---
 
@@ -118,14 +118,14 @@ sequenceDiagram
 ```bash
 # 1. 起备用端口（3002）
 PORT=3002 node server/index.js &
-curl http://10.18.8.55:3002/api/health   # 确认 200
+curl http://<INTERNAL_HOST>:3002/api/health   # 确认 200
 
 # 2. 停 3001
 kill $(lsof -t -i:3001)
 
 # 3. 起新 3001
 PORT=3001 node server/index.js &
-curl http://10.18.8.55:3001/api/health   # 确认 200
+curl http://<INTERNAL_HOST>:3001/api/health   # 确认 200
 
 # 4. 停备用 3002
 kill $(lsof -t -i:3002)
