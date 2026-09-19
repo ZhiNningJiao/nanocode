@@ -50,8 +50,8 @@ function router(map, fallback = netErr('no route')) {
 describe('akari-proxy: getAkariUrls', () => {
   it('defaults to the internal akari server + lens URLs', () => {
     const u = getAkariUrls(undefined)
-    assert.equal(u.serverUrl, 'http://10.18.8.55:9481')
-    assert.equal(u.lensUrl, 'http://10.18.8.55:9482')
+    assert.equal(u.serverUrl, 'http://<INTERNAL_HOST>:9481')
+    assert.equal(u.lensUrl, 'http://<INTERNAL_HOST>:9482')
   })
 
   it('reads serverUrl + lensUrl from a loaded personal config', () => {
@@ -116,7 +116,7 @@ describe('akari-proxy: fetchAkariState', () => {
       ['/api/workers', okJson(WORKERS)],
       ['/api/lanes', okJson(LANES)],
     ])
-    const s = await fetchAkariState('http://10.18.8.55:9481', { fetchFn })
+    const s = await fetchAkariState('http://<INTERNAL_HOST>:9481', { fetchFn })
     assert.equal(s.reachable, true)
     assert.equal(s.health.version, '0.4.0')
     assert.equal(s.health.build_commit, '92410bc8-dirty')
@@ -126,7 +126,7 @@ describe('akari-proxy: fetchAkariState', () => {
     assert.equal(s.concurrency.open_lanes, 0)
     assert.equal(s.workers.instance_tokens_in, 0)
     assert.equal(s.lanes.lanes.length, 0)
-    assert.equal(s.serverUrl, 'http://10.18.8.55:9481')
+    assert.equal(s.serverUrl, 'http://<INTERNAL_HOST>:9481')
     assert.ok(s.fetchedAt, 'fetchedAt timestamp present')
     assert.equal(s.errors.health, null)
   })
@@ -232,9 +232,9 @@ describe('akari-proxy: checkAkariReachable (services panel up/down contract)', (
 
 describe('akari-proxy: getAkariServiceEntry (managed services-config injection)', () => {
   it('parses host + port from the server URL and marks managed + http', () => {
-    const e = getAkariServiceEntry('http://10.18.8.55:9481')
+    const e = getAkariServiceEntry('http://<INTERNAL_HOST>:9481')
     assert.equal(e.name, 'akari')
-    assert.equal(e.host, '10.18.8.55')
+    assert.equal(e.host, '<INTERNAL_HOST>')
     assert.equal(e.port, '9481')
     assert.equal(e.managed, true)
     assert.equal(e.kind, 'http')

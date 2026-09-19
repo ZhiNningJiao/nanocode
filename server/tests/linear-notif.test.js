@@ -43,7 +43,7 @@ describe('ntfy push', () => {
 
   beforeEach(() => {
     store = createMockStore({
-      ntfy_url: 'http://10.18.8.55:80',
+      ntfy_url: 'http://<INTERNAL_HOST>:80',
       ntfy_topic: 'zhiningwork',
     })
     setNtfyStore(store)
@@ -63,7 +63,7 @@ describe('ntfy push', () => {
     const result = await pushNtfy({ title: 't', message: 'm' })
     assert.equal(result.ok, true)
     assert.equal(fetches.length, 1)
-    assert.equal(fetches[0].url, 'http://10.18.8.55:80/zhiningwork')
+    assert.equal(fetches[0].url, 'http://<INTERNAL_HOST>:80/zhiningwork')
     assert.equal(fetches[0].opts.method, 'POST')
     assert.equal(fetches[0].opts.headers.Title, 't')
     // URL/topic must not appear in the logged or returned data
@@ -128,7 +128,7 @@ describe('Linear background poller', () => {
     store = createMockStore({
       linear_api_key: 'lin_api_test',
       linear_poll_minutes: 2,
-      ntfy_url: 'http://10.18.8.55:80',
+      ntfy_url: 'http://<INTERNAL_HOST>:80',
       ntfy_topic: 'zhiningwork',
     })
     setNtfyStore(store)
@@ -256,7 +256,7 @@ describe('Linear background poller', () => {
   it('skips polling when no Linear API key is configured', async () => {
     const noKeyStore = createMockStore({
       linear_poll_minutes: 2,
-      ntfy_url: 'http://10.18.8.55:80',
+      ntfy_url: 'http://<INTERNAL_HOST>:80',
       ntfy_topic: 'zhiningwork',
     })
     // Ensure _store inside linear-notif.js points to the no-key store.
