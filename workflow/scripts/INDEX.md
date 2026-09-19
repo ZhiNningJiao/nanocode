@@ -11,15 +11,18 @@
 | `dispatch/` | pick-free-model.sh | 免费模型探活选模 | `AIGW_KEY_FILE`/`AIGW_BASE` 可配，key 缺失 fail-loud |
 | `dispatch/` | pick-worker-model.sh | 三级选模梯（免费→Claude 降级→NEEDSIG） | 全部本机路径 env 化（CODEX_WORK_DIR/WORKER_CORE_DIR 等） |
 | `dispatch/` | dispatch-worktree.sh | worktree-per-worker 隔离，出三元组 | `DISPATCH_WORKTREE_ROOT` 必填；无 origin 远端也可用 |
+| `dispatch/` | akari_dispatch.sh（env 化正本） | 派单正门（三条路由/信号协议/rules32），**已实现未切换** | 必填 env 五件（AKARI_CLI/CW_DIR_OVERRIDE/TEAM2_START_SCRIPT/RUN_LOOP_SCRIPT/DISPATCH_HEADER_FILE）缺则 rc=2；`--dry-run` 零副作用；单测 `dispatch/tests/run_tests.sh` 18 项 |
 | `gates/` | qa_gate_mechanical.py | 机械验收门（裸断言=打回） | verbatim（本就 stdlib-only 可移植） |
 | `board/` | board_upsert.sh / board_plan.py / board_flag_sync.sh / board_env.sh(.example) | 想法板机械流转三件+纯决策芯 | 板坐标改经 `BOARD_ENV_FILE`（默认 `~/.config/nanocode-board.env`）读取，缺失 fail-loud rc=2；坐标/凭据不入仓 |
 | `observability/` | start_team2_observable.sh + run_team2_observable.sh | Team2 tmux 启动器 + stream-json 循环 runner | `CODEX_WORK_DIR`/`WORKER_CORE_DIR`/`AKARI_PORT` 可配；去硬编码 HOME |
 | `aigw/` | aigw-errors.sh / aigw-free-health.sh | AIGW 排障第一站 / 免费模型探活看板 | `SLACK_TOKEN_FILE`/`AIGW_KEY_FILE`/`AIGW_HEALTH_MODELS` 等显式可配，凭据不入仓 |
 
-**明确未迁**（仍在本机，见 MIGRATION.md 第二批）：akari_dispatch.sh、auto-qa-dispatcher.sh、
+**明确未迁**（仍在本机，见 MIGRATION.md 第二批）：auto-qa-dispatcher.sh、
 feishu-secretary-bridge.sh、史官/交接/复活链（`tools/secretary/` 仅为 0801 逐字节归档，非移植）。
 三者各自的「入口 shim 落地方案」（env 化清单 / 耦合点 / 最小改动路径 / 验证命令）已沉淀于
 `../SHIM_PLAN.md`（workflow-docs-2258）；shim 落地前不得声称已切换到仓内运行。
+例外：akari_dispatch.sh 的 env 化正本已落 `dispatch/akari_dispatch.sh`（2026-09-19
+shim-batch3-1515，**未切换**——本机原件仍为生产正位，薄壳未建）。
 
 ## 工作流文档（协议正文，非脚本）
 

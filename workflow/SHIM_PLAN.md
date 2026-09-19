@@ -53,6 +53,35 @@ CW_DIR_OVERRIDE=$(mktemp -d) bash <REPO_PATH>/workflow/scripts/dispatch/akari_di
 # 全程不碰生产 codex_work；对照本机原件同参输出 diff=0（除时间戳/绝对路径前缀）。
 ```
 
+**状态（2026-09-19，shim-batch3-1515）：env 化正本已实现（未切换）。**
+仓内正本落 `workflow/scripts/dispatch/akari_dispatch.sh`：三条路由 / 信号文件协议 /
+MAX_CONCURRENT / 失败四分类 / Opus→Fable 兜底逻辑与原件逐条等价；全部本机字面路径改
+走 env，缺必填（`AKARI_CLI` / `CW_DIR_OVERRIDE` / `TEAM2_START_SCRIPT` /
+`RUN_LOOP_SCRIPT` / `DISPATCH_HEADER_FILE`）rc=2 逐条报缺。新增 `--dry-run`
+（打印路由决策/命令行/将写的 manifest 与信号，零副作用）。单测
+`workflow/scripts/dispatch/tests/run_tests.sh` 18 项全过（缺必填 / 非 git 兜底决策 /
+opus 路由 / 并发 32 只 warn / dry-run 零文件）。**本机原件未替换、生产仍走原路径 —
+切换状态 = 未切换。**
+
+切换步骤（原位置薄壳，cron/任务书零改动）：
+
+```bash
+cp /jfs/home/zhiningjiao/code/akari_dispatch.sh /jfs/home/zhiningjiao/code/akari_dispatch.sh.bak-pre-shim
+cat > /jfs/home/zhiningjiao/code/akari_dispatch.sh <<'EOF'
+#!/usr/bin/env bash
+export AKARI_CLI="${AKARI_CLI:-$HOME/code/akari/packages/dispatch/src/cli.ts}"
+export DISPATCH_HEADER_FILE="${DISPATCH_HEADER_FILE:-$HOME/code/worker-core/DISPATCH_HEADER.md}"
+export TEAM2_START_SCRIPT="${TEAM2_START_SCRIPT:-$HOME/code/worker-core/start_team2_observable.sh}"
+[ -n "${CW_DIR_OVERRIDE:-}" ] || export CW_DIR_OVERRIDE="$HOME/codex_work"
+[ -n "${RUN_LOOP_SCRIPT:-}" ] || export RUN_LOOP_SCRIPT="$HOME/codex_work/run_loop_glm.sh"
+exec bash <REPO_PATH>/workflow/scripts/dispatch/akari_dispatch.sh "$@"
+EOF
+# 观察窗：先 --dry-run 对照（同参输出除时间戳/绝对路径前缀外 diff=0），再放真单。
+```
+
+回滚步骤：`mv /jfs/home/zhiningjiao/code/akari_dispatch.sh.bak-pre-shim \
+/jfs/home/zhiningjiao/code/akari_dispatch.sh`（原件一字未动，即刻还原）。
+
 ## 2. auto-qa-dispatcher.sh（358 行，FLAG→双审 QA 自动派发）
 
 **现状耦合点**：扫描根固定 `~/codex_work`；去重状态文件落 `~/code/`（`.auto_qa_*`）；

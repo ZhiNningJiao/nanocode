@@ -27,6 +27,10 @@
 > **仍未迁**（本机运行体，依赖重/含现场配置，逐类记录）：
 > - `akari_dispatch.sh`（511 行）：深耦合 tmux 会话命名、lane 注册表、任务书模板、
 >   board 钩子、AIGW key 路径——需独立一轮按 env 化改造后迁。
+>   **2026-09-19 shim-batch3-1515 更新**：env 化正本已落
+>   `scripts/dispatch/akari_dispatch.sh`（必填 env 五件 fail-loud rc=2，`--dry-run`
+>   零副作用，单测 18 项全过；切换/回滚步骤见 `SHIM_PLAN.md` §1）。**本机原件未替换、
+>   薄壳未建，切换状态 = 未切换。**
 > - `auto-qa-dispatcher.sh`（358 行）：依赖 worker-core runner 族与本机 QA worktree 约定。
 > - `feishu-secretary-bridge.sh`（445 行）：**现场秘书配置**（chat 白名单/tmux 注入/
 >   systemd unit），owner 令禁止拷贝 live secretary config——不迁。
