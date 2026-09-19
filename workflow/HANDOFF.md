@@ -1,5 +1,8 @@
 # HANDOFF — 秘书交接协议
 
+> 归档与公开交接规则见 `workflow/ARCHIVE_AND_HANDOFF_RULES.md`（板为唯一业务台账、
+> 结案=已验收∧已通知、未结案永不隐藏、3 天窗口）。
+
 > 沉淀秘书交接的机械链条。正本运行体 `secretary-takeover.sh` 不迁仓（现场配置：
 > tab 注册表、secretary-home.env、systemd 桥——见 `MIGRATION.md` 第二批与
 > `SHIM_PLAN.md`）。来源：本机 `codex_work/HANDOFF_SECRETARY.md` +

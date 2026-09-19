@@ -29,6 +29,8 @@ feishu-secretary-bridge.sh、史官/交接/复活链（`tools/secretary/` 仅为
 | `../ACCEPTANCE.md` | 完成声明验收法：成熟度五级 / 退回规则 / 独立抽证清单 |
 | `../HANDOFF.md` | 秘书交接协议：duty-status 四证 / 上任卸任六步 / 薄指引定位 / 在飞刷新纪律 |
 | `../SHIM_PLAN.md` | 三份不迁脚本的 shim 落地方案与切换声明纪律 |
+| `../ARCHIVE_AND_HANDOFF_RULES.md` | 归档判据与公开交接规则（T85，含每条规则出处） |
+| `../DISPATCH_RESOURCES.md` | 派工资源规则：模型三档/预飞/预算/拆分/背压/空转判据（T86） |
 
 ## 调度 / 派单
 

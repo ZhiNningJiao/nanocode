@@ -58,3 +58,11 @@
 2. 第二批脚本迁移（一 PR 一类，shim 过渡，cron 不动）。
 3. CURRENT_WORKFLOW v2 生效裁决（DIFF 冲突项 owner 拍板）→ 迁 v2 正文，memory 原件改为指路行。
 4. 想法板板头 + HANDOFF 头部挂本仓链接（ARCHIVE_RULES v1 第 9 条落点）。
+
+## 状态更新（2026-09-19 rules-docs-1256）
+
+- 规则沉淀新增：`workflow/ARCHIVE_AND_HANDOFF_RULES.md`（T85 归档/交接规则，
+  ARCHIVE_RULES v1 完整版）与 `workflow/DISPATCH_RESOURCES.md`（T86 派工资源规则，
+  仅记录规则，未改路由器）。均为纯文档；脚本状态不变，shim 仍未落地。
+- HANDOFF.md 顶部已加指向归档规则文档的一行（v1 第 9 条落点之一）；
+  板头链接仍待 owner/秘书在板侧挂（不在本仓改动范围）。
