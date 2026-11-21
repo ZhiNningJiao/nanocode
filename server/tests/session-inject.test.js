@@ -186,6 +186,10 @@ async function attachClaudeTab(store, projectCwd, label, testQueryImpl) {
     cols: 120,
     rows: 40,
   })
+  // attachClaudeSession awaits the session-lock (fs/promises) before it joins
+  // the ws to cs.clients and sends busy-state — wait for that, or an inject
+  // fired right away would broadcast to nobody.
+  await waitUntil(() => ws.sent.some((m) => m.type === 'busy-state'), 3000, 'claude attach')
   return { project, tab, ws, router }
 }
 

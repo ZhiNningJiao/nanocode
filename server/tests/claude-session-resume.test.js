@@ -78,8 +78,8 @@ function writeJsonlEvents(projectDir, sessionId, events) {
 function makeController({ tabClaudeSessionId, mainSessionId, hasSeedHistory = false, withDiskHistory = null, tabSkipAutoResume = false }) {
   const projectId = 'proj-1'
   const tabId = 'tab-1'
-  const projectCwd = mkdtempSync('/tmp/nanocode-resume-')
-  const home = mkdtempSync('/tmp/nanocode-home-')
+  const projectCwd = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-resume-')
+  const home = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-home-')
 
   let diskSessionId = null
   if (withDiskHistory) {
@@ -397,8 +397,8 @@ describe('claude session auto-recovery — cross-instance', () => {
   function makeSharedResources({ tabClaudeSessionId, mainSessionId, withDiskHistory }) {
     const projectId = 'proj-shared'
     const tabId = 'tab-shared'
-    const projectCwd = mkdtempSync('/tmp/nanocode-resume-')
-    const home = mkdtempSync('/tmp/nanocode-home-')
+    const projectCwd = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-resume-')
+    const home = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-home-')
 
     if (withDiskHistory) {
       const projectDir = cwdToClaudeProjectDir(home, projectCwd)

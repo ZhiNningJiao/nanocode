@@ -44,6 +44,9 @@ export function createTerminalRoutes(store, opts = {}) {
     // Test seam only: speed up the lock-watch poll for fast integration tests.
     // Undefined in production (defaults to 3s in the controller).
     lockWatchIntervalMs: opts?.lockWatchIntervalMs,
+    // Test seam only: shorten the bounded lock wait on attach/steal/close.
+    // Undefined in production (LOCK_OP_TIMEOUT_MS in session-lock.js).
+    lockOpTimeoutMs: opts?.lockOpTimeoutMs,
   })
   // On server shutdown / test end, tear down all in-process SDK streaming
   // sessions so their child-process handles release and the process can exit.
@@ -270,61 +273,97 @@ export function createTerminalRoutes(store, opts = {}) {
   })
 
   // POST /api/sessions/:id/inject
-  router.post('/api/sessions/:id/inject', (req, res) => {
+  router.post('/api/sessions/:id/inject', async (req, res) => {
     if (!isLocalhostReq(req)) {
       return res.status(403).json({ error: 'forbidden: localhost only' })
     }
-    // Express already URL-decodes path params once, so this works whether the
-    // caller sends raw colons (uuid:claude:uuid) or percent-encoded (%3A).
-    const sessionKey = req.params.id
-    const { text, sendNow, isUser } = req.body || {}
-    // Claude session (primary use case: secretary wake). Reuses the exact
-    // WS 'claude-input' dispatch path via injectClaudeMessage.
-    // isUser defaults to true (UI / explicit user inject) — a user message
-    // auto-steals the lock when this server is read-only. The waker passes
-    // isUser:false so secretary briefings stay read-only (no steal).
-    const result = sessionController.injectClaudeMessage(sessionKey, text, {
-      sendNow: sendNow === true,
-      isUser: isUser !== false,
-    })
-    if (result.ok) return res.json(result)
-    // Read-only server (lost the session singleton lock): the session is alive
-    // but hosted by another server. Tell the caller clearly so the watchdog can
-    // route the wake to the host instead of mistaking this for a missing session.
-    if (result.readOnly) {
-      return res.status(423).json({
-        ok: false,
-        error: result.error,
-        readOnly: true,
-        lockHolderPort: result.lockHolderPort,
-      })
-    }
-    // Not a claude session → try codex (sessionKey shaped `${projectId}:codex:${tabId}`).
-    // Same wake/inject contract as claude: default queues behind a running turn,
-    // sendNow=true does an atomic interrupt+flush so the message lands immediately.
-    if (result.error === 'session not found') {
-      const codexResult = sessionController.injectCodexMessage(sessionKey, text, {
+    // Express 4 does not forward a rejected async handler to error middleware
+    // (that's an Express 5 behaviour) — left uncaught, it becomes an
+    // unhandled promise rejection that can crash the whole process. Since
+    // injectClaudeMessage now awaits session-lock.js (fs/promises on /jfs,
+    // which can reject — e.g. an unwritable/missing lock dir), this handler
+    // must catch at the HTTP boundary: report the error, keep the process up.
+    try {
+      // Express already URL-decodes path params once, so this works whether the
+      // caller sends raw colons (uuid:claude:uuid) or percent-encoded (%3A).
+      const sessionKey = req.params.id
+      const { text, sendNow, isUser } = req.body || {}
+      // Claude session (primary use case: secretary wake). Reuses the exact
+      // WS 'claude-input' dispatch path via injectClaudeMessage.
+      // isUser defaults to true (UI / explicit user inject) — a user message
+      // auto-steals the lock when this server is read-only. The waker passes
+      // isUser:false so secretary briefings stay read-only (no steal).
+      const result = await sessionController.injectClaudeMessage(sessionKey, text, {
         sendNow: sendNow === true,
+        isUser: isUser !== false,
       })
-      if (codexResult.ok) return res.json(codexResult)
-      if (codexResult.error === 'empty text') {
+      if (result.ok) return res.json(result)
+      // Read-only server (lost the session singleton lock): the session is alive
+      // but hosted by another server. Tell the caller clearly so the watchdog can
+      // route the wake to the host instead of mistaking this for a missing session.
+      if (result.readOnly) {
+        return res.status(423).json({
+          ok: false,
+          error: result.error,
+          readOnly: true,
+          lockHolderPort: result.lockHolderPort,
+        })
+      }
+      // Not a claude session → try codex (sessionKey shaped `${projectId}:codex:${tabId}`).
+      // Same wake/inject contract as claude: default queues behind a running turn,
+      // sendNow=true does an atomic interrupt+flush so the message lands immediately.
+      if (result.error === 'session not found') {
+        const codexResult = sessionController.injectCodexMessage(sessionKey, text, {
+          sendNow: sendNow === true,
+        })
+        if (codexResult.ok) return res.json(codexResult)
+        if (codexResult.error === 'empty text') {
+          return res.status(400).json({ ok: false, error: 'empty text' })
+        }
+        // codexResult.error === 'session not found' → fall through to bash below.
+      }
+      // Fall through to bash PTY session: write raw bytes (equivalent to WS
+      // 'input') if such a session exists.
+      if (result.error === 'session not found') {
+        const sess = sessions.get(sessionKey)
+        if (sess && typeof sess.write === 'function') {
+          sess.write(typeof text === 'string' ? text : '')
+          return res.json({ ok: true, sessionKey, type: 'bash', dispatched: true })
+        }
+      }
+      if (result.error === 'empty text') {
         return res.status(400).json({ ok: false, error: 'empty text' })
       }
-      // codexResult.error === 'session not found' → fall through to bash below.
+      res.status(404).json({ ok: false, error: result.error || 'session not found' })
+    } catch (err) {
+      console.error(`[inject] ${req.params.id}: injectClaudeMessage failed: ${err?.message || err}`)
+      res.status(500).json({ ok: false, error: 'internal error' })
     }
-    // Fall through to bash PTY session: write raw bytes (equivalent to WS
-    // 'input') if such a session exists.
-    if (result.error === 'session not found') {
-      const sess = sessions.get(sessionKey)
-      if (sess && typeof sess.write === 'function') {
-        sess.write(typeof text === 'string' ? text : '')
-        return res.json({ ok: true, sessionKey, type: 'bash', dispatched: true })
-      }
+  })
+
+  // POST /api/projects/:id/tabs/:tabId/claude-session — start (or confirm) the
+  // claude session of an existing claude tab WITHOUT a browser (pc136btn_1915).
+  // Same localhost-only guard as /api/sessions + inject: it is the server-side
+  // half of "open this tab", used by the restart guard / new-secretary script so
+  // the tab shows up in GET /api/sessions and can take an inject. Idempotent:
+  // a live session is reported (created:false), never recreated. No turn is run.
+  router.post('/api/projects/:id/tabs/:tabId/claude-session', async (req, res) => {
+    if (!isLocalhostReq(req)) {
+      return res.status(403).json({ error: 'forbidden: localhost only' })
     }
-    if (result.error === 'empty text') {
-      return res.status(400).json({ ok: false, error: 'empty text' })
+    try {
+      const project = store.getProject(req.params.id)
+      if (!project) return res.status(404).json({ ok: false, error: 'project not found' })
+      const tab = store.getTab ? store.getTab(req.params.id, req.params.tabId) : null
+      if (!tab) return res.status(404).json({ ok: false, error: 'tab not found' })
+      if (tab.type !== 'claude') return res.status(400).json({ ok: false, error: `tab type is ${tab.type || 'bash'}, not claude` })
+      const result = await sessionController.ensureClaudeSession({ projectId: req.params.id, tabId: req.params.tabId, project })
+      if (!result.ok) return res.status(409).json(result)
+      res.json(result)
+    } catch (err) {
+      console.error(`[claude-session] ${req.params.id}/${req.params.tabId}: ensureClaudeSession failed: ${err?.message || err}`)
+      res.status(500).json({ ok: false, error: 'internal error' })
     }
-    res.status(404).json({ ok: false, error: result.error || 'session not found' })
   })
 
   // --- Tab registry (per-project, persisted in store) ---
@@ -501,7 +540,7 @@ export function createTerminalRoutes(store, opts = {}) {
    * the specified session. Used by the agent-list resume flow.
    * Body: { claudeSessionId: string }
    */
-  router.patch('/api/projects/:id/tabs/:tabId/session', (req, res) => {
+  router.patch('/api/projects/:id/tabs/:tabId/session', async (req, res) => {
     const project = store.getProject(req.params.id)
     if (!project) return res.status(404).json({ error: 'project not found' })
     const tab = store.getTab ? store.getTab(req.params.id, req.params.tabId) : null
@@ -515,7 +554,15 @@ export function createTerminalRoutes(store, opts = {}) {
       ? store.updateTabMetadata(req.params.id, req.params.tabId, { claudeSessionId })
       : null
     if (!updated) return res.status(404).json({ error: 'update failed' })
-    sessionController.setClaudeSessionId(req.params.id, req.params.tabId, claudeSessionId)
+    // setClaudeSessionId now awaits session-lock.js; catch here so a rejected
+    // promise (e.g. an unwritable lock dir) returns an HTTP error instead of
+    // becoming an unhandled rejection (Express 4 does not catch async handlers).
+    try {
+      await sessionController.setClaudeSessionId(req.params.id, req.params.tabId, claudeSessionId)
+    } catch (err) {
+      console.error(`[session] ${req.params.id}/${req.params.tabId}: setClaudeSessionId failed: ${err?.message || err}`)
+      return res.status(500).json({ error: 'internal error' })
+    }
     res.json(updated)
   })
 

@@ -839,7 +839,7 @@ export function scanAllOpencodeUsage(home) {
 //      where budgetUsd comes from the personal config (default 1000); the
 //      key-side max_budget is null for a virtual LLM-only key, so the budget
 //      is local and the window is labelled `estimated:true`. Verified live
-//      2026-07-07: spend≈$426.35, alias zhiningjiao@meshy.ai.
+//      2026-07-07: spend≈$426.35, alias <owner email>.
 //
 // Unified per-window schema (the `entries[]` of /api/usage/summary):
 //   { source, label, windowType, used, limit|null, remaining|null, utilization|null,
@@ -1707,8 +1707,8 @@ export async function fetchAigwBudget({ key, home, fetchImpl, now = Date.now() }
  * /user/info and surfaces a monthly window carrying the tier + advice + reset
  * for the AI-readable surface. No fabricated numbers — unavailable is honest.
  */
-export async function buildAigwBudgetSourceSummary({ now = Date.now(), fetchImpl } = {}) {
-  const budget = await fetchAigwBudget({ fetchImpl, now })
+export async function buildAigwBudgetSourceSummary({ now = Date.now(), home, fetchImpl } = {}) {
+  const budget = await fetchAigwBudget({ home, fetchImpl, now })
   const base = {
     source: 'aigw-budget', label: 'AIGW 月度额度', kind: 'litellm-budget',
     configDir: null, available: !!budget.available, base: budget.base,
@@ -1788,7 +1788,7 @@ export async function buildUsageSummary({ home, store, now = Date.now(), fetchIm
   // AIGW (LiteLLM) — /key/info real spend + /spend/logs/v2 burn + local budgetUsd.
   sources.push(await buildAigwSourceSummary({ now, home: homeDir, fetchImpl }))
   // AIGW monthly budget — /user/info max_budget + spend + reset + tier (MES-13788 延续)
-  sources.push(await buildAigwBudgetSourceSummary({ now, fetchImpl }))
+  sources.push(await buildAigwBudgetSourceSummary({ now, home: homeDir, fetchImpl }))
   // flat entries for AI consumption
   const entries = []
   for (const s of sources) {

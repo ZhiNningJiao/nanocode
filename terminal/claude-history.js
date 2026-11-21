@@ -854,7 +854,10 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     if (store.updateTabMetadata) {
       store.updateTabMetadata(projectId, tabId, { claudeSessionId: sessionId })
     }
+    // setClaudeSessionId awaits session-lock.js (fs/promises) — log a rejection
+    // instead of leaving an unhandled promise that can take the process down.
     sessionController.setClaudeSessionId(projectId, tabId, sessionId, { resetTurnCount: true })
+      .catch((err) => console.error(`[history] ${tabId}: setClaudeSessionId failed: ${err?.message || err}`))
   }
 
   function findMostRecentClaudeTab(project) {
@@ -951,6 +954,7 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
         store.updateTabMetadata(req.params.id, req.params.tabId, { claudeSessionId: resolution.freshSessionId })
       }
       sessionController.setClaudeSessionId(req.params.id, req.params.tabId, resolution.freshSessionId, { resetTurnCount: true })
+        .catch((err) => console.error(`[history] ${req.params.tabId}: setClaudeSessionId failed: ${err?.message || err}`))
       console.log(
         `[history:fallback-skipped] tab=${req.params.tabId} assigned fresh sessionId=${resolution.freshSessionId}`
       )

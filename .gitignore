@@ -33,3 +33,4 @@ server/tests/.fixtures-tmp/
 
 # command center — real root issue key / export path, never committed
 config/command-center.local.json
+.nanocode/

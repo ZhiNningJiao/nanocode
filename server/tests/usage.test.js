@@ -580,7 +580,7 @@ describe('usage: computeBudgetDaysLeft (pure)', () => {
 
 describe('usage: mapAigwBudgetResponse (pure)', () => {
   const REAL_USER_INFO = {
-    user_id: 'b3a432ba', user_email: 'zhiningjiao@meshy.ai',
+    user_id: 'b3a432ba', user_email: 'user@example.invalid',
     max_budget: 1000.0, spend: 197.8257218000002,
     budget_duration: '30d', budget_reset_at: '2026-08-01T00:00:00Z',
   }
@@ -596,7 +596,7 @@ describe('usage: mapAigwBudgetResponse (pure)', () => {
     assert.equal(r.reset_at, '2026-08-01T00:00:00Z')
     assert.equal(r.days_left, 25)
     assert.equal(r.budget_duration, '30d')
-    assert.equal(r.user_email, 'zhiningjiao@meshy.ai')
+    assert.equal(r.user_email, 'user@example.invalid')
     // 80.2% remaining, 25 days to reset -> SPEND_PAID
     assert.equal(r.tier, 'SPEND_PAID')
     assert.equal(r.advice, AIGW_BUDGET_ADVICE.SPEND_PAID)
@@ -652,7 +652,7 @@ describe('usage: fetchAigwBudget (fetchImpl injection, no live network)', () => 
       assert.ok(String(url).endsWith('/user/info'), 'hits /user/info')
       return {
         ok: true, status: 200,
-        json: async () => ({ user_info: { max_budget: 1000, spend: 197.83, budget_reset_at: '2026-08-01T00:00:00Z', budget_duration: '30d', user_email: 'zhiningjiao@meshy.ai' } }),
+        json: async () => ({ user_info: { max_budget: 1000, spend: 197.83, budget_reset_at: '2026-08-01T00:00:00Z', budget_duration: '30d', user_email: 'user@example.invalid' } }),
       }
     }
     const r = await fetchAigwBudget({ key: 'stub-key', fetchImpl: fetchStub, now: NOW })
@@ -730,6 +730,10 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
 
   it('includes the aigw-budget source via injected fetchImpl (MES-13788 延续)', async () => {
     mkdirSync(join(tmp, '.claude', 'projects'), { recursive: true })
+    // The key is resolved from the summary's home (not the real one) — give the
+    // fake home a key so the stubbed /user/info is actually reached.
+    mkdirSync(join(tmp, '.config'), { recursive: true })
+    writeFileSync(join(tmp, '.config', 'meshy-aigw.key'), 'test-key\n')
     const store = createStore(':memory:')
     store.setSetting('claude_config_dir', join(tmp, '.claude'))
     const prevXdg = process.env.XDG_DATA_HOME
@@ -740,7 +744,7 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
     const fetchStub = async (url) => {
       const u = String(url)
       if (u.endsWith('/user/info')) {
-        return { ok: true, status: 200, json: async () => ({ user_info: { max_budget: 1000, spend: 197.83, budget_reset_at: '2026-08-01T00:00:00Z', budget_duration: '30d', user_email: 'zhiningjiao@meshy.ai', user_id: 'b3a432ba' } }) }
+        return { ok: true, status: 200, json: async () => ({ user_info: { max_budget: 1000, spend: 197.83, budget_reset_at: '2026-08-01T00:00:00Z', budget_duration: '30d', user_email: 'user@example.invalid', user_id: 'b3a432ba' } }) }
       }
       // /key/info -> 403 to keep aigw-litellm unavailable (shape-only)
       return { ok: false, status: 403, json: async () => ({ detail: 'forbidden' }) }
@@ -846,10 +850,10 @@ describe('usage: personal-config loader (AIGW key/base/budgetUsd fallback)', () 
 
 describe('usage: fetchAigwKeyInfo + fetchAigwSpendLogs (mocked)', () => {
   it('fetchAigwKeyInfo parses nested info.spend + alias + max_budget', async () => {
-    const f = mockAigwFetch({ spend: 426.34, alias: 'zhiningjiao@meshy.ai', maxBudget: null })
+    const f = mockAigwFetch({ spend: 426.34, alias: 'user@example.invalid', maxBudget: null })
     const r = await fetchAigwKeyInfo({ key: 'k', base: 'https://aigw.test', fetchImpl: f })
     assert.equal(r.spend, 426.34)
-    assert.equal(r.alias, 'zhiningjiao@meshy.ai')
+    assert.equal(r.alias, 'user@example.invalid')
     assert.equal(r.maxBudget, null)
     assert.equal(r.budgetResetAt, null)
   })
@@ -971,14 +975,14 @@ describe('usage: buildUsageSummary AIGW-available path (mocked, hermetic)', () =
     process.env.XDG_DATA_HOME = join(tmp, 'xdg')
     delete process.env.GLM_XDG_DATA_HOME
     try {
-      const f = mockAigwFetch({ spend: 426.3456, alias: 'zhiningjiao@meshy.ai', maxBudget: null, logs: [] })
+      const f = mockAigwFetch({ spend: 426.3456, alias: 'user@example.invalid', maxBudget: null, logs: [] })
       const sum = await buildUsageSummary({ home: tmp, store, now: NOW, fetchImpl: f })
       assert.equal(sum.schemaVersion, 1)
       // three sources: Team1 (Claude) + AIGW (Team2 ~/.claude-team2 absent in fake home)
       const aigw = sum.sources.find((s) => s.source === 'aigw-litellm')
       assert.ok(aigw, 'aigw source present')
       assert.equal(aigw.available, true)
-      assert.equal(aigw.alias, 'zhiningjiao@meshy.ai')
+      assert.equal(aigw.alias, 'user@example.invalid')
       const w = aigw.windows[0]
       assert.equal(w.used, 426.3456)
       assert.equal(w.budget_usd, 1000)

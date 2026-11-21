@@ -389,7 +389,9 @@ describe('phase 2 routes', () => {
   const dir = path.join(FIXTURE_DIR, 'routes')
   before(async () => {
     await mkdir(path.join(dir, 'quota'), { recursive: true })
-    await writeFile(path.join(dir, 'quota', 'T3.json'), JSON.stringify({ ...READING, fetched_at: new Date().toISOString() }))
+    await writeFile(path.join(dir, 'quota', 'T3.json'), JSON.stringify({ ...READING, fetched_at: new Date().toISOString(),
+      // windows must still be open at test time, or the reading is voided
+      reset_5h_bjt: new Date(Date.now() + 3600e3).toISOString(), reset_7d_bjt: new Date(Date.now() + 86400e3).toISOString() }))
     const now = new Date().toISOString()
     const carsPath = path.join(dir, 'cars.json')
     await writeFile(carsPath, JSON.stringify({ schema: CARS_EXPORT_SCHEMA, exported_at: now, ok: true, last_ok_at: now, gantt: gantt([bar({ trace_id: 'car_b' })]),
