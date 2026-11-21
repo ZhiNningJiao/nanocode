@@ -63,9 +63,10 @@ export function loadMachinesConfig(path = MACHINES_CONFIG_PATH) {
 
 /**
  * Is `host` this machine itself? Used to decide "read directly, no ssh"
- * (PC136 in production) vs "ssh in". Compares against loopback names and the
- * machine's own non-internal IPv4 addresses — no hardcoded hostname special-
- * casing, so the same code works wherever it's deployed.
+ * (when the collector happens to run on one of the watched hosts) vs "ssh
+ * in". Compares against loopback names and the machine's own non-internal
+ * IPv4 addresses — no hardcoded hostname special-casing, so the same code
+ * works wherever it's deployed.
  */
 export function isSelf(host) {
   if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true
