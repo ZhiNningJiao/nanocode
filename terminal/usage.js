@@ -253,13 +253,14 @@ export async function scanClaudeUsage(configDir, { maxFiles = 200, days, files: 
  * (e.g. a team3 at a custom path). When the personal file is absent or has no
  * claude.teams, behaviour is identical to before. Returns { teams, activePath }.
  */
-export function listTeams(home, store) {
-  const homeDir = home || homedir()
-  const teams = []
-  const seen = new Set()
-  // Friendly-name overrides from personal config, keyed by configDir. Lets the
-  // auto-discovered ~/.claude / ~/.claude-team* show real org names (e.g.
-  // "Meshy-Algorithm") instead of the generic "Team 1 / Team 2".
+/**
+ * Pure team-list composition: auto-discovered `.claude-team*` dir NAMES
+ * (already listed by the caller, sync or async) + the personal-config teams,
+ * merged/deduped/named. No IO here — `exists` is filled in separately by the
+ * caller so the same composition logic serves both the sync and async
+ * entry points below without a second copy of the merge/naming rules.
+ */
+function composeTeamList(homeDir, store, discoveredDirNames) {
   const personal = loadPersonalConfig({ home: homeDir })
   const personalTeams = Array.isArray(personal?.claude?.teams) ? personal.claude.teams : []
   const nameByPath = {}
@@ -267,25 +268,23 @@ export function listTeams(home, store) {
     const dir = t?.configDir || t?.path
     if (dir && t?.name) nameByPath[dir] = t.name
   }
+  const teams = []
+  const seen = new Set()
   const pushTeam = (id, name, path) => {
     if (!path || seen.has(path)) return
     seen.add(path)
-    teams.push({ id, name: nameByPath[path] || name, path, exists: existsSync(path) })
+    teams.push({ id, name: nameByPath[path] || name, path })
   }
   // 1. auto-discover ~/.claude (team1) + ~/.claude-team* — skipped when the
   // personal config sets claude.autoDiscoverTeams=false (home on a slow mount:
   // only the declared pools below are used, home is never listed).
   if (personal?.claude?.autoDiscoverTeams !== false) {
-    const defaultDir = join(homeDir, '.claude')
-    pushTeam('team1', 'Team 1', defaultDir)
-    let entries = []
-    try { entries = readdirSync(homeDir, { withFileTypes: true }) } catch {}
-    for (const d of entries) {
-      if (!d.isDirectory()) continue
-      if (!d.name.startsWith('.claude-team') && !d.name.startsWith('.claude_team')) continue
-      const fullPath = join(homeDir, d.name)
-      const m = d.name.match(/claude[-_](.+)$/)
-      const id = m ? m[1] : d.name
+    pushTeam('team1', 'Team 1', join(homeDir, '.claude'))
+    for (const name of discoveredDirNames) {
+      if (!name.startsWith('.claude-team') && !name.startsWith('.claude_team')) continue
+      const fullPath = join(homeDir, name)
+      const m = name.match(/claude[-_](.+)$/)
+      const id = m ? m[1] : name
       pushTeam(id, `Team ${id}`, fullPath)
     }
   }
@@ -298,6 +297,40 @@ export function listTeams(home, store) {
     const id = m ? m[1] : base
     pushTeam(id, t.name || `Team ${id}`, dir)
   }
+  return teams
+}
+
+export function listTeams(home, store) {
+  const homeDir = home || homedir()
+  const personal = loadPersonalConfig({ home: homeDir })
+  let dirNames = []
+  if (personal?.claude?.autoDiscoverTeams !== false) {
+    let entries = []
+    try { entries = readdirSync(homeDir, { withFileTypes: true }) } catch {}
+    dirNames = entries.filter((d) => d.isDirectory()).map((d) => d.name)
+  }
+  const teams = composeTeamList(homeDir, store, dirNames).map((t) => ({ ...t, exists: existsSync(t.path) }))
+  const active = effectiveClaudeConfigDir(store, homeDir)
+  return { teams, activePath: active }
+}
+
+/**
+ * Async twin of listTeams for request-time callers (`/api/teams`,
+ * `/api/memory/tree`, the recent-conversations picker) — the auto-discover
+ * readdir and the per-team `exists` probe are the two disk touches that used
+ * to block the event loop on a slow (sshfs) home; both go through
+ * bounded-scan.js here instead of node:fs sync calls.
+ */
+export async function listTeamsAsync(home, store) {
+  const homeDir = home || homedir()
+  const personal = loadPersonalConfig({ home: homeDir })
+  let dirNames = []
+  if (personal?.claude?.autoDiscoverTeams !== false) {
+    const entries = await readdirSafe(homeDir, { withFileTypes: true })
+    dirNames = entries.filter((d) => d.isDirectory()).map((d) => d.name)
+  }
+  const teams = composeTeamList(homeDir, store, dirNames)
+  await mapLimit(teams, DEFAULT_SCAN_CONCURRENCY, async (t) => { t.exists = !!(await statSafe(t.path)) })
   const active = effectiveClaudeConfigDir(store, homeDir)
   return { teams, activePath: active }
 }
@@ -480,6 +513,42 @@ export function listMemoryTree(home, store) {
     })
   }
   return out
+}
+
+/** Async twin of listMemoryProjects — bounded-scan readdir/stat, one team's projects root. */
+async function listMemoryProjectsAsync(configDir) {
+  const projectsRoot = join(configDir, 'projects')
+  const entries = await readdirSafe(projectsRoot, { withFileTypes: true })
+  const dirs = entries.filter((d) => d.isDirectory())
+  const out = []
+  await mapLimit(dirs, DEFAULT_SCAN_CONCURRENCY, async (d) => {
+    const memDir = join(projectsRoot, d.name, 'memory')
+    if (!(await statSafe(memDir))) return
+    const files = await readdirSafe(memDir, { withFileTypes: true })
+    let fileCount = 0
+    let lastMtime = 0
+    await mapLimit(files, DEFAULT_SCAN_CONCURRENCY, async (f) => {
+      if (!f.isFile() || !f.name.endsWith('.md')) return
+      fileCount++
+      const st = await statSafe(join(memDir, f.name))
+      if (st && st.mtimeMs > lastMtime) lastMtime = st.mtimeMs
+    })
+    out.push({ slug: d.name, cwd: claudeProjectSlugToCwd(d.name), fileCount, lastMtime })
+  })
+  out.sort((a, b) => b.lastMtime - a.lastMtime)
+  return out
+}
+
+/** Async twin of listMemoryTree for the `/api/memory/tree` route (request-time, slow-mount safe). */
+export async function listMemoryTreeAsync(home, store) {
+  const { teams } = await listTeamsAsync(home, store)
+  const existing = teams.filter((t) => t.exists)
+  return Promise.all(existing.map(async (team) => ({
+    id: team.id,
+    name: team.name,
+    path: team.path,
+    projects: await listMemoryProjectsAsync(team.path),
+  })))
 }
 
 /** List .md files in a team/project memory dir (name, size, mtime), newest-first. */

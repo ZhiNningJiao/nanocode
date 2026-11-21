@@ -11,7 +11,7 @@ import * as sessions from './sessions.js'
 import { createClaudeHistoryService, resolveSessionJsonl } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
-import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary, fetchAigwBudget } from './usage.js'
+import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listTeamsAsync, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, listMemoryTree, listMemoryTreeAsync, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile, buildUsageSummary, fetchAigwBudget } from './usage.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
 import { listSessions, previewSession } from './sessions-browser.js'
@@ -388,7 +388,7 @@ export function createTerminalRoutes(store, opts = {}) {
       if (!project) return res.status(404).json({ error: 'project not found' })
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 50)
       const source = ['project', 'home', 'all'].includes(req.query.source) ? req.query.source : 'all'
-      const conversations = historyService.recentConversations(project.cwd, limit, source)
+      const conversations = await historyService.recentConversations(project.cwd, limit, source)
       res.json({ conversations, source })
     } catch (err) {
       console.error('[/api/recent-conversations]', err)
@@ -732,7 +732,10 @@ export function createTerminalRoutes(store, opts = {}) {
       // turn will create a session and persist opencodeSessionId.
       return res.json({ events: [], sessionId: null })
     }
-    historyService.handleHistory(req, res)
+    historyService.handleHistory(req, res).catch((err) => {
+      console.error('[history]', err)
+      if (!res.headersSent) res.status(500).json({ error: err.message })
+    })
   })
 
   // opencode export → claude-block events (history replay for Fable5/opencode tabs)
@@ -1221,9 +1224,12 @@ export function createTerminalRoutes(store, opts = {}) {
   // All are wrapped in try/catch (Express 4 does not propagate async rejections)
   // and never throw on missing data — the UI labels unavailable sources honestly.
 
-  router.get('/api/teams', (_req, res) => {
+  // listTeamsAsync: auto-discover readdir(HOME) + per-team exists probe go
+  // through bounded-scan.js — this route is hit by the "团队/模型" page, which
+  // can be opened right after a browser reconnect alongside everything else.
+  router.get('/api/teams', async (_req, res) => {
     try {
-      res.json(listTeams(home, store))
+      res.json(await listTeamsAsync(home, store))
     } catch (err) {
       console.error('[/api/teams]', err)
       res.status(500).json({ error: err.message })
@@ -1369,7 +1375,10 @@ export function createTerminalRoutes(store, opts = {}) {
     return teams.find((t) => t.path === teamPath && t.exists) ? teamPath : null
   }
 
-  router.get('/api/memory/tree', (req, res) => {
+  // listMemoryTreeAsync: this route runs the heaviest readdir/stat fan-out of
+  // the four (teams × projects × md files) — the "记忆" page can be opened
+  // right after a browser reconnect, same as /api/teams above.
+  router.get('/api/memory/tree', async (req, res) => {
     try {
       const activePath = effectiveClaudeConfigDir(store, home)
       // Mark the current project's slug so the plugin can default to it.
@@ -1381,7 +1390,7 @@ export function createTerminalRoutes(store, opts = {}) {
         const proj = store.getProject(pid)
         if (proj && proj.cwd) currentSlug = String(proj.cwd).replace(/\//g, '-')
       }
-      const teams = listMemoryTree(home, store)
+      const teams = await listMemoryTreeAsync(home, store)
       for (const team of teams) {
         for (const p of team.projects) p.current = p.slug === currentSlug
       }

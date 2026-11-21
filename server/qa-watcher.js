@@ -5,7 +5,8 @@
  *   {repo}/evidence.md → aggregate latest entry to activity-feed.json + WS broadcast
  */
 
-import { watchFile, readFileSync, writeFileSync, existsSync, appendFileSync } from 'node:fs'
+import { watchFile } from 'node:fs'
+import { readFile, writeFile, appendFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { exec } from 'node:child_process'
 import path from 'node:path'
@@ -94,10 +95,12 @@ const lineCounters = { qa: 0, done: 0 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function readNewJsonlEntries(filePath, counterKey) {
+// fs/promises: this watcher polls files under ~/code (sshfs on a shared home);
+// the watchFile callback used to call readFileSync/existsSync synchronously,
+// blocking the whole server's event loop every poll tick on a slow mount.
+async function readNewJsonlEntries(filePath, counterKey) {
   try {
-    if (!existsSync(filePath)) return []
-    const content = readFileSync(filePath, 'utf-8')
+    const content = await readFile(filePath, 'utf-8')
     const lines = content.trim().split('\n').filter(Boolean)
     const newLines = lines.slice(lineCounters[counterKey])
     lineCounters[counterKey] = lines.length
@@ -116,8 +119,8 @@ function tmux(target, message) {
 
 // ─── QA signal ──────────────────────────────────────────────────────────────
 
-function handleQaEntries(broadcast) {
-  const entries = readNewJsonlEntries(QA_SIGNAL_PATH, 'qa')
+async function handleQaEntries(broadcast) {
+  const entries = await readNewJsonlEntries(QA_SIGNAL_PATH, 'qa')
   for (const entry of entries) {
     if (entry.status === 'blocked') {
       console.log('[watcher] blocked signal:', entry.repo, entry.task, entry.reason || '')
@@ -160,13 +163,13 @@ function handleQaEntries(broadcast) {
 
 // ─── Done signal ─────────────────────────────────────────────────────────────
 
-function handleDoneEntries(broadcast) {
-  const entries = readNewJsonlEntries(DONE_SIGNAL_PATH, 'done')
+async function handleDoneEntries(broadcast) {
+  const entries = await readNewJsonlEntries(DONE_SIGNAL_PATH, 'done')
   for (const entry of entries) {
     console.log('[watcher] done signal:', entry.repo, entry.task)
     try {
       const line = `[DONE_SIGNAL] ${new Date().toISOString().slice(0, 16)} | ${entry.repo}: ${entry.task} — ${entry.reviewer || 'PASS'}\n`
-      appendFileSync(AGENT_STATUS_PATH, line)
+      await appendFile(AGENT_STATUS_PATH, line)
     } catch (e) {
       console.warn('[watcher] agent-status write:', e.message)
     }
@@ -199,30 +202,29 @@ function extractLastEvidence(content) {
   return { heading, content: body.slice(0, 400) }
 }
 
-function appendActivityFeed(entry) {
+async function appendActivityFeed(entry) {
   try {
     let feed = []
-    if (existsSync(ACTIVITY_FEED_PATH)) {
-      const raw = readFileSync(ACTIVITY_FEED_PATH, 'utf-8').trim()
+    try {
+      const raw = (await readFile(ACTIVITY_FEED_PATH, 'utf-8')).trim()
       if (raw) feed = JSON.parse(raw)
-    }
+    } catch { /* missing/unreadable/unparsable — start fresh */ }
     feed.push(entry)
     if (feed.length > ACTIVITY_MAX) feed = feed.slice(feed.length - ACTIVITY_MAX)
-    writeFileSync(ACTIVITY_FEED_PATH, JSON.stringify(feed, null, 2))
+    await writeFile(ACTIVITY_FEED_PATH, JSON.stringify(feed, null, 2))
   } catch (e) {
     console.warn('[watcher] activity-feed write:', e.message)
   }
 }
 
-function handleEvidenceChange(repo, broadcast) {
+async function handleEvidenceChange(repo, broadcast) {
   const filePath = path.join(CODE_DIR, repo, 'evidence.md')
   try {
-    if (!existsSync(filePath)) return
-    const content = readFileSync(filePath, 'utf-8')
+    const content = await readFile(filePath, 'utf-8')
     const ev = extractLastEvidence(content)
     if (!ev) return
     const time = new Date().toISOString()
-    appendActivityFeed({ time, repo, type: 'evidence', heading: ev.heading, content: ev.content })
+    await appendActivityFeed({ time, repo, type: 'evidence', heading: ev.heading, content: ev.content })
     console.log(`[watcher] evidence updated: ${repo} — ${ev.heading.slice(0, 60)}`)
     broadcast({ type: 'activity', repo, heading: ev.heading, time })
   } catch (e) {
@@ -341,22 +343,26 @@ export async function pushNtfyMessage({ title, message, priority, tags }) {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export function startQaWatcher(broadcast) {
-  // Snapshot current line counts (don't fire for pre-existing entries)
+  // Snapshot current line counts (don't fire for pre-existing entries). Errors
+  // are already swallowed inside readNewJsonlEntries; nothing to await here.
   readNewJsonlEntries(QA_SIGNAL_PATH, 'qa')
   readNewJsonlEntries(DONE_SIGNAL_PATH, 'done')
 
-  // Watch signal files with poll-based watchFile (works on CephFS/NFS)
+  // Watch signal files with poll-based watchFile (works on CephFS/NFS). The
+  // callback can't be awaited (watchFile doesn't support async callbacks), so
+  // each handler is fired-and-forgotten with a .catch guard against an
+  // unhandled rejection — the handlers themselves already try/catch their IO.
   const opts = { persistent: true, interval: POLL_INTERVAL_MS }
 
-  watchFile(QA_SIGNAL_PATH, opts, () => handleQaEntries(broadcast))
+  watchFile(QA_SIGNAL_PATH, opts, () => { handleQaEntries(broadcast).catch((e) => console.warn('[watcher] qa handler:', e.message)) })
   console.log('[watcher] polling', QA_SIGNAL_PATH)
 
-  watchFile(DONE_SIGNAL_PATH, opts, () => handleDoneEntries(broadcast))
+  watchFile(DONE_SIGNAL_PATH, opts, () => { handleDoneEntries(broadcast).catch((e) => console.warn('[watcher] done handler:', e.message)) })
   console.log('[watcher] polling', DONE_SIGNAL_PATH)
 
   for (const repo of WATCHED_REPOS) {
     const filePath = path.join(CODE_DIR, repo, 'evidence.md')
-    watchFile(filePath, opts, () => handleEvidenceChange(repo, broadcast))
+    watchFile(filePath, opts, () => { handleEvidenceChange(repo, broadcast).catch((e) => console.warn('[watcher] evidence handler:', e.message)) })
     console.log(`[watcher] polling ${filePath}`)
   }
 }

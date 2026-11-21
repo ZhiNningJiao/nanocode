@@ -48,6 +48,11 @@ export function cwdFromJsonl(jsonlPath) {
   try { return cwdFromHead(readHeadSync(jsonlPath, CWD_HEAD_BYTES)) } catch { return null }
 }
 
+/** Async twin of cwdFromJsonl — same parser (cwdFromHead), non-blocking read. */
+export async function cwdFromJsonlAsync(jsonlPath) {
+  try { return cwdFromHead(await readHead(jsonlPath, CWD_HEAD_BYTES)) } catch { return null }
+}
+
 export function cwdFromDirName(dirName) {
   return dirName.replace(/^-/, '/').replace(/-/g, '/')
 }
@@ -84,6 +89,11 @@ export function summaryFromHead(chunk) {
 
 export function extractSummary(jsonlPath) {
   try { return summaryFromHead(readHeadSync(jsonlPath, SUMMARY_HEAD_BYTES)) } catch { return null }
+}
+
+/** Async twin of extractSummary — same parser (summaryFromHead), non-blocking read. */
+export async function extractSummaryAsync(jsonlPath) {
+  try { return summaryFromHead(await readHead(jsonlPath, SUMMARY_HEAD_BYTES)) } catch { return null }
 }
 
 /**

@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { extractSummary, relTimeFromMtime, cwdFromJsonl } from './recent-agents.js'
-import { effectiveClaudeConfigDir, claudeProjectsDir, resolveClaudeConfigDirForTab, resolveClaudeCwdForTab, listTeams } from './usage.js'
+import { extractSummary, extractSummaryAsync, relTimeFromMtime, cwdFromJsonl, cwdFromJsonlAsync } from './recent-agents.js'
+import { effectiveClaudeConfigDir, claudeProjectsDir, resolveClaudeConfigDirForTab, resolveClaudeCwdForTab, listTeams, listTeamsAsync } from './usage.js'
+import { mapLimit, readdirSafe, statSafe, readTailLines, forEachLine, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 
 export function cwdToClaudeProjectDir(home, cwd) {
   // Backward-compatible: defaults to ~/.claude. Kept for existing tests/callers
@@ -64,6 +66,48 @@ export function buildReplaySeed(events) {
  * content. We collect all assistant rows, then for each requestId keep only
  * the last (most complete) one. This avoids rendering duplicate/partial text.
  */
+// N52 fix: de-duplicate assistant rows correctly for Claude CLI stream-json format.
+//
+// BACKGROUND: Claude CLI emits MULTIPLE separate assistant rows per turn (one per
+// content block: thinking -> text -> tool_use -> text). All rows within the same turn
+// share the SAME requestId. The old logic kept only the LAST row per requestId
+// (treating it like a progressive streaming case where later rows supersede earlier
+// ones). But in practice, each row carries a DISTINCT content block type - keeping
+// only the last drops intermediate content (e.g. the leading "Hello!" text block
+// before a tool_use, causing N52: text1 visible during live streaming but missing
+// on history replay).
+//
+// NEW STRATEGY: for rows with the same requestId, group them and deduplicate WITHIN
+// each content-type. If two rows share both requestId AND content block type, keep
+// only the last (that is the true progressive-streaming case - partial -> complete
+// for the same block). If they have different content types, keep both in order.
+//
+// Dedup key: requestId + first-content-block-type (e.g. 'req_xxx:text', 'req_xxx:tool_use').
+// Rows without requestId are never deduplicated (kept as-is).
+//
+// Example for a turn with requestId='req_abc':
+//   row1: {requestId:'req_abc', content:[{type:'thinking'}]}  -> key 'req_abc:thinking'
+//   row2: {requestId:'req_abc', content:[{type:'text', text:'Hi!'}]}  -> key 'req_abc:text'
+//   row3: {requestId:'req_abc', content:[{type:'tool_use'}]}  -> key 'req_abc:tool_use'
+//   -> all THREE are kept (different content types)
+//
+// Example for progressive streaming (partial -> complete same block):
+//   row1: {requestId:'req_abc', content:[{type:'text', text:'Hi'}]}  -> key 'req_abc:text'
+//   row2: {requestId:'req_abc', content:[{type:'text', text:'Hi!'}]}  -> key 'req_abc:text'
+//   -> only row2 kept (same key, later row wins)
+
+/** Parse raw jsonl lines (already split, blanks dropped) into {row, ...} objects, skipping unparsable lines. */
+function _linesToRawRows(lines) {
+  const rawRows = []
+  for (const line of lines) {
+    if (!line.trim()) continue
+    let row
+    try { row = JSON.parse(line) } catch { continue }
+    rawRows.push(row)
+  }
+  return rawRows
+}
+
 export function parseJsonlHistory(jsonlPath) {
   let content
   try {
@@ -71,93 +115,18 @@ export function parseJsonlHistory(jsonlPath) {
   } catch {
     return []
   }
+  return _rawRowsToEvents(_linesToRawRows(content.split('\n')))
+}
 
-  const lines = content.split('\n').filter((l) => l.trim())
-  const events = []
-  const replayState = { userTextCounts: new Map() }
-
-  const rawRows = []
-  for (const line of lines) {
-    let row
-    try { row = JSON.parse(line) } catch { continue }
-    rawRows.push(row)
+/** Async twin of parseJsonlHistory — same parser (_rawRowsToEvents), non-blocking read. */
+export async function parseJsonlHistoryAsync(jsonlPath) {
+  let content
+  try {
+    content = await readFile(jsonlPath, 'utf-8')
+  } catch {
+    return []
   }
-
-  // N52 fix: de-duplicate assistant rows correctly for Claude CLI stream-json format.
-  //
-  // BACKGROUND: Claude CLI emits MULTIPLE separate assistant rows per turn (one per
-  // content block: thinking -> text -> tool_use -> text). All rows within the same turn
-  // share the SAME requestId. The old logic kept only the LAST row per requestId
-  // (treating it like a progressive streaming case where later rows supersede earlier
-  // ones). But in practice, each row carries a DISTINCT content block type - keeping
-  // only the last drops intermediate content (e.g. the leading "Hello!" text block
-  // before a tool_use, causing N52: text1 visible during live streaming but missing
-  // on history replay).
-  //
-  // NEW STRATEGY: for rows with the same requestId, group them and deduplicate WITHIN
-  // each content-type. If two rows share both requestId AND content block type, keep
-  // only the last (that is the true progressive-streaming case - partial -> complete
-  // for the same block). If they have different content types, keep both in order.
-  //
-  // Dedup key: requestId + first-content-block-type (e.g. 'req_xxx:text', 'req_xxx:tool_use').
-  // Rows without requestId are never deduplicated (kept as-is).
-  //
-  // Example for a turn with requestId='req_abc':
-  //   row1: {requestId:'req_abc', content:[{type:'thinking'}]}  -> key 'req_abc:thinking'
-  //   row2: {requestId:'req_abc', content:[{type:'text', text:'Hi!'}]}  -> key 'req_abc:text'
-  //   row3: {requestId:'req_abc', content:[{type:'tool_use'}]}  -> key 'req_abc:tool_use'
-  //   -> all THREE are kept (different content types)
-  //
-  // Example for progressive streaming (partial -> complete same block):
-  //   row1: {requestId:'req_abc', content:[{type:'text', text:'Hi'}]}  -> key 'req_abc:text'
-  //   row2: {requestId:'req_abc', content:[{type:'text', text:'Hi!'}]}  -> key 'req_abc:text'
-  //   -> only row2 kept (same key, later row wins)
-  const assistantByKey = new Map()
-  for (const row of rawRows) {
-    if (row.type !== 'assistant') continue
-    const rid = row.requestId
-    if (!rid) continue
-    const msg = row.message
-    if (!msg || !Array.isArray(msg.content) || msg.content.length === 0) continue
-    const firstType = msg.content[0]?.type || 'unknown'
-    const key = `${rid}:${firstType}`
-    assistantByKey.set(key, row)
-  }
-
-  const emittedKeys = new Set()
-  for (const row of rawRows) {
-    if (row.type === 'user') {
-      const msg = row.message
-      if (!msg || !msg.content) continue
-      events.push({
-        type: 'user',
-        message: msg,
-        uuid: row.uuid || null,
-        replay_id: buildUserReplayId(extractReplayUserText(msg), replayState.userTextCounts),
-        parent_tool_use_id: row.parent_tool_use_id || null,
-      })
-    } else if (row.type === 'assistant') {
-      const msg = row.message
-      if (!msg || !Array.isArray(msg.content)) continue
-      const rid = row.requestId
-      if (rid) {
-        const firstType = msg.content[0]?.type || 'unknown'
-        const key = `${rid}:${firstType}`
-        if (assistantByKey.get(key) !== row) continue
-        if (emittedKeys.has(key)) continue
-        emittedKeys.add(key)
-      }
-      events.push({
-        type: 'assistant',
-        message: msg,
-        uuid: row.uuid || null,
-        replay_id: buildAssistantReplayId(row),
-        parent_tool_use_id: row.parent_tool_use_id || null,
-      })
-    }
-  }
-
-  return events
+  return _rawRowsToEvents(_linesToRawRows(content.split('\n')))
 }
 
 /**
@@ -285,6 +254,22 @@ export function parseJsonlHistoryTail(jsonlPath) {
 }
 
 /**
+ * Async twin of parseJsonlHistoryTail — same TAIL_BYTES window, non-blocking
+ * stat + tail read (bounded-scan.js readTailLines) instead of statSync/readSync.
+ * Used by the request-time history endpoint; parseJsonlHistoryBefore (the
+ * "load older page" pagination path, user-initiated and not a page-load
+ * stampede) is left on the sync reverse-chunk-scan implementation below.
+ */
+export async function parseJsonlHistoryTailAsync(jsonlPath) {
+  const st = await statSafe(jsonlPath)
+  if (!st) return []
+  if (st.size <= TAIL_BYTES) return parseJsonlHistoryAsync(jsonlPath)
+  const { lines, ok } = await readTailLines(jsonlPath, TAIL_BYTES)
+  if (!ok) return []
+  return _rawRowsToEvents(_linesToRawRows(lines))
+}
+
+/**
  * Parse events BEFORE a given event UUID in a large jsonl.
  * Strategy:
  *   1. Scan the full file to find the byte offset of the line containing `beforeUuid`.
@@ -408,6 +393,27 @@ export function findNewestJsonl(projectDir) {
 }
 
 /**
+ * Async twin of findNewestJsonl — bounded-scan readdir/stat (concurrency-capped)
+ * instead of readdirSync/statSync, for the request-time history/resume path.
+ */
+export async function findNewestJsonlAsync(projectDir) {
+  if (!(await statSafe(projectDir))) return null
+  const entries = await readdirSafe(projectDir)
+  let best = null
+  let bestMtime = 0
+  await mapLimit(entries, DEFAULT_SCAN_CONCURRENCY, async (entry) => {
+    if (!entry.endsWith('.jsonl')) return
+    const fullPath = join(projectDir, entry)
+    const st = await statSafe(fullPath)
+    if (st && st.mtimeMs > bestMtime) {
+      bestMtime = st.mtimeMs
+      best = { path: fullPath, sessionId: entry.replace(/\.jsonl$/, '') }
+    }
+  })
+  return best
+}
+
+/**
  * Count user-message rows in a jsonl by scanning for the `"type":"user"` marker.
  * Uses a buffered byte scan with a small overlap tail so a marker straddling a
  * chunk boundary is not missed. Reads at most `capBytes` (default 16 MB) so a
@@ -453,6 +459,20 @@ export function countUserMessages(jsonlPath, capBytes = COUNT_CAP_BYTES) {
     try { closeSync(fd) } catch {}
   }
   return count
+}
+
+/**
+ * Async twin of countUserMessages. The marker is always a complete top-level
+ * JSON line in Claude's jsonl format, so a per-line substring check (via
+ * bounded-scan's forEachLine) is equivalent to — and simpler than — the
+ * cross-chunk byte-overlap scan above, without re-implementing it.
+ */
+export async function countUserMessagesAsync(jsonlPath, capBytes = COUNT_CAP_BYTES) {
+  let count = 0
+  const res = await forEachLine(jsonlPath, capBytes, (line) => {
+    if (line.includes('"type":"user"')) count++
+  })
+  return res ? count : 0
 }
 
 /**
@@ -616,6 +636,89 @@ export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = 
   }))
 }
 
+/** Async twin of _scanProjectDirEntries — bounded-scan readdir/stat per candidate file. */
+async function _scanProjectDirEntriesAsync(projectDir, teamMeta, sourceCwd, activeConfigDir) {
+  if (!(await statSafe(projectDir))) return []
+  const files = await readdirSafe(projectDir)
+  const out = []
+  await mapLimit(files, DEFAULT_SCAN_CONCURRENCY, async (f) => {
+    if (!f.endsWith('.jsonl')) return
+    const fullPath = join(projectDir, f)
+    const st = await statSafe(fullPath)
+    if (!st || st.size < 200) return
+    out.push({
+      sessionId: f.replace(/\.jsonl$/, ''),
+      fullPath,
+      mtimeMs: st.mtimeMs,
+      byteSize: st.size,
+      teamId: teamMeta.id,
+      teamName: teamMeta.name,
+      configDir: teamMeta.path,
+      sourceCwd,
+      isCrossTeam: teamMeta.path !== activeConfigDir,
+    })
+  })
+  return out
+}
+
+/**
+ * Async twin of scanRecentConversationsMulti for the `/api/projects/:id/
+ * recent-conversations` route (the Claude Code tab picker, triggered on every
+ * new-tab open) — same team × cwd fan-out and mtime/byte-size sort, but every
+ * disk touch (readdir/stat/head-read) goes through bounded-scan.js so a slow
+ * (sshfs) home can't block the event loop.
+ */
+export async function scanRecentConversationsMultiAsync(home, cwd, store, limit = 5, now = Date.now(), source = 'all') {
+  const { teams } = await listTeamsAsync(home, store)
+  const activeConfigDir = effectiveClaudeConfigDir(store, home)
+  let cwdSources
+  if (source === 'project') cwdSources = [cwd]
+  else if (source === 'home') cwdSources = [home]
+  else cwdSources = cwd === home ? [cwd] : [cwd, home]
+  const tasks = []
+  for (const team of teams) {
+    if (!team.exists) continue
+    const teamMeta = { id: team.id, name: team.name, path: team.path }
+    for (const sourceCwd of cwdSources) {
+      const projectDir = claudeProjectsDir(team.path, sourceCwd)
+      tasks.push(_scanProjectDirEntriesAsync(projectDir, teamMeta, sourceCwd, activeConfigDir))
+    }
+  }
+  const results = await Promise.all(tasks)
+  const seen = new Set()
+  const entries = []
+  for (const found of results) {
+    for (const e of found) {
+      if (seen.has(e.fullPath)) continue
+      seen.add(e.fullPath)
+      entries.push(e)
+    }
+  }
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs || b.byteSize - a.byteSize)
+  const top = entries.slice(0, limit)
+  // Enrich only the top N (post-slice, same as the sync version) — head-read
+  // summary/count/cwd in parallel, bounded.
+  await mapLimit(top, DEFAULT_SCAN_CONCURRENCY, async (e) => {
+    e.summary = await extractSummaryAsync(e.fullPath)
+    e.messageCount = await countUserMessagesAsync(e.fullPath)
+    e.cwd = (await cwdFromJsonlAsync(e.fullPath)) || e.sourceCwd
+  })
+  return top.map((e) => ({
+    sessionId: e.sessionId,
+    summary: e.summary,
+    messageCount: e.messageCount,
+    byteSize: e.byteSize,
+    mtime: new Date(e.mtimeMs).toISOString(),
+    relTime: relTimeFromMtime(e.mtimeMs, now),
+    teamId: e.teamId,
+    teamName: e.teamName,
+    configDir: e.configDir,
+    cwd: e.cwd,
+    isCrossTeam: e.isCrossTeam,
+    isHome: e.sourceCwd === home && e.sourceCwd !== cwd,
+  }))
+}
+
 /**
  * Resolve the jsonl file and sessionId for a claude tab by directory.
  *
@@ -680,6 +783,56 @@ export function resolveSessionJsonl({ store, home, project, tab }) {
         // only blocked the event loop up to 1 s per call (lsof stats every
         // mount; on a network home it hits its timeout). Activity is detected
         // by the recent-write window above.
+        if (isMainSession || isRecentlyWritten) {
+          skipped = true
+          freshSessionId = randomUUID()
+          resolvedSessionId = freshSessionId
+        } else {
+          resolvedPath = newest.path
+          resolvedSessionId = newest.sessionId
+          fallback = true
+        }
+      }
+    }
+  }
+
+  return { resolvedPath, resolvedSessionId, fallback, skipped, freshSessionId }
+}
+
+/**
+ * Async twin of resolveSessionJsonl for the request-time history endpoint —
+ * same CASE A/B decision tree, but the existsSync/findNewestJsonl/statSync
+ * disk touches go through bounded-scan.js. The rewind-checkpoints routes and
+ * the session-attach/recovery path (claude-session-controller.js) keep using
+ * the sync version above — they are not the page-load-storm path this fixes.
+ */
+export async function resolveSessionJsonlAsync({ store, home, project, tab }) {
+  const configDir = resolveClaudeConfigDirForTab(tab, store, home)
+  const sessionCwd = resolveClaudeCwdForTab(tab, project)
+  const projectDir = claudeProjectsDir(configDir, sessionCwd)
+  const sessionId = tab?.claudeSessionId || null
+  const jsonlPath = sessionId ? join(projectDir, `${sessionId}.jsonl`) : null
+
+  let resolvedPath = null
+  let resolvedSessionId = sessionId
+  let fallback = false
+  let skipped = false
+  let freshSessionId = null
+
+  if (jsonlPath && (await statSafe(jsonlPath))) {
+    resolvedPath = jsonlPath
+  } else {
+    const autoResumeSetting = store.getSetting('claude_autoresume')
+    const autoResumeEnabled = autoResumeSetting !== '0'
+    if (autoResumeEnabled && !tab?.skipAutoResume) {
+      const newest = await findNewestJsonlAsync(projectDir)
+      if (newest) {
+        const mainSessionId = process.env.CLAUDE_CODE_SESSION_ID
+        const isMainSession = mainSessionId && newest.sessionId === mainSessionId
+        const ACTIVE_THRESHOLD_MS = 30_000
+        let isRecentlyWritten = false
+        const st = await statSafe(newest.path)
+        if (st) isRecentlyWritten = (Date.now() - st.mtimeMs) < ACTIVE_THRESHOLD_MS
         if (isMainSession || isRecentlyWritten) {
           skipped = true
           freshSessionId = randomUUID()
@@ -764,7 +917,7 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     return bestTabId
   }
 
-  function handleHistory(req, res) {
+  async function handleHistory(req, res) {
     const project = store.getProject(req.params.id)
     if (!project) return res.status(404).json({ error: 'project not found' })
     const tab = store.getTab ? store.getTab(req.params.id, req.params.tabId) : null
@@ -782,7 +935,12 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     // aggressive: users clicking "Recent Agents" to view their active session
     // saw "[Restored 1 event(s)]" instead of the full history because the guard
     // fired and the fallback assigned a fresh UUID instead of reading the jsonl.
-    const resolution = resolveSessionJsonl({ store, home, project, tab })
+    //
+    // Every browser reconnect re-loads history for EVERY open claude tab at
+    // once, so this handler (and everything it calls) must be non-blocking —
+    // resolveSessionJsonlAsync/parseJsonlHistoryTailAsync route all disk IO
+    // through bounded-scan.js instead of the sync fs calls.
+    const resolution = await resolveSessionJsonlAsync({ store, home, project, tab })
     let { resolvedPath, resolvedSessionId, fallback } = resolution
 
     if (resolution.skipped) {
@@ -819,12 +977,13 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     }
 
     // Use tail-reader for large files to avoid loading the entire jsonl into memory.
-    // parseJsonlHistoryTail reads only the last 4 MB (≈500-2000 events) which is
-    // more than enough for the front-end's INITIAL_HISTORY_BLOCKS (200) + lazy pages.
-    const events = parseJsonlHistoryTail(resolvedPath)
+    // parseJsonlHistoryTailAsync reads only the last 4 MB (≈500-2000 events) which
+    // is more than enough for the front-end's INITIAL_HISTORY_BLOCKS (200) + lazy
+    // pages — same window as parseJsonlHistoryTail, non-blocking stat + read.
+    const events = await parseJsonlHistoryTailAsync(resolvedPath)
     // Determine if there's more history before the tail window
-    let fileSize = 0
-    try { fileSize = statSync(resolvedPath).size } catch {}
+    const resolvedStat = await statSafe(resolvedPath)
+    const fileSize = resolvedStat ? resolvedStat.size : 0
     const hasMore = fileSize > TAIL_BYTES
     const firstUuid = events.length > 0 ? (events[0].uuid || null) : null
 
@@ -841,6 +1000,6 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     // 需求5: aggregate across all known teams + the home cwd so the picker can
     // list & resume cross-team / cross-cwd (home) conversations. 需求5.3: `source`
     // switches the project-directory source (project/home/all).
-    recentConversations: (cwd, limit, source) => scanRecentConversationsMulti(home, cwd, store, limit, Date.now(), source),
+    recentConversations: (cwd, limit, source) => scanRecentConversationsMultiAsync(home, cwd, store, limit, Date.now(), source),
   }
 }
