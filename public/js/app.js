@@ -3,13 +3,7 @@ import { state } from './state.js'
 import { fetchProjects, fetchSettings, updateSetting } from './api.js'
 import { initSidebar, renderSidebar } from './sidebar.js'
 import { initAgentDrawer } from './agents.js'
-import {
-  initTerminalView,
-  switchTerminalProject,
-  fitTerminals,
-  isInitialized,
-} from './terminal-view.js'
-import { getEnabledTabTypes, setEnabledTabTypes } from './tab-manager.js'
+import { getEnabledTabTypes, setEnabledTabTypes } from './tab-types.js'
 import { showHosts, showProjects, hideLanding } from './landing.js'
 import { slugify, hostSlug, projectSlug, projectPath, navigateTo } from './router.js'
 import { initThemeToggle } from './theme.js'
@@ -23,6 +17,35 @@ import { initCockpit, isCockpitActive, showMainView, renderCockpitSettings } fro
 import { initSkin, renderSkinSettings } from './skin.js'
 
 let workspaceReady = false
+
+// The workspace (terminal view, tab manager, explorer, xterm) loads on the
+// first entry to the workspace, not on every page: the cockpit is the main
+// page and never needs it. xterm + addons are classic scripts that must run
+// before terminal-pane builds a pane, in this order.
+const XTERM_SCRIPTS = [
+  '/vendor/xterm/lib/xterm.js',
+  '/vendor/xterm-addon-fit/lib/addon-fit.js',
+  '/vendor/xterm-addon-web-links/lib/addon-web-links.js',
+]
+let terminalView = null
+let workspaceLoading = null
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script')
+    s.src = src
+    s.onload = resolve
+    s.onerror = () => reject(new Error(`failed to load ${src}`))
+    document.head.appendChild(s)
+  })
+}
+function loadWorkspace() {
+  workspaceLoading ||= (async () => {
+    for (const src of XTERM_SCRIPTS) await loadScript(src)
+    terminalView = await import('./terminal-view.js')
+    return terminalView
+  })()
+  return workspaceLoading
+}
 
 // ─── Global mute ──────────────────────────────────────────────────────────────
 
@@ -1091,12 +1114,13 @@ async function enterWorkspace(projectId) {
   agentDrawerBackdrop?.classList.remove('open')
   agentDrawerToggle?.classList.remove('active')
   renderSidebar()
+  const tv = await loadWorkspace()
   if (!workspaceReady) {
     workspaceReady = true
-    await initTerminalView(projectId)
+    await tv.initTerminalView(projectId)
   } else {
-    switchTerminalProject(projectId)
-    if (isInitialized()) fitTerminals()
+    tv.switchTerminalProject(projectId)
+    if (tv.isInitialized()) tv.fitTerminals()
   }
 }
 
@@ -1183,8 +1207,8 @@ async function init() {
         routed = true
         routePending = false
         await onHashChange()
-      } else if (isInitialized()) {
-        fitTerminals()
+      } else if (terminalView?.isInitialized()) {
+        terminalView.fitTerminals()
       }
     },
   })
