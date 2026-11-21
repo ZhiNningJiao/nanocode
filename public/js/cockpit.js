@@ -79,6 +79,15 @@ const ui = {
  */
 export function initCockpit({ serverSettings, enterWorkspace }) {
   onEnterWorkspace = enterWorkspace
+  // The server keeps index.html in memory from its start while JS comes fresh
+  // from disk: a server that was not restarted after an install serves the old
+  // page (no cockpit layer, no page switch). Then behave exactly like before —
+  // old workspace, no plugin / layout changes — until the restart.
+  if (!document.getElementById('cockpit') || !document.getElementById('main-view-toggle')) {
+    mainView = 'workspace'
+    document.documentElement.classList.remove('cockpit-boot')
+    return enterWorkspace({ initial: true })
+  }
   try { mainView = normalizeMainView(localStorage.getItem(MAIN_VIEW_KEY)) } catch { mainView = 'cockpit' }
   try { view = normalizeView(localStorage.getItem(VIEW_KEY)) } catch { view = 'list' }
   try { span = normalizeSpan(localStorage.getItem(SPAN_KEY)) } catch { span = 24 }
