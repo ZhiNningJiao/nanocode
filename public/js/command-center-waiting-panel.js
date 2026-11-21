@@ -20,12 +20,15 @@ const POLL_MS = 60_000
 const CHIP = 'waiting'
 const TAB_ID = 'cc-waiting'
 
-let pane = null
+// view element → { only: 'owner' | 'cars' | null } (right-panel tab + cockpit blocks)
+const views = new Map()
 let chipOn = false
 let timer = null
 let inFlight = false
 let last = null // last response
 let lastError = null
+let lastAt = 0 // ms of the last successful fetch
+const FRESH_MS = 10_000 // a view / chip mounting within this reuses the last fetch
 
 // ─── data ───────────────────────────────────────────────────────────────────
 
@@ -36,6 +39,7 @@ async function poll() {
     const r = await fetch('/api/command-center/waiting')
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     last = await r.json()
+    lastAt = Date.now()
     lastError = null
   } catch (err) {
     lastError = String(err.message || err)
@@ -43,11 +47,15 @@ async function poll() {
     inFlight = false
   }
   renderChip()
-  renderPane()
+  renderViews()
+}
+
+function pollIfStale() {
+  return Date.now() - lastAt > FRESH_MS ? poll() : undefined
 }
 
 function syncTimer() {
-  const want = chipOn || !!pane
+  const want = chipOn || views.size > 0
   if (want && !timer) timer = setInterval(poll, POLL_MS)
   if (!want && timer) { clearInterval(timer); timer = null }
 }
@@ -64,7 +72,7 @@ export function mountWaitingChip() {
   }
   renderChip()
   syncTimer()
-  poll()
+  pollIfStale()
 }
 
 export function unmountWaitingChip() {
@@ -88,38 +96,53 @@ function renderChip() {
 
 // ─── tab ────────────────────────────────────────────────────────────────────
 
-export async function renderWaitingPane(el) {
+/**
+ * Render into `el` (the plugin tab, or a cockpit block). `only`: 'owner' =
+ * owner decisions only (cockpit "今日待批"), 'cars' = the car queue only,
+ * default both. `title` overrides the block title.
+ */
+export async function renderWaitingPane(el, { only = null, title = null } = {}) {
   if (!el) return
   ensureCss()
-  pane = el
-  if (!pane.querySelector('.ccw-root')) {
-    pane.innerHTML = `<div class="ccw-root cc-mod"><div class="cc-mod-head"><span class="cc-top-title">${esc(t('plugin.ccw.title'))}</span><span class="cc-mod-meta" id="ccw-meta"></span><button class="rp-btn-sm" id="ccw-refresh" title="${esc(t('plugin.cc.refresh'))}">↻</button></div><div id="ccw-body"></div></div>`
-    pane.querySelector('#ccw-refresh').addEventListener('click', () => poll())
+  views.set(el, { only })
+  if (!el.querySelector('.ccw-root')) {
+    el.innerHTML = `<div class="ccw-root cc-mod"><div class="cc-mod-head"><span class="cc-top-title">${esc(title || t('plugin.ccw.title'))}</span><span class="cc-mod-meta ccw-meta"></span><button class="rp-btn-sm ccw-refresh" title="${esc(t('plugin.cc.refresh'))}">↻</button></div><div class="ccw-body"></div></div>`
+    el.querySelector('.ccw-refresh').addEventListener('click', () => poll())
   }
   syncTimer()
-  renderPane()
-  await poll()
+  renderView(el, views.get(el))
+  await pollIfStale()
 }
 
-export function resetWaitingLoadState() {
-  pane = null
+/** Drop one view (`el`), or every view when the plugin is turned off. */
+export function resetWaitingLoadState(el) {
+  if (el) views.delete(el)
+  else views.clear()
   syncTimer()
 }
 
-function renderPane() {
-  const body = pane?.querySelector('#ccw-body')
+function renderViews() {
+  for (const [el, opts] of views) renderView(el, opts)
+}
+
+function renderView(pane, { only }) {
+  const body = pane.querySelector('.ccw-body')
   if (!body) return
   if (lastError && !last) { body.innerHTML = `<div class="rp-hint rp-error">${esc(lastError)}</div>`; return }
   if (!last) { body.innerHTML = `<div class="rp-empty">…</div>`; return }
   if (!last.configured) { body.innerHTML = `<div class="cc-block-down">${esc(t('plugin.cc.notConfigured'))}<div class="cc-sub">${esc(last.error || '')}</div></div>`; return }
   const s = last.sources
-  pane.querySelector('#ccw-meta').textContent = lastError ? `${t('plugin.cc.unreachable')}: ${lastError}` : ''
+  pane.querySelector('.ccw-meta').textContent = lastError ? `${t('plugin.cc.unreachable')}: ${lastError}` : ''
+  const wantOwner = only !== 'cars'
+  const wantCars = only !== 'owner'
   const parts = []
   // owner decisions first, then the car queue; each block degrades alone
-  if (s.owner.notConnected) parts.push(`<div class="cc-note">${esc(t('plugin.ccw.ownerNotConnected'))}</div>`)
+  if (!wantOwner) { /* car queue only */ }
+  else if (s.owner.notConnected) parts.push(`<div class="cc-note">${esc(t('plugin.ccw.ownerNotConnected'))}</div>`)
   else if (!s.owner.ok) parts.push(downBlock(t('plugin.ccw.ownerDown'), s.owner))
   else if (s.owner.invalid) parts.push(`<div class="cc-note">${esc(t('plugin.ccw.ownerInvalid', s.owner.invalid))}</div>`)
-  if (!s.cars.ok) parts.push(downBlock(t('plugin.ccw.carsDown'), s.cars))
+  if (!wantCars) { /* owner decisions only */ }
+  else if (!s.cars.ok) parts.push(downBlock(t('plugin.ccw.carsDown'), s.cars))
   else {
     const notes = []
     if (!s.cars.flagsChecked) notes.push(t('plugin.ccw.flagsUnchecked'))
@@ -127,11 +150,11 @@ function renderPane() {
     if (s.cars.hidden) notes.push(t('plugin.ccw.hidden', s.cars.hidden))
     if (notes.length) parts.push(`<div class="cc-note">${notes.map(esc).join(' · ')}</div>`)
   }
-  const items = last.items || []
+  const items = (last.items || []).filter((i) => (i.waitingOn === 'owner' ? wantOwner : wantCars))
   if (items.length) parts.push(`<ul class="ccw-list">${items.map(itemHtml).join('')}</ul>`)
-  else if (s.cars.ok || s.owner.ok) parts.push(`<div class="rp-empty">${esc(t('plugin.ccw.empty'))}</div>`)
-  const scanned = s.cars.scannedAt ? `${t('plugin.ccw.scanned')} ${fmtTime(s.cars.scannedAt)}` : ''
-  const updated = s.owner.updatedAt ? `${t('plugin.ccw.ownerUpdated')} ${fmtAgo(s.owner.updatedAt)}` : ''
+  else if ((wantCars && s.cars.ok) || (wantOwner && s.owner.ok)) parts.push(`<div class="rp-empty">${esc(t('plugin.ccw.empty'))}</div>`)
+  const scanned = wantCars && s.cars.scannedAt ? `${t('plugin.ccw.scanned')} ${fmtTime(s.cars.scannedAt)}` : ''
+  const updated = wantOwner && s.owner.updatedAt ? `${t('plugin.ccw.ownerUpdated')} ${fmtAgo(s.owner.updatedAt)}` : ''
   if (scanned || updated) parts.push(`<div class="cc-sub ccw-foot">${esc([scanned, updated].filter(Boolean).join(' · '))}</div>`)
   body.innerHTML = parts.join('')
 }

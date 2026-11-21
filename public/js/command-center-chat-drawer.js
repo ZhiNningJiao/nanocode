@@ -16,6 +16,10 @@
  *      send through its sendInputWithEcho().
  * The duty is re-read every time the drawer opens; closing disposes the view
  * (the session itself is untouched).
+ *
+ * quoteIntoChat(text) (PRD P0-6 "引用进对话"): opens the drawer and puts the
+ * quoted line into the input box — never sends by itself. If the duty tab
+ * cannot be attached, the quote is shown under the reason so it isn't lost.
  */
 import { t } from './i18n.js'
 import { ensureCss, esc, downBlock } from './command-center-format.js'
@@ -25,6 +29,7 @@ let drawer = null
 let view = null // { renderer, tabId }
 let lastOkAt = null
 let opening = false
+let pendingQuote = null
 
 export function mountChatDrawer() {
   ensureCss()
@@ -75,7 +80,26 @@ function ensureDrawer() {
   return drawer
 }
 
+/** Quote an event / car into the chat input. false = the chat module is off. */
+export function quoteIntoChat(text) {
+  if (!fab || !text) return false
+  pendingQuote = pendingQuote ? `${pendingQuote}\n${text}` : text
+  if (drawer && !drawer.hidden && view) applyQuote()
+  else if (!drawer || drawer.hidden) openDrawer()
+  return true
+}
+
+function applyQuote() {
+  const input = drawer?.querySelector('#ccc-input')
+  if (!input || !pendingQuote) return
+  input.value = `${pendingQuote}\n${input.value}`.replace(/\n+$/, '') + '\n'
+  pendingQuote = null
+  input.focus()
+  input.setSelectionRange(input.value.length, input.value.length)
+}
+
 function closeDrawer() {
+  pendingQuote = null
   if (view) { try { view.renderer.dispose() } catch {} view = null }
   if (drawer) {
     drawer.hidden = true
@@ -155,8 +179,17 @@ async function openDrawer() {
     view = { renderer: new Cls(host, kind === 'claude' ? { ...opts, tabType: tab.type } : opts), tabId: tab.id }
     drawer.querySelector('#ccc-compose').hidden = false
     drawer.querySelector('#ccc-input').focus()
+    applyQuote()
   } finally {
     opening = false
+    // could not attach: keep the quote visible (copyable) under the reason
+    if (pendingQuote && drawer && !view) {
+      const q = document.createElement('div')
+      q.className = 'ccc-msg ccc-quote-lost'
+      q.innerHTML = `<div class="cc-sub">${esc(t('plugin.ccc.quoteNotSent'))}</div><pre>${esc(pendingQuote)}</pre>`
+      drawer.querySelector('#ccc-body').appendChild(q)
+      pendingQuote = null
+    }
   }
 }
 

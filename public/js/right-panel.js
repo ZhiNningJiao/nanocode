@@ -119,6 +119,7 @@ const LAZY_PLUGINS = {
     key: 'machines-panel', imp: () => import('./machines-panel.js'),
     render: (m, pane) => m.renderMachinesPane(pane),
     reset: (m) => m.resetMachinesLoadState(),
+    global: { mount: (m) => m.mountMachinesChip(), unmount: (m) => m.unmountMachinesChip() },
   },
   'command-center': {
     key: 'command-center-panel', imp: () => import('./command-center-panel.js'),
@@ -167,15 +168,37 @@ let activeSubTab = { work: 'files', monitor: 'plugin-manager' }
 let enabledNames = new Set()
 let mounted = new Map() // name -> { plugin, btn, pane, rendered }
 let initialized = false
+let pluginStateReady = false
+
+/**
+ * Plugin enabled-state + the UI that lives outside the right panel (header
+ * chips, floating chat button). Runs at app start whatever the main view is —
+ * the cockpit (cockpit.js) shows before the workspace (and this panel) is
+ * ever initialised. Idempotent.
+ */
+export function initPluginState() {
+  if (pluginStateReady) return
+  pluginStateReady = true
+  loadPersisted()
+  validateBuiltins()
+  for (const name of enabledNames) applyGlobal(name, true)
+}
+
+export function isPluginEnabled(name) { return isEnabled(name) }
+
+/** Toggle a plugin from outside the plugin manager (cockpit settings). No tab jump. */
+export function setPluginEnabled(name, on) {
+  initPluginState()
+  if (isEnabled(name) === !!on) return
+  setEnabled(name, !!on, { jump: false })
+}
 
 export function initRightPanel() {
   if (initialized) return
   const strip = document.getElementById('right-domain-strip')
   if (!strip) return
+  initPluginState()
   initialized = true
-
-  loadPersisted()
-  validateBuiltins()
 
   strip.addEventListener('click', (e) => {
     const btn = e.target.closest('.right-domain-btn')
@@ -192,11 +215,11 @@ export function initRightPanel() {
     })
   })
 
-  // Mount enabled plugins, then resolve active sub-tabs + apply.
+  // Mount enabled plugins, then resolve active sub-tabs + apply. (Their
+  // header chips / floating button are already up — initPluginState.)
   for (const name of enabledNames) {
     const plugin = builtinPlugin(name)
     if (plugin) mountPlugin(plugin, { silent: true })
-    if (plugin) applyGlobal(name, true)
   }
   resolveActiveSubTabs()
   renderPluginManager(getPane('plugin-manager'))
@@ -232,24 +255,29 @@ function setSubTab(domain, tabId) {
 
 function isEnabled(name) { return enabledNames.has(name) }
 
-function setEnabled(name, on) {
+function setEnabled(name, on, { jump = true } = {}) {
   const plugin = builtinPlugin(name)
   if (!plugin) return
   if (on) {
     enabledNames.add(name)
-    mountPlugin(plugin)
+    // tabs mount when the panel initialises (it walks enabledNames)
+    if (initialized) mountPlugin(plugin)
   } else {
     enabledNames.delete(name)
-    unmountPlugin(plugin)
+    const hadTab = mounted.has(name)
+    unmountPlugin(plugin) // resets the module's load state when it had a tab
+    // views rendered outside the panel (cockpit) drop their state too
+    if (!hadTab) resetPluginLoadStateFor(name)
   }
   applyGlobal(name, on)
   persistEnabled()
+  document.dispatchEvent(new CustomEvent('nanocode:plugin-toggled', { detail: { name, on } }))
   // Reflect toggle states without losing the manager's scroll.
   renderPluginManager(getPane('plugin-manager'))
   // B-1: when a plugin is enabled via the toggle, jump to its tab so the
   // user immediately sees what they just turned on. Settings-only plugins
   // (no tab) have nothing to jump to.
-  if (on && plugin.tab) {
+  if (jump && initialized && on && plugin.tab) {
     setDomain(plugin.group)
     setSubTab(plugin.group, plugin.tab.id)
   }

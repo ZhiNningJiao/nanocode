@@ -17,12 +17,14 @@ const TAB_ID = 'cc-quota'
 const WARN_PCT = 80
 const HOT_PCT = 95
 
-let pane = null
+const views = new Set() // right-panel tab + cockpit block
 let chipOn = false
 let timer = null
 let inFlight = false
 let last = null
 let lastError = null
+let lastAt = 0 // ms of the last successful fetch
+const FRESH_MS = 10_000 // a view / chip mounting within this reuses the last fetch
 
 async function poll() {
   if (inFlight) return
@@ -31,6 +33,7 @@ async function poll() {
     const r = await fetch('/api/command-center/quota')
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     last = await r.json()
+    lastAt = Date.now()
     lastError = null
   } catch (err) {
     lastError = String(err.message || err)
@@ -38,11 +41,15 @@ async function poll() {
     inFlight = false
   }
   renderChip()
-  renderPane()
+  for (const el of views) renderView(el)
+}
+
+function pollIfStale() {
+  return Date.now() - lastAt > FRESH_MS ? poll() : undefined
 }
 
 function syncTimer() {
-  const want = chipOn || !!pane
+  const want = chipOn || views.size > 0
   if (want && !timer) timer = setInterval(poll, POLL_MS)
   if (!want && timer) { clearInterval(timer); timer = null }
 }
@@ -64,7 +71,7 @@ export function mountQuotaChip() {
   }
   renderChip()
   syncTimer()
-  poll()
+  pollIfStale()
 }
 
 export function unmountQuotaChip() {
@@ -102,28 +109,30 @@ function renderChip() {
 export async function renderQuotaPane(el) {
   if (!el) return
   ensureCss()
-  pane = el
-  if (!pane.querySelector('.ccq-root')) {
-    pane.innerHTML = `<div class="ccq-root cc-mod"><div class="cc-mod-head"><span class="cc-top-title">${esc(t('plugin.ccq.title'))}</span><span class="cc-mod-meta" id="ccq-meta"></span><button class="rp-btn-sm" id="ccq-refresh" title="${esc(t('plugin.cc.refresh'))}">↻</button></div><div id="ccq-body"></div></div>`
-    pane.querySelector('#ccq-refresh').addEventListener('click', () => poll())
+  views.add(el)
+  if (!el.querySelector('.ccq-root')) {
+    el.innerHTML = `<div class="ccq-root cc-mod"><div class="cc-mod-head"><span class="cc-top-title">${esc(t('plugin.ccq.title'))}</span><span class="cc-mod-meta ccq-meta"></span><button class="rp-btn-sm ccq-refresh" title="${esc(t('plugin.cc.refresh'))}">↻</button></div><div class="ccq-body"></div></div>`
+    el.querySelector('.ccq-refresh').addEventListener('click', () => poll())
   }
   syncTimer()
-  renderPane()
-  await poll()
+  renderView(el)
+  await pollIfStale()
 }
 
-export function resetQuotaLoadState() {
-  pane = null
+/** Drop one view (`el`), or every view when the plugin is turned off. */
+export function resetQuotaLoadState(el) {
+  if (el) views.delete(el)
+  else views.clear()
   syncTimer()
 }
 
-function renderPane() {
-  const body = pane?.querySelector('#ccq-body')
+function renderView(pane) {
+  const body = pane.querySelector('.ccq-body')
   if (!body) return
   if (lastError && !last) { body.innerHTML = `<div class="rp-hint rp-error">${esc(lastError)}</div>`; return }
   if (!last) { body.innerHTML = `<div class="rp-empty">…</div>`; return }
   if (!last.configured) { body.innerHTML = `<div class="cc-block-down">${esc(t('plugin.cc.notConfigured'))}<div class="cc-sub">${esc(last.error || '')}</div></div>`; return }
-  pane.querySelector('#ccq-meta').textContent = lastError ? `${t('plugin.cc.unreachable')}: ${lastError}` : ''
+  pane.querySelector('.ccq-meta').textContent = lastError ? `${t('plugin.cc.unreachable')}: ${lastError}` : ''
   const src = last.source || {}
   if (src.notConnected) { body.innerHTML = `<div class="cc-note">${esc(t('plugin.ccq.notConnected'))}</div>`; return }
   if (!src.ok) { body.innerHTML = downBlock(t('plugin.ccq.down'), src); return }

@@ -90,8 +90,16 @@ export function removeHeaderChip(name) {
   if (slot && !slot.children.length) slot.remove()
 }
 
-/** Jump to a plugin tab; on a phone also flip the pane switch to the panel. */
+/**
+ * Jump to a plugin's view. On the cockpit (body.cockpit-active) the cockpit
+ * scrolls to its block (cockpit.js listens); in the workspace → the plugin
+ * tab, and on a phone also flip the pane switch to the panel.
+ */
 export function openPluginTab(tabId) {
+  if (document.body.classList.contains('cockpit-active')) {
+    document.dispatchEvent(new CustomEvent('nanocode:cockpit-focus', { detail: { plugin: tabId } }))
+    return
+  }
   showRightPanelTab(tabId)
   if (document.body.classList.contains('mobile-pane-left')) {
     document.querySelector('.mobile-pane-btn[data-pane="right"]')?.click()

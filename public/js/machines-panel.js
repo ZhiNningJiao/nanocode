@@ -5,40 +5,101 @@
  * memory / free GPU memory) plus detail rows, color-coded against the same
  * thresholds the backend uses for the recommendation (server/machines.js
  * THRESHOLDS — single source, not re-guessed here). Polls /api/machines
- * every 60s while the tab is active; each machine degrades independently
- * (unreachable shows "unreachable + last success", never blanks the grid).
+ * every 60s while the tab, a cockpit block or the header chip ("机器 3/4 ·
+ * 建议放 X") is up — one fetch feeds all of them; each machine degrades
+ * independently (unreachable shows "unreachable + last success", never
+ * blanks the grid).
  */
 import { t } from './i18n.js'
+import { ensureCss, headerChip, removeHeaderChip, openPluginTab } from './command-center-format.js'
 
 const POLL_MS = 60_000
 const MEM_LOW_PCT = 15
 const DISK_HIGH_PCT = 90
+const CHIP = 'machines'
+const TAB_ID = 'machines'
 
-let activePane = null
+const views = new Set() // right-panel tab + cockpit block
+let chipOn = false
 let pollTimer = null
 let pollInFlight = false
+let last = null
+let lastError = null
+let lastAt = 0 // ms of the last successful fetch
+const FRESH_MS = 10_000 // a view / chip mounting within this reuses the last fetch
 
 export async function renderMachinesPane(pane) {
   if (!pane) return
-  activePane = pane
+  views.add(pane)
   renderShell(pane)
-  await pollOnce()
-  startPolling()
+  if (last) renderState(pane, last)
+  syncTimer()
+  await pollIfStale()
 }
 
-export function resetMachinesLoadState() {
-  activePane = null
-  stopPolling()
-  pollInFlight = false
+/** Drop one view (`pane`), or every view when the plugin is turned off. */
+export function resetMachinesLoadState(pane) {
+  if (pane) views.delete(pane)
+  else views.clear()
+  syncTimer()
 }
 
-function startPolling() {
-  stopPolling()
-  pollTimer = setInterval(() => { if (activePane) pollOnce() }, POLL_MS)
+// ─── header chip ("机器速览") ───────────────────────────────────────────────
+
+export function mountMachinesChip() {
+  ensureCss()
+  chipOn = true
+  const chip = headerChip(CHIP)
+  if (chip && !chip.dataset.wired) {
+    chip.dataset.wired = '1'
+    chip.addEventListener('click', () => openPluginTab(TAB_ID))
+  }
+  renderChip()
+  syncTimer()
+  pollIfStale()
 }
 
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+export function unmountMachinesChip() {
+  chipOn = false
+  removeHeaderChip(CHIP)
+  syncTimer()
+}
+
+function renderChip() {
+  if (!chipOn) return
+  const chip = headerChip(CHIP)
+  if (!chip) return
+  chip.classList.remove('cc-hchip-warn', 'cc-hchip-down')
+  const list = last?.machines
+  if (lastError || !Array.isArray(list)) {
+    chip.classList.add('cc-hchip-down')
+    chip.textContent = `${t('plugin.machines.chip')} ?`
+    chip.title = lastError || t('plugin.machines.chipNone')
+    return
+  }
+  if (!list.length) {
+    // nothing configured (machines.local.json absent) — say so, don't look broken
+    chip.textContent = `${t('plugin.machines.chip')} ${t('plugin.machines.chipNotConnected')}`
+    chip.title = t('plugin.machines.chipNone')
+    return
+  }
+  const up = list.filter((m) => m.reachable).length
+  const rec = last.recommended ? list.find((m) => m.id === last.recommended) : null
+  if (up < list.length || !rec) chip.classList.add('cc-hchip-warn')
+  chip.textContent = `${t('plugin.machines.chip')} ${up}/${list.length}${rec ? ` · ${t('plugin.machines.chipRec', rec.label || rec.id)}` : ''}`
+  chip.title = rec ? `${t('plugin.machines.recommend')} ${rec.label || rec.id}` : t('plugin.machines.recommendNone')
+}
+
+// ─── data ───────────────────────────────────────────────────────────────────
+
+function pollIfStale() {
+  return Date.now() - lastAt > FRESH_MS ? pollOnce() : undefined
+}
+
+function syncTimer() {
+  const want = chipOn || views.size > 0
+  if (want && !pollTimer) pollTimer = setInterval(pollOnce, POLL_MS)
+  if (!want && pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
 async function pollOnce() {
@@ -46,36 +107,38 @@ async function pollOnce() {
   pollInFlight = true
   try {
     const r = await fetch('/api/machines')
-    const data = await r.json()
-    if (activePane) renderState(data)
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    last = await r.json()
+    lastAt = Date.now()
+    lastError = null
+    for (const v of views) renderState(v, last)
   } catch (err) {
-    if (activePane) renderError(String(err.message || err))
+    lastError = String(err.message || err)
+    for (const v of views) renderError(v, lastError)
   } finally {
     pollInFlight = false
   }
+  renderChip()
 }
 
 function renderShell(pane) {
   pane.innerHTML = ''
   const section = document.createElement('div')
-  section.className = 'rp-section'
-  section.id = 'mach-pane'
+  section.className = 'rp-section mach-pane'
 
   const banner = document.createElement('div')
   banner.className = 'mach-banner'
-  banner.id = 'mach-banner'
   section.appendChild(banner)
 
   const grid = document.createElement('div')
   grid.className = 'mach-grid'
-  grid.id = 'mach-grid'
   section.appendChild(grid)
 
   pane.appendChild(section)
 }
 
-function renderError(msg) {
-  const grid = activePane?.querySelector('#mach-grid')
+function renderError(pane, msg) {
+  const grid = pane.querySelector('.mach-grid')
   if (!grid) return
   grid.innerHTML = ''
   const el = document.createElement('div')
@@ -84,13 +147,13 @@ function renderError(msg) {
   grid.appendChild(el)
 }
 
-function renderState(data) {
-  renderBanner(data)
-  renderGrid(data?.machines || [])
+function renderState(pane, data) {
+  renderBanner(pane, data)
+  renderGrid(pane, data?.machines || [])
 }
 
-function renderBanner(data) {
-  const banner = activePane?.querySelector('#mach-banner')
+function renderBanner(pane, data) {
+  const banner = pane.querySelector('.mach-banner')
   if (!banner) return
   banner.innerHTML = ''
   const label = document.createElement('span')
@@ -106,8 +169,8 @@ function renderBanner(data) {
   banner.appendChild(label)
 }
 
-function renderGrid(machines) {
-  const grid = activePane?.querySelector('#mach-grid')
+function renderGrid(pane, machines) {
+  const grid = pane.querySelector('.mach-grid')
   if (!grid) return
   grid.innerHTML = ''
   if (machines.length === 0) {

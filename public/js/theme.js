@@ -36,6 +36,11 @@ export function getTheme() {
   return current
 }
 
+/** The user's own choice (what a skin that forces light / dark gives back on exit). */
+export function savedTheme() {
+  return detectInitial()
+}
+
 export function setTheme(theme, { persist = true } = {}) {
   if (theme !== 'dark' && theme !== 'light') return
   if (theme === current) return

@@ -1,0 +1,238 @@
+/*
+ * Skins (皮肤) — html[data-skin] × html[data-theme]. Colour, texture and
+ * motion only: nothing here may change layout, sizes that affect layout,
+ * or what is shown. Pure CSS; the only JS is skin.js (switch + save) and the
+ * cockpit's two state hooks it styles:
+ *   .ck-enter        on the cockpit main body for the first render after the
+ *                    page / view is shown (entry animation; not on polls);
+ *   [data-changed]   on an event card / lane whose state, car count, waiting
+ *                    count or progress changed since the previous poll.
+ *
+ *   classic  清爽默认 — the existing look (no overrides).
+ *   glass    玻璃     — translucent panels over a soft colour field, backdrop blur.
+ *   motion   动效     — entry / data-change transitions; honours
+ *                       prefers-reduced-motion (everything off when set).
+ *   daylight 明亮浅色 — white, crisp, for daytime. Brings the light theme
+ *                       along (skin.js), then whitens its surfaces.
+ *   neon     霓虹     — near-black with saturated glowing outlines. Brings the
+ *                       dark theme along; the glow pulse honours reduced motion.
+ * daylight / neon have their own brightness, so the header light / dark
+ * toggle is hidden while they are on.
+ */
+html[data-skin="daylight"] #theme-toggle,
+html[data-skin="neon"] #theme-toggle { display: none; }
+
+/* ── glass ─────────────────────────────────────────────────────────────── */
+html[data-skin="glass"] {
+  --glass-tint: rgba(255, 255, 255, 0.045);
+  --glass-tint-strong: rgba(20, 22, 30, 0.55);
+  --glass-line: rgba(255, 255, 255, 0.16);
+  --glass-blur: 18px;
+  --glass-field:
+    radial-gradient(48vw 44vh at 10% 6%, rgba(45, 191, 211, 0.55), transparent 70%),
+    radial-gradient(46vw 50vh at 95% 12%, rgba(150, 100, 240, 0.50), transparent 70%),
+    radial-gradient(60vw 55vh at 55% 108%, rgba(95, 184, 122, 0.42), transparent 70%),
+    radial-gradient(30vw 30vh at 40% 45%, rgba(230, 120, 160, 0.22), transparent 70%),
+    oklch(13% 0.02 260);
+}
+html[data-skin="glass"][data-theme="light"],
+html[data-skin="glass"]:not([data-theme="dark"]) {
+  --glass-tint: rgba(255, 255, 255, 0.42);
+  --glass-tint-strong: rgba(255, 255, 255, 0.62);
+  --glass-line: rgba(255, 255, 255, 0.75);
+  --glass-field:
+    radial-gradient(60vw 50vh at 12% 8%, rgba(45, 191, 211, 0.30), transparent 70%),
+    radial-gradient(55vw 55vh at 92% 18%, rgba(180, 140, 255, 0.28), transparent 70%),
+    radial-gradient(70vw 60vh at 50% 105%, rgba(120, 210, 150, 0.26), transparent 70%),
+    #eef1f6;
+}
+html[data-skin="glass"] body { background: var(--glass-field) fixed; }
+html[data-skin="glass"] .cockpit { background: var(--glass-field) fixed; }
+html[data-skin="glass"] .app-header,
+html[data-skin="glass"] .ck-main-head,
+html[data-skin="glass"] .ccc-drawer,
+html[data-skin="glass"] .settings-panel,
+html[data-skin="glass"] .ck-toast {
+  background: var(--glass-tint-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  border-color: var(--glass-line);
+}
+html[data-skin="glass"] .ck-main,
+html[data-skin="glass"] .ck-block,
+html[data-skin="glass"] .ck-ev,
+html[data-skin="glass"] .ck-block .cc-mod,
+html[data-skin="glass"] .ck-block .cc-mod-head {
+  background: var(--glass-tint);
+  border-color: var(--glass-line);
+}
+html[data-skin="glass"] .ck-main,
+html[data-skin="glass"] .ck-block {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), inset 0 1px 0 var(--glass-line);
+  border-radius: 14px;
+}
+html[data-skin="glass"] .ck-ev { border-radius: 12px; }
+html[data-skin="glass"] .ck-ev.open { box-shadow: inset 0 0 0 1px var(--primary); }
+html[data-skin="glass"] .ccw-item,
+html[data-skin="glass"] .ccq-pool,
+html[data-skin="glass"] .mach-card,
+html[data-skin="glass"] .cc-car { background: var(--glass-tint); border-color: var(--glass-line); }
+html[data-skin="glass"] .cc-hchip:not(.cc-hchip-hot):not(.cc-hchip-warn),
+html[data-skin="glass"] .main-view-toggle {
+  background: var(--glass-tint);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+html[data-skin="glass"] .ccc-fab { box-shadow: 0 6px 24px var(--primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.4); }
+/* browsers without backdrop-filter: keep text readable on the colour field */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-skin="glass"] .ck-main, html[data-skin="glass"] .ck-block { background: var(--bg-secondary); }
+}
+
+/* ── motion ────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  html[data-skin="motion"] .ck-ev,
+  html[data-skin="motion"] .ck-block,
+  html[data-skin="motion"] .ck-car,
+  html[data-skin="motion"] .ck-lane,
+  html[data-skin="motion"] .cc-hchip,
+  html[data-skin="motion"] .ck-view-btn,
+  html[data-skin="motion"] .main-view-toggle {
+    transition: background-color .25s ease, border-color .25s ease, box-shadow .25s ease, transform .2s ease, color .2s ease;
+  }
+  html[data-skin="motion"] .ck-ev:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0, 0, 0, .18); }
+  html[data-skin="motion"] .cc-hchip:hover, html[data-skin="motion"] .main-view-toggle:hover { transform: translateY(-1px) scale(1.03); }
+
+  /* entry: cards / lanes / nodes rise in, staggered (first render only) */
+  html[data-skin="motion"] .ck-enter .ck-ev,
+  html[data-skin="motion"] .ck-enter .ck-lane,
+  html[data-skin="motion"] .ck-enter .ck-g-node {
+    animation: skin-rise .45s cubic-bezier(.2, .8, .2, 1) both;
+  }
+  html[data-skin="motion"] .ck-enter .ck-ev:nth-child(2), html[data-skin="motion"] .ck-enter .ck-g-node:nth-child(2) { animation-delay: .04s; }
+  html[data-skin="motion"] .ck-enter .ck-ev:nth-child(3), html[data-skin="motion"] .ck-enter .ck-g-node:nth-child(3) { animation-delay: .08s; }
+  html[data-skin="motion"] .ck-enter .ck-ev:nth-child(4), html[data-skin="motion"] .ck-enter .ck-g-node:nth-child(4) { animation-delay: .12s; }
+  html[data-skin="motion"] .ck-enter .ck-ev:nth-child(5), html[data-skin="motion"] .ck-enter .ck-g-node:nth-child(5) { animation-delay: .16s; }
+  html[data-skin="motion"] .ck-enter .ck-ev:nth-child(n+6), html[data-skin="motion"] .ck-enter .ck-g-node:nth-child(n+6) { animation-delay: .2s; }
+  html[data-skin="motion"] .ck-enter .cc-prog-fill { animation: skin-grow .8s cubic-bezier(.2, .8, .2, 1) both .15s; transform-origin: left center; }
+  html[data-skin="motion"] .ck-enter .cc-bar { animation: skin-grow .6s cubic-bezier(.2, .8, .2, 1) both .1s; transform-origin: left center; }
+  html[data-skin="motion"] .ck-enter .ck-g-ring { animation: skin-ring 1s cubic-bezier(.2, .8, .2, 1) both .2s; }
+  html[data-skin="motion"] .ck-block { animation: skin-fade .4s ease both; }
+
+  /* data change since the previous poll: a soft pulse on that card / lane */
+  html[data-skin="motion"] .ck-ev[data-changed],
+  html[data-skin="motion"] .ck-lane[data-changed] { animation: skin-changed 1.6s ease-out 1; }
+  html[data-skin="motion"] .cc-hchip { animation: skin-pop .35s ease both; }
+
+  /* motion-graphics accent: a slow light sweep along the cockpit head */
+  html[data-skin="motion"] .ck-main-head { background-image: linear-gradient(100deg, transparent 30%, var(--primary-subtle) 50%, transparent 70%); background-size: 300% 100%; animation: skin-sweep 9s linear infinite; }
+  html[data-skin="motion"] .ck-g-sat.ck-g-running { animation: skin-orbit-pulse 1.4s ease-in-out infinite; }
+}
+@keyframes skin-rise { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes skin-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes skin-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes skin-ring { from { stroke-dashoffset: 120; opacity: 0; } to { stroke-dashoffset: 0; opacity: 1; } }
+@keyframes skin-pop { from { transform: scale(.85); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes skin-changed { 0% { box-shadow: 0 0 0 0 var(--primary-glow); background-color: var(--primary-subtle); } 100% { box-shadow: 0 0 0 12px transparent; } }
+@keyframes skin-sweep { from { background-position: 100% 0; } to { background-position: -200% 0; } }
+@keyframes skin-orbit-pulse { 50% { opacity: .4; r: 8; } }
+
+/* ── daylight (明亮浅色) — over the light theme ────────────────────────── */
+html[data-skin="daylight"] {
+  --bg: #ffffff;
+  --bg-secondary: #f5f7fa;
+  --bg-tertiary: #eceff4;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-input: #f5f7fa;
+  --bg-hover: rgba(20, 60, 120, 0.05);
+  --text: #16202c;
+  --text-secondary: #4a5566;
+  --text-tertiary: #6b7585;
+  --text-muted: #9aa3b0;
+  --border: rgba(20, 40, 80, 0.10);
+  --border-hover: rgba(20, 40, 80, 0.18);
+  --primary: #1769e0;
+  --primary-hover: #0f56bd;
+  --primary-light: #4c8ff0;
+  --primary-subtle: rgba(23, 105, 224, 0.07);
+  --primary-glow: rgba(23, 105, 224, 0.22);
+  --info: #2f7fe0;
+  --success: #1f9d55;
+  --warning: #c27c0e;
+  --error: #d43a32;
+}
+html[data-skin="daylight"] .cockpit { background: #eef2f7; }
+html[data-skin="daylight"] .app-header { background: #ffffff; box-shadow: 0 1px 0 var(--border), 0 2px 10px rgba(20, 40, 80, 0.05); }
+html[data-skin="daylight"] .ck-main,
+html[data-skin="daylight"] .ck-block { background: #ffffff; border-color: transparent; border-radius: 12px; box-shadow: 0 1px 2px rgba(20, 40, 80, 0.06), 0 6px 18px rgba(20, 40, 80, 0.06); }
+html[data-skin="daylight"] .ck-main-head,
+html[data-skin="daylight"] .ck-block .cc-mod-head { background: #ffffff; }
+html[data-skin="daylight"] .ck-ev { background: #f8fafc; border-color: #e3e8ef; border-radius: 10px; }
+html[data-skin="daylight"] .ck-ev.open { background: #ffffff; border-color: var(--primary); box-shadow: 0 4px 14px var(--primary-subtle); }
+html[data-skin="daylight"] .ccw-item { background: #ffffff; }
+html[data-skin="daylight"] .cc-hchip:not(.cc-hchip-hot):not(.cc-hchip-warn) { background: #f3f6fa; }
+html[data-skin="daylight"] .ck-view-btn.active { box-shadow: 0 2px 8px var(--primary-glow); }
+
+/* ── neon (霓虹 / 赛博) — over the dark theme ──────────────────────────── */
+html[data-skin="neon"] {
+  --neon-a: #ff2bd6;
+  --neon-b: #19f0ff;
+  --neon-c: #b6ff3b;
+  --bg: #07060d;
+  --bg-secondary: #0d0b18;
+  --bg-tertiary: #141126;
+  --bg-elevated: #0f0d1c;
+  --bg-card: #0f0d1c;
+  --bg-hover: rgba(25, 240, 255, 0.07);
+  --text: #eafcff;
+  --text-secondary: #9fb3c8;
+  --text-tertiary: #7184a0;
+  --text-muted: #4d5a72;
+  --border: rgba(25, 240, 255, 0.22);
+  --border-hover: rgba(25, 240, 255, 0.45);
+  --primary: #19f0ff;
+  --primary-hover: #7ff7ff;
+  --primary-subtle: rgba(25, 240, 255, 0.10);
+  --primary-glow: rgba(25, 240, 255, 0.45);
+  --info: #19b7ff;
+  --success: #b6ff3b;
+  --warning: #ffd21f;
+  --error: #ff3b6b;
+}
+html[data-skin="neon"] .cockpit {
+  background:
+    linear-gradient(rgba(25, 240, 255, 0.045) 1px, transparent 1px) 0 0 / 100% 28px,
+    linear-gradient(90deg, rgba(255, 43, 214, 0.04) 1px, transparent 1px) 0 0 / 28px 100%,
+    radial-gradient(80vw 60vh at 50% -10%, rgba(255, 43, 214, 0.18), transparent 70%),
+    var(--bg);
+}
+html[data-skin="neon"] .app-header { background: #0a0814; border-bottom: 1px solid var(--neon-a); box-shadow: 0 0 14px rgba(255, 43, 214, 0.45); }
+html[data-skin="neon"] .app-title { color: var(--neon-b); text-shadow: 0 0 8px var(--neon-b), 0 0 18px rgba(25, 240, 255, 0.5); }
+html[data-skin="neon"] .ck-main,
+html[data-skin="neon"] .ck-block { background: rgba(13, 11, 24, 0.88); border: 1px solid var(--neon-b); box-shadow: 0 0 0 1px rgba(25, 240, 255, 0.15), 0 0 18px rgba(25, 240, 255, 0.25), inset 0 0 22px rgba(25, 240, 255, 0.06); }
+html[data-skin="neon"] .ck-block:nth-child(even) { border-color: var(--neon-a); box-shadow: 0 0 18px rgba(255, 43, 214, 0.28), inset 0 0 22px rgba(255, 43, 214, 0.06); }
+html[data-skin="neon"] .ck-main-head, html[data-skin="neon"] .ck-block .cc-mod-head { background: rgba(10, 8, 20, 0.92); }
+html[data-skin="neon"] .ck-h-title, html[data-skin="neon"] .cc-top-title { color: var(--neon-b); text-shadow: 0 0 6px rgba(25, 240, 255, 0.8); letter-spacing: .04em; }
+html[data-skin="neon"] .ck-ev { background: rgba(20, 17, 38, 0.7); border-color: rgba(255, 43, 214, 0.35); }
+html[data-skin="neon"] .ck-ev.open { border-color: var(--neon-a); box-shadow: 0 0 14px rgba(255, 43, 214, 0.35); }
+html[data-skin="neon"] .ck-ev-title { color: #ffffff; text-shadow: 0 0 6px rgba(255, 43, 214, 0.55); }
+html[data-skin="neon"] .ck-view-btn.active { background: var(--neon-a); color: #fff; box-shadow: 0 0 12px var(--neon-a); }
+html[data-skin="neon"] .cc-hchip:not(.cc-hchip-hot):not(.cc-hchip-warn) { border-color: var(--neon-b); color: var(--neon-b); background: transparent; box-shadow: 0 0 8px rgba(25, 240, 255, 0.35); }
+html[data-skin="neon"] .cc-hchip-hot { background: var(--error); border-color: var(--error); color: #fff; box-shadow: 0 0 12px var(--error); }
+html[data-skin="neon"] .main-view-toggle { border-color: var(--neon-a); color: var(--neon-a); box-shadow: 0 0 10px rgba(255, 43, 214, 0.5); }
+html[data-skin="neon"] .cc-dot, html[data-skin="neon"] .cc-bar { box-shadow: 0 0 6px currentColor; }
+html[data-skin="neon"] .cc-st-running { box-shadow: 0 0 8px var(--info); }
+html[data-skin="neon"] .cc-st-done { box-shadow: 0 0 8px var(--success); }
+html[data-skin="neon"] .ck-g-ev { filter: drop-shadow(0 0 8px rgba(25, 240, 255, 0.6)); }
+html[data-skin="neon"] .ck-g-ring { stroke: var(--neon-c); filter: drop-shadow(0 0 4px var(--neon-c)); }
+html[data-skin="neon"] .ccc-fab { background: var(--neon-a); box-shadow: 0 0 18px var(--neon-a); }
+html[data-skin="neon"] .ccw-item { background: rgba(20, 17, 38, 0.8); }
+@media (prefers-reduced-motion: no-preference) {
+  html[data-skin="neon"] .app-header { animation: skin-neon-flicker 6s ease-in-out infinite; }
+  html[data-skin="neon"] .ck-main { animation: skin-neon-breathe 4s ease-in-out infinite; }
+}
+@keyframes skin-neon-flicker { 0%, 92%, 100% { box-shadow: 0 0 14px rgba(255, 43, 214, 0.45); } 94% { box-shadow: 0 0 4px rgba(255, 43, 214, 0.2); } 96% { box-shadow: 0 0 20px rgba(255, 43, 214, 0.6); } }
+@keyframes skin-neon-breathe { 50% { box-shadow: 0 0 0 1px rgba(25, 240, 255, 0.25), 0 0 28px rgba(25, 240, 255, 0.4), inset 0 0 22px rgba(25, 240, 255, 0.08); } }

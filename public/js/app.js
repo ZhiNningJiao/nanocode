@@ -19,6 +19,8 @@ import {
   getSubagentActivityVisible, setSubagentActivityVisible,
 } from './claude-block-settings.js'
 import { initI18n, setLang, t } from './i18n.js'
+import { initCockpit, isCockpitActive, showMainView, renderCockpitSettings } from './cockpit.js'
+import { initSkin, renderSkinSettings } from './skin.js'
 
 let workspaceReady = false
 
@@ -1168,6 +1170,8 @@ async function openSettingsPanel() {
   let serverSettings = {}
   try { serverSettings = await fetchSettings() } catch {}
   loadSettings(serverSettings)
+  renderCockpitSettings(document.getElementById('cockpit-settings'))
+  renderSkinSettings(document.getElementById('skin-settings'))
   loadServices()
   loadAuthStatus()  // P1-4: refresh auth status on each open
   // Dynamic model options (init-snapshot / codex config) now load inside the
@@ -1300,8 +1304,10 @@ async function init() {
   try { state.projects = await fetchProjects() } catch { state.projects = [] }
   initSidebar(onProjectSwitch)
 
+  let serverSettings = {}
   try {
     const settings = await fetchSettings()
+    serverSettings = settings
     if (settings.cli_provider) state.cliProvider = settings.cli_provider
     if (settings.font_size) state.fontSize = settings.font_size
     if (settings.renderMode) state.renderMode = settings.renderMode
@@ -1322,8 +1328,28 @@ async function init() {
     })
   }
 
-  window.addEventListener('hashchange', onHashChange)
-  await onHashChange()
+  initSkin(serverSettings)
+  // The cockpit is the first page; the old workspace (hash routing → host /
+  // project picker → tabs) is entered the first time the user switches to it,
+  // so the first screen never loads tabs, sessions or history.
+  let routed = false
+  let routePending = false
+  window.addEventListener('hashchange', () => {
+    // an explicit navigation (notification jump, back button) means "show the workspace"
+    if (isCockpitActive()) { routePending = true; showMainView('workspace') } else onHashChange()
+  })
+  await initCockpit({
+    serverSettings,
+    enterWorkspace: async () => {
+      if (!routed || routePending) {
+        routed = true
+        routePending = false
+        await onHashChange()
+      } else if (isInitialized()) {
+        fitTerminals()
+      }
+    },
+  })
 }
 
 init()

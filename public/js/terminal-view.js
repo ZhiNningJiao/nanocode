@@ -482,7 +482,10 @@ const CODEX_SLASH_COMMANDS = [
   { cmd: '/clear',  hint: '清屏（不影响对话历史）' },
 ]
 
-// Fetch live slash commands from the server (non-blocking)
+// Fetch live slash commands from the server (non-blocking). Called from
+// setupChatInput(), i.e. when the workspace is first shown — the cockpit page
+// doesn't need them, and the server probe spawns a `claude --print`.
+function loadSlashCommands() {
 fetch('/api/claude/slash-commands')
   .then((r) => r.ok ? r.json() : null)
   .then((data) => {
@@ -504,6 +507,7 @@ fetch('/api/claude/slash-commands')
     }
   })
   .catch(() => { /* keep fallback */ })
+}
 
 function setupChatInput() {
   const chatInput = document.getElementById('chat-input')
@@ -511,6 +515,7 @@ function setupChatInput() {
   const suggestionsDropdown = document.getElementById('suggestions-dropdown')
 
   if (!chatInput || !sendBtn) return
+  loadSlashCommands()
 
   // ── Claude tab stop button ────────────────────────────────────────────────
   // Inject a Stop button into the input-row (next to send-btn) at init time.

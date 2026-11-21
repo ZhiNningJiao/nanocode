@@ -22,10 +22,24 @@
         } catch (_) {
           document.documentElement.setAttribute('data-theme', 'dark')
         }
+        // Cockpit main page + skin, also before first paint (cockpit.js / skin.js
+        // take over; the server copy of the skin wins once settings load).
+        try {
+          if (localStorage.getItem('cockpit:mainView') !== 'workspace') document.documentElement.classList.add('cockpit-boot')
+          var sk = localStorage.getItem('nanocodeSkin')
+          var skinTheme = { classic: '', glass: '', motion: '', daylight: 'light', neon: 'dark' } // = skin.js SKIN_THEME
+          if (!(sk in skinTheme)) sk = 'classic'
+          document.documentElement.setAttribute('data-skin', sk)
+          if (skinTheme[sk]) document.documentElement.setAttribute('data-theme', skinTheme[sk])
+        } catch (_) {
+          document.documentElement.classList.add('cockpit-boot')
+        }
       })()
     </script>
     <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/command-center.css" data-cc-css="1" />
+    <link rel="stylesheet" href="/skins.css" />
 
     <!-- `defer` on every classic script so they don't block HTML parsing.
          Browsers fetch them in parallel while parsing the document,
@@ -76,6 +90,8 @@
       <h1 class="app-title">Nanocode</h1>
       <div class="header-pills">
         <span class="connection-status" id="status-bash">Bash: disconnected</span>
+        <!-- 指挥舱 ⇄ 工作区: cockpit.js sets the label (shows where a click goes) -->
+        <button type="button" class="main-view-toggle" id="main-view-toggle"></button>
         <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">
           <span class="theme-icon theme-icon-light" aria-hidden="true">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -129,6 +145,23 @@
             </select>
           </div>
 
+          <!-- ══ Cockpit (指挥舱 modules + skin; cockpit.js / skin.js render the bodies) ══ -->
+          <section class="settings-section" data-section="cockpit">
+            <h3 class="settings-section-title settings-group-title settings-section-toggle" data-target="cockpit">
+              <span class="settings-section-label" data-i18n="settings.section.cockpit">Cockpit</span>
+              <span class="settings-section-chevron">&#9660;</span>
+            </h3>
+            <div class="settings-section-body" data-body="cockpit">
+            <div class="settings-subsection">
+              <div class="settings-label-row"><span data-i18n="cockpit.settings.label">Cockpit modules</span> <span class="settings-hint-inline" data-i18n="cockpit.settings.hint">On / off and order; saved on the server</span></div>
+              <div id="cockpit-settings"></div>
+            </div>
+            <div class="settings-subsection">
+              <div class="settings-label-row"><span data-i18n="skin.label">Skin</span> <span class="settings-hint-inline" data-i18n="skin.hint">Colours, texture and motion only — layout stays the same</span></div>
+              <div id="skin-settings"></div>
+            </div>
+            </div>
+          </section>
           <!-- ══ Session ══ -->
           <section class="settings-section" data-section="session">
             <h3 class="settings-section-title settings-group-title settings-section-toggle" data-target="session">
@@ -346,6 +379,8 @@
       </div>
     </div>
     <div class="settings-panel-backdrop" id="settings-panel-backdrop"></div>
+    <!-- 指挥舱 main page (cockpit.js); the workspace below stays mounted -->
+    <div class="cockpit" id="cockpit" hidden></div>
 
     <main class="app-layout">
       <aside class="sidebar" id="sidebar">
