@@ -30,3 +30,6 @@ round*.png
 # machine board (nanomach_1645) — real host/IP list, never committed
 config/machines.local.json
 server/tests/.fixtures-tmp/
+
+# command center — real root issue key / export path, never committed
+config/command-center.local.json

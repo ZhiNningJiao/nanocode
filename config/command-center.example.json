@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to config/command-center.local.json (gitignored). rootIssue = the tracker issue whose direct children are the big events. carsExport.path = the JSON written every minute by tools/command-center/export-cars.mjs. The tracker API key is NOT here: it comes from the personal config (personal.linear.apiKey or the default key file).",
+  "linear": { "rootIssue": "TEAM-123", "graphqlUrl": "https://tracker.example/graphql", "cacheSeconds": 60 },
+  "carsExport": { "path": "/path/to/export/cars.json", "staleSeconds": 300 }
+}

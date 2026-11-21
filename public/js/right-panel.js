@@ -119,6 +119,11 @@ const LAZY_PLUGINS = {
     render: (m, pane) => m.renderMachinesPane(pane),
     reset: (m) => m.resetMachinesLoadState(),
   },
+  'command-center': {
+    key: 'command-center-panel', imp: () => import('./command-center-panel.js'),
+    render: (m, pane) => m.renderCommandCenterPane(pane),
+    reset: (m) => m.resetCommandCenterLoadState(),
+  },
 }
 
 const DOMAIN_KEY = 'rightPanel:domain'

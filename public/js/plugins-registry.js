@@ -296,6 +296,21 @@ export const BUILTIN_PLUGINS = [
     refreshOnActivate: true,
     builtin: true,
   },
+  {
+    // Command Center (指挥舱 phase 1) — big events from the task tracker
+    // (read-only) with the cars working on them folded underneath, plus a
+    // per-car gantt bound to the car trace export. Monitor group (watching
+    // all agents). The tracker key stays server-side (personal.linear).
+    name: 'command-center',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'command-center', labelKey: 'plugin.cc.label' },
+    permissions: ['network', 'fs.read', 'personal.linear'],
+    descriptionKey: 'plugin.cc.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
 ]
 
 export function builtinPlugin(name) {

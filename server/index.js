@@ -22,6 +22,7 @@ import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntr
 import { readArmyStatus, readWakerLogTail, getWakerHealth, collectBriefing } from './historian.js'
 import { startWaker, stopWaker, restartWaker, getWakerControlState, setInterval as setWakerInterval } from './waker-control.js'
 import { loadMachinesConfig, collectAllMachines, recommendHeavyWorkloadTarget } from './machines.js'
+import { createCommandCenterRoutes } from './command-center.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // TTS failures (fetch timeout, connection refused, bad response, stream errors)
@@ -724,6 +725,9 @@ async function pollMachines() {
 app.get('/api/machines', (_req, res) => {
   res.json(machinesSnapshot)
 })
+
+// ─── Command Center (指挥舱 phase 1) — see server/command-center.js ─────────
+app.use(createCommandCenterRoutes())
 
 setTimeout(() => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }, 2000)
 setInterval(() => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }, MACHINES_POLL_MS)
