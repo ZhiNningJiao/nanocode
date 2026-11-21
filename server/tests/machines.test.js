@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { writeFile, mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFile } from 'node:child_process'
+import { chmod } from 'node:fs/promises'
 import {
   parseCollectorOutput,
   loadMachinesConfig,
@@ -11,6 +13,9 @@ import {
   collectAllMachines,
   recommendHeavyWorkloadTarget,
   THRESHOLDS,
+  COLLECTOR_SCRIPT,
+  SUBCOMMAND_TIMEOUT_SEC,
+  PARALLEL_JOIN_SLEEP_SEC,
 } from '../machines.js'
 
 // Fixture files live in a gitignored dir inside this worktree — never host
@@ -103,6 +108,44 @@ describe('parseCollectorOutput', () => {
     const s = parseCollectorOutput(out)
     assert.equal(s.dstate.count, 0)
     assert.equal(s.dstate.oldestSec, 0)
+    assert.equal(s.dstate.stuckCount, 0)
+    assert.equal(s.dstate.transientCount, 0)
+  })
+
+  it('classifies a D-state process alive under 60s as transient, not stuck', () => {
+    const out = FULL_OUTPUT.replace(
+      'DSTATE_BEGIN\n600|rsync\n120|dd\nDSTATE_END',
+      'DSTATE_BEGIN\n16|rsync\nDSTATE_END'
+    )
+    const s = parseCollectorOutput(out)
+    assert.equal(s.dstate.count, 1)
+    assert.equal(s.dstate.stuckCount, 0)
+    assert.equal(s.dstate.transientCount, 1)
+    assert.equal(s.dstate.transientOldestSec, 16)
+  })
+
+  it('classifies a D-state process alive >= 60s as stuck', () => {
+    const out = FULL_OUTPUT.replace(
+      'DSTATE_BEGIN\n600|rsync\n120|dd\nDSTATE_END',
+      'DSTATE_BEGIN\n60|rsync\nDSTATE_END'
+    )
+    const s = parseCollectorOutput(out)
+    assert.equal(s.dstate.stuckCount, 1)
+    assert.equal(s.dstate.stuckOldestSec, 60)
+    assert.equal(s.dstate.transientCount, 0)
+  })
+
+  it('splits a mix of stuck and transient D-state processes correctly', () => {
+    const out = FULL_OUTPUT.replace(
+      'DSTATE_BEGIN\n600|rsync\n120|dd\nDSTATE_END',
+      'DSTATE_BEGIN\n600|rsync\n16|dd\nDSTATE_END'
+    )
+    const s = parseCollectorOutput(out)
+    assert.equal(s.dstate.count, 2)
+    assert.equal(s.dstate.stuckCount, 1)
+    assert.equal(s.dstate.stuckOldestSec, 600)
+    assert.equal(s.dstate.transientCount, 1)
+    assert.equal(s.dstate.transientOldestSec, 16)
   })
 
   it('marks tmux as skipped (null, not 0) when the script skipped it because D-state processes were present', () => {
@@ -195,11 +238,76 @@ describe('collectMachine / collectAllMachines (injected exec)', () => {
   })
 })
 
+// Exercises the actual COLLECTOR_SCRIPT under real bash, with `ps`/`tmux`
+// stubbed out via a prepended PATH dir — this is the only way to verify the
+// tmux-skip *decision* itself, which lives in shell, not in the JS parser.
+// Stub executables live under FIXTURE_DIR (never the host /tmp).
+describe('COLLECTOR_SCRIPT tmux gating (real bash, stubbed ps/tmux)', () => {
+  let binDir
+  const binDirFor = (name) => path.join(FIXTURE_DIR, `bin-${name}`)
+
+  async function writeStub(dir, name, content) {
+    const p = path.join(dir, name)
+    await writeFile(p, content, 'utf8')
+    await chmod(p, 0o755)
+  }
+
+  async function runCollectorScript(dir) {
+    const stdout = await new Promise((resolve, reject) => {
+      execFile(
+        'bash',
+        ['-c', COLLECTOR_SCRIPT],
+        { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, timeout: 20_000, maxBuffer: 1024 * 1024 },
+        (err, out) => (err ? reject(err) : resolve(String(out || '')))
+      )
+    })
+    return parseCollectorOutput(stdout)
+  }
+
+  it('skips the tmux probe when the tmux server itself is D-state', async () => {
+    binDir = binDirFor('server-stuck')
+    await mkdir(binDir, { recursive: true })
+    await writeStub(binDir, 'ps', '#!/bin/bash\nprintf "STAT ETIMES COMMAND\\nD 120 tmux\\nSs 50 bash\\n"\n')
+    // If invoked despite the D-state server, this would print a session so a
+    // bug (probe not actually skipped) would show up as TMUX_AKARI=1 instead
+    // of TMUX_AKARI_SKIPPED=1.
+    await writeStub(binDir, 'tmux', '#!/bin/bash\n[ "$1" = "list-sessions" ] && echo "akari_wf_should_not_run"\n')
+    const s = await runCollectorScript(binDir)
+    assert.equal(s.ours.tmuxSkipped, true)
+    assert.equal(s.ours.tmuxAkariCount, null)
+    await rm(binDir, { recursive: true, force: true })
+  })
+
+  it('still runs the tmux probe when D-state is present but unrelated to tmux', async () => {
+    binDir = binDirFor('unrelated-dstate')
+    await mkdir(binDir, { recursive: true })
+    await writeStub(binDir, 'ps', '#!/bin/bash\nprintf "STAT ETIMES COMMAND\\nD 120 rsync\\nSs 50 bash\\n"\n')
+    await writeStub(binDir, 'tmux', '#!/bin/bash\n[ "$1" = "list-sessions" ] && printf "akari_wf_a\\nakari_wf_b\\nother\\n"\n')
+    const s = await runCollectorScript(binDir)
+    assert.equal(s.ours.tmuxSkipped, false)
+    assert.equal(s.ours.tmuxAkariCount, 2)
+    await rm(binDir, { recursive: true, force: true })
+  })
+
+  it('skips (degrades) when the tmux probe does not return within the join window', async () => {
+    binDir = binDirFor('ls-times-out')
+    await mkdir(binDir, { recursive: true })
+    await writeStub(binDir, 'ps', '#!/bin/bash\nprintf "STAT ETIMES COMMAND\\nSs 50 bash\\n"\n')
+    // No D-state at all, but the probe itself hangs past SUBCOMMAND_TIMEOUT_SEC;
+    // `exec sleep` so `timeout` can kill it cleanly (no orphan left behind).
+    await writeStub(binDir, 'tmux', `#!/bin/bash\n[ "$1" = "list-sessions" ] && exec sleep $((${SUBCOMMAND_TIMEOUT_SEC} + 5))\n`)
+    const s = await runCollectorScript(binDir)
+    assert.equal(s.ours.tmuxSkipped, true)
+    assert.equal(s.ours.tmuxAkariCount, null)
+    await rm(binDir, { recursive: true, force: true })
+  }, { timeout: Math.ceil((SUBCOMMAND_TIMEOUT_SEC + PARALLEL_JOIN_SLEEP_SEC) * 1000) + 15_000 })
+})
+
 describe('recommendHeavyWorkloadTarget', () => {
   const ok = (id, overrides = {}) => ({
     id, label: id, host: id, reachable: true, checkedAt: 'x',
     stats: {
-      cores: 8, load1: 1, mem: { availablePct: 50 }, dstate: { count: 0 },
+      cores: 8, load1: 1, mem: { availablePct: 50 }, dstate: { stuckCount: 0 },
       ...overrides.stats,
     },
     derived: { freeCores: 7, ...overrides.derived },
@@ -208,23 +316,29 @@ describe('recommendHeavyWorkloadTarget', () => {
   it('returns null when every machine is excluded', () => {
     const r = recommendHeavyWorkloadTarget([
       { id: 'a', reachable: false },
-      ok('b', { stats: { cores: 8, load1: 1, mem: { availablePct: 50 }, dstate: { count: 3 } } }),
+      ok('b', { stats: { cores: 8, load1: 1, mem: { availablePct: 50 }, dstate: { stuckCount: 3 } } }),
     ])
     assert.equal(r, null)
   })
 
   it('excludes a machine below the memory threshold', () => {
-    const low = ok('low-mem', { stats: { cores: 8, load1: 1, mem: { availablePct: THRESHOLDS.memAvailableLowPct - 1 }, dstate: { count: 0 } } })
+    const low = ok('low-mem', { stats: { cores: 8, load1: 1, mem: { availablePct: THRESHOLDS.memAvailableLowPct - 1 }, dstate: { stuckCount: 0 } } })
     const fine = ok('fine', { derived: { freeCores: 2 } })
     const r = recommendHeavyWorkloadTarget([low, fine])
     assert.equal(r, 'fine')
   })
 
   it('excludes a machine with stuck D-state processes', () => {
-    const stuck = ok('stuck', { stats: { cores: 8, load1: 1, mem: { availablePct: 80 }, dstate: { count: 69 } }, derived: { freeCores: 7.5 } })
+    const stuck = ok('stuck', { stats: { cores: 8, load1: 1, mem: { availablePct: 80 }, dstate: { stuckCount: 69 } }, derived: { freeCores: 7.5 } })
     const fine = ok('fine', { derived: { freeCores: 2 } })
     const r = recommendHeavyWorkloadTarget([stuck, fine])
     assert.equal(r, 'fine')
+  })
+
+  it('does not exclude a machine whose D-state processes are only transient', () => {
+    const transientOnly = ok('transient', { stats: { cores: 8, load1: 1, mem: { availablePct: 80 }, dstate: { stuckCount: 0 } }, derived: { freeCores: 7.5 } })
+    const r = recommendHeavyWorkloadTarget([transientOnly])
+    assert.equal(r, 'transient')
   })
 
   it('ranks remaining candidates by free cores, then memory %', () => {

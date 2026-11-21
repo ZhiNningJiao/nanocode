@@ -122,13 +122,17 @@ function renderGrid(machines) {
   }
 }
 
-function fmtAge(iso) {
-  if (!iso) return '—'
-  const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+function fmtDurationSec(sec) {
   if (sec < 60) return `${sec}s`
   if (sec < 3600) return `${Math.round(sec / 60)}m`
   if (sec < 86400) return `${Math.round(sec / 3600)}h`
   return `${Math.round(sec / 86400)}d`
+}
+
+function fmtAge(iso) {
+  if (!iso) return '—'
+  const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  return fmtDurationSec(sec)
 }
 
 function fmtUptime(sec) {
@@ -159,7 +163,7 @@ function renderUnreachableCard(m) {
 function renderCard(m) {
   const s = m.stats
   const memWarn = s.mem.availablePct != null && s.mem.availablePct < MEM_LOW_PCT
-  const dstateWarn = s.dstate.count > 0
+  const dstateWarn = s.dstate.stuckCount > 0
   const loadWarn = s.cores != null && s.load1 != null && s.load1 > s.cores
   const diskWarn = s.disks.some((d) => d.usedPct > DISK_HIGH_PCT)
   const anyWarn = memWarn || dstateWarn || loadWarn || diskWarn
@@ -198,7 +202,10 @@ function renderCard(m) {
   } else {
     rows.push(row(t('plugin.machines.gpu'), t('plugin.machines.noGpu'), false))
   }
-  rows.push(row(t('plugin.machines.dstate'), `${s.dstate.count}${s.dstate.count ? ` (oldest ${fmtUptime(s.dstate.oldestSec)})` : ''}`, dstateWarn))
+  rows.push(row(t('plugin.machines.dstate'), `${s.dstate.stuckCount}${s.dstate.stuckCount ? ` (oldest ${fmtDurationSec(s.dstate.stuckOldestSec)})` : ''}`, dstateWarn))
+  if (s.dstate.transientCount > 0) {
+    rows.push(row(t('plugin.machines.dstateTransient'), `${s.dstate.transientCount} (newest ${fmtDurationSec(s.dstate.transientOldestSec)})`, false, ' mach-row-sub'))
+  }
   rows.push(row(t('plugin.machines.users'), String(s.usersCount), false))
   rows.push(row(t('plugin.machines.uptime'), fmtUptime(s.uptimeSec), false))
   rows.push(row(t('plugin.machines.ourAkari'), s.ours.tmuxSkipped ? t('plugin.machines.ourAkariSkipped') : String(s.ours.tmuxAkariCount), false))
@@ -215,8 +222,8 @@ function renderCard(m) {
   return card
 }
 
-function row(label, value, warn) {
-  return `<div class="mach-row${warn ? ' mach-row-warn' : ''}"><span class="mach-row-label">${escapeHtml(label)}</span><span class="mach-row-value">${escapeHtml(value)}</span></div>`
+function row(label, value, warn, extraClass = '') {
+  return `<div class="mach-row${warn ? ' mach-row-warn' : ''}${extraClass}"><span class="mach-row-label">${escapeHtml(label)}</span><span class="mach-row-value">${escapeHtml(value)}</span></div>`
 }
 
 function escapeHtml(s) {

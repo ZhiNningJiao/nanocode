@@ -33,6 +33,10 @@ export const MACHINES_EXAMPLE_PATH = join(REPO_ROOT, 'config', 'machines.example
 export const THRESHOLDS = {
   memAvailableLowPct: 15, // below this: "can't take heavy work" (memory)
   diskHighPct: 90,
+  // A D-state process alive for less than this is common transient noise (a
+  // brief disk/network blip); only >= this counts as "stuck" for warn color
+  // and for excluding a machine from the heavy-workload recommendation.
+  dstateStuckSec: 60,
   // load1 > cores is flagged as overloaded in the UI; no separate constant
   // needed since it's a direct comparison of two already-collected fields.
 }
@@ -89,20 +93,23 @@ export function isSelf(host) {
 // hangs forever because the tmux SERVER it talks to is itself D-state-stuck).
 // So this script never calls anything that might block on such a server:
 // `ps` is checked FIRST and synchronously (it only reads /proc, confirmed
-// safe even while other tools wedge); the tmux probe is skipped entirely
-// whenever any D-state process is present, rather than attempted-and-maybe-
-// abandoned — an abandoned attempt would itself become one more permanently
-// stuck orphan process on an already-struggling machine, accumulating one
-// per 60s poll forever. Everything else (df/nvidia-smi/who/systemctl/docker)
+// safe even while other tools wedge); the tmux probe is skipped only when a
+// D-state process actually named "tmux" is found (i.e. the tmux server
+// itself, since no tmux client has been spawned yet at that point in the
+// script) or when the probe itself doesn't finish within the join-sleep
+// window below — an unrelated D-state process (rsync/dd/...) elsewhere on
+// the box must not block it. An attempted-and-abandoned probe would itself
+// become one more permanently stuck orphan process on an already-struggling
+// machine, accumulating one per 60s poll forever. Everything else (df/nvidia-smi/who/systemctl/docker)
 // has not been observed to block on this host's JuiceFS issue, but still
 // gets a `timeout` guard as cheap insurance; they run backgrounded in
 // parallel (own temp files, no stdout interleaving) with a bounded sleep
 // instead of a blocking `wait`, so even an unexpected hang there is never
 // waited on — whatever finished within the sleep window is read, the rest
 // degrades to empty/missing (handled the same as "tool not installed").
-const SUBCOMMAND_TIMEOUT_SEC = 3
-const PARALLEL_JOIN_SLEEP_SEC = 3.3
-const COLLECTOR_SCRIPT = `
+export const SUBCOMMAND_TIMEOUT_SEC = 3
+export const PARALLEL_JOIN_SLEEP_SEC = 3.3
+export const COLLECTOR_SCRIPT = `
 TMPD=$(mktemp -d 2>/dev/null) || TMPD="/tmp/.machboard.$$"
 mkdir -p "$TMPD" 2>/dev/null
 trap 'rm -rf "$TMPD" 2>/dev/null' EXIT
@@ -116,20 +123,26 @@ echo "DSTATE_BEGIN"
 DSTATE_OUT=$(timeout ${SUBCOMMAND_TIMEOUT_SEC} ps -eo stat,etimes,comm 2>/dev/null | awk '$1 ~ /^D/ {print $2"|"$3}')
 [ -n "$DSTATE_OUT" ] && printf '%s\\n' "$DSTATE_OUT"
 echo "DSTATE_END"
+# Skipping the tmux probe is only warranted when the tmux SERVER itself is
+# wedged (D-state) — a stuck-and-unrelated process (rsync/dd/...) elsewhere
+# on the box must not block it. At this point in the script we haven't
+# spawned any tmux client yet, so a D-state process named "tmux" here can
+# only be the server.
+DSTATE_TMUX=$(printf '%s\\n' "$DSTATE_OUT" | awk -F'|' '$2 ~ /tmux/ {print; exit}')
 ( for m in / /jfs /dev/shm /var/tmp; do timeout ${SUBCOMMAND_TIMEOUT_SEC} df -kP "$m" 2>/dev/null | awk -v m="$m" 'NR==2{print m"|"$2"|"$3"|"$4"|"$5}'; done > "$TMPD/disk" ) &
 ( timeout ${SUBCOMMAND_TIMEOUT_SEC} nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits > "$TMPD/gpu" 2>/dev/null ) &
 ( timeout ${SUBCOMMAND_TIMEOUT_SEC} who 2>/dev/null | wc -l > "$TMPD/users" ) &
 ( timeout ${SUBCOMMAND_TIMEOUT_SEC} systemctl --user list-units --type=service --state=running --no-legend 2>/dev/null | wc -l > "$TMPD/systemd" ) &
 ( if command -v docker >/dev/null 2>&1; then timeout ${SUBCOMMAND_TIMEOUT_SEC} docker ps -q 2>/dev/null > "$TMPD/containers"; fi ) &
-if [ -z "$DSTATE_OUT" ]; then
-  ( timeout ${SUBCOMMAND_TIMEOUT_SEC} tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c '^akari_wf_' > "$TMPD/tmux" ) &
+if [ -z "$DSTATE_TMUX" ]; then
+  ( timeout ${SUBCOMMAND_TIMEOUT_SEC} tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c '^akari_wf_' > "$TMPD/tmux" && touch "$TMPD/tmux.done" ) &
 fi
 sleep ${PARALLEL_JOIN_SLEEP_SEC}
 echo "DISK_BEGIN"; cat "$TMPD/disk" 2>/dev/null; echo "DISK_END"
 echo "GPU_BEGIN"; cat "$TMPD/gpu" 2>/dev/null; echo "GPU_END"
 echo "USERS=$(cat "$TMPD/users" 2>/dev/null)"
 echo "SYSTEMD_USER_RUNNING=$(cat "$TMPD/systemd" 2>/dev/null)"
-if [ -n "$DSTATE_OUT" ]; then
+if [ -n "$DSTATE_TMUX" ] || [ ! -e "$TMPD/tmux.done" ]; then
   echo "TMUX_AKARI_SKIPPED=1"
 else
   echo "TMUX_AKARI=$(cat "$TMPD/tmux" 2>/dev/null)"
@@ -195,9 +208,10 @@ export function parseCollectorOutput(stdout) {
   const uptimeSec = Number(get('UPTIME_SEC')) || null
   const usersCount = Number(get('USERS')) || 0
   const systemdUserRunning = Number(get('SYSTEMD_USER_RUNNING')) || 0
-  // The tmux probe is skipped (not attempted) whenever D-state processes are
-  // present, to avoid spawning a client against a possibly wedged tmux server
-  // (see COLLECTOR_SCRIPT comment) — null + explicit flag, never a fake 0.
+  // The tmux probe is skipped (not attempted, or attempted-but-timed-out)
+  // whenever the tmux server itself looks wedged, to avoid spawning a client
+  // against it (see COLLECTOR_SCRIPT comment) — null + explicit flag, never a
+  // fake 0.
   const tmuxSkipped = get('TMUX_AKARI_SKIPPED') === '1'
   const tmuxAkariCount = tmuxSkipped ? null : (Number(get('TMUX_AKARI')) || 0)
 
@@ -245,8 +259,12 @@ export function parseCollectorOutput(stdout) {
     const [etimes, comm] = l.split('|')
     return { etimesSec: Number(etimes) || 0, comm: comm || '?' }
   })
-  const dstateCount = dstateProcs.length
-  const dstateOldestSec = dstateProcs.reduce((max, p) => Math.max(max, p.etimesSec), 0)
+  const dstateOldest = (procs) => procs.reduce((max, p) => Math.max(max, p.etimesSec), 0)
+  // Transient D-state (a brief disk/network blip) is common and not a sign of
+  // trouble; only processes stuck for a while should drive warn color /
+  // heavy-workload exclusion (see THRESHOLDS.dstateStuckSec).
+  const dstateStuckProcs = dstateProcs.filter((p) => p.etimesSec >= THRESHOLDS.dstateStuckSec)
+  const dstateTransientProcs = dstateProcs.filter((p) => p.etimesSec < THRESHOLDS.dstateStuckSec)
 
   const containerLines = parseSection(lines, 'CONTAINERS_BEGIN', 'CONTAINERS_END')
   const containerCount = containerLines.length
@@ -260,7 +278,14 @@ export function parseCollectorOutput(stdout) {
     swap: { totalMB: swapTotalMB, usedMB: swapUsedMB },
     disks,
     gpus,
-    dstate: { count: dstateCount, oldestSec: dstateOldestSec },
+    dstate: {
+      count: dstateProcs.length,
+      oldestSec: dstateOldest(dstateProcs),
+      stuckCount: dstateStuckProcs.length,
+      stuckOldestSec: dstateOldest(dstateStuckProcs),
+      transientCount: dstateTransientProcs.length,
+      transientOldestSec: dstateOldest(dstateTransientProcs),
+    },
     ours: { tmuxAkariCount, tmuxSkipped, systemdUserRunning, containerCount },
   }
 }
@@ -314,7 +339,8 @@ export async function collectAllMachines(machines, execFileImpl = execFile) {
 }
 
 /**
- * "重活现在建议放：X" — exclude unreachable / D-state-heavy / low-memory
+ * "重活现在建议放：X" — exclude unreachable / stuck-D-state (>=
+ * THRESHOLDS.dstateStuckSec, transient D-state doesn't count) / low-memory
  * machines, then rank the rest by free cores then free memory %. Pure
  * function over already-collected snapshots so the rule itself is unit
  * testable without touching the network.
@@ -322,7 +348,7 @@ export async function collectAllMachines(machines, execFileImpl = execFile) {
 export function recommendHeavyWorkloadTarget(snapshots) {
   const candidates = snapshots.filter((m) =>
     m.reachable &&
-    m.stats.dstate.count === 0 &&
+    m.stats.dstate.stuckCount === 0 &&
     (m.stats.mem.availablePct == null || m.stats.mem.availablePct >= THRESHOLDS.memAvailableLowPct)
   )
   if (candidates.length === 0) return null
