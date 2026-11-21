@@ -26,3 +26,7 @@ round*.png
 !**/personal.example.json
 .nanocode-personal*
 *.local.secret*
+
+# machine board (nanomach_1645) — real host/IP list, never committed
+config/machines.local.json
+server/tests/.fixtures-tmp/

@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy this to machines.local.json (gitignored) and fill in real hosts. 'host' can be an IP, a resolvable hostname, or an ssh config alias that the collecting machine can reach passwordless (BatchMode=yes). If 'host' resolves to the machine this server itself runs on, it is read directly (no ssh).",
+  "machines": [
+    { "id": "example-main", "label": "Main host", "host": "example-main.local" },
+    { "id": "example-a", "label": "Worker A", "host": "203.0.113.11" },
+    { "id": "example-b", "label": "Worker B", "host": "203.0.113.12" },
+    { "id": "example-c", "label": "Worker C", "host": "203.0.113.13" }
+  ]
+}

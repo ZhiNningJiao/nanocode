@@ -280,6 +280,22 @@ export const BUILTIN_PLUGINS = [
     refreshOnActivate: true,
     builtin: true,
   },
+  {
+    // nanomach_1645 — Machine Board: "还能放多少" resource dashboard for a
+    // fixed list of machines (ssh-read, no agent installed on the watched
+    // hosts). Placed in monitor (watching external resources), alongside
+    // services/remote. Replaces the ad-hoc resource-guard cron (owner
+    // 2026-11-21: once this ships, that cron gets retired).
+    name: 'machines',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'machines', labelKey: 'plugin.machines.label' },
+    permissions: ['network'],
+    descriptionKey: 'plugin.machines.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
 ]
 
 export function builtinPlugin(name) {

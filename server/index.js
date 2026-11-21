@@ -21,6 +21,7 @@ import { loadPersonalConfig } from '../terminal/personal-config.js'
 import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntry } from './akari-proxy.js'
 import { readArmyStatus, readWakerLogTail, getWakerHealth, collectBriefing } from './historian.js'
 import { startWaker, stopWaker, restartWaker, getWakerControlState, setInterval as setWakerInterval } from './waker-control.js'
+import { loadMachinesConfig, collectAllMachines, recommendHeavyWorkloadTarget } from './machines.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // TTS failures (fetch timeout, connection refused, bad response, stream errors)
@@ -687,6 +688,45 @@ app.get('/api/historian/briefing', asyncWrap(async (_req, res) => {
   const briefing = await collectBriefing()
   res.json(briefing)
 }))
+
+// ─── Machine board (nanomach_1645) ───────────────────────────────────────────
+// "还能放多少" — one ssh (or local) read per watched machine every 60s. Each
+// machine's failure is isolated (collectAllMachines uses allSettled): an
+// unreachable machine shows "unreachable + last success" without blanking the
+// others (PRD P0-8). The watched hosts never get anything installed; this
+// server only runs a short read-only shell command against each of them.
+const MACHINES_POLL_MS = 60_000
+let machinesSnapshot = { machines: [], checkedAt: null, recommended: null }
+let machinesLastGood = new Map() // id -> last reachable snapshot
+
+async function pollMachines() {
+  const configured = loadMachinesConfig()
+  if (configured.length === 0) {
+    machinesSnapshot = { machines: [], checkedAt: new Date().toISOString(), recommended: null }
+    return
+  }
+  const results = await collectAllMachines(configured)
+  const merged = results.map((m) => {
+    if (m.reachable) {
+      machinesLastGood.set(m.id, m)
+      return m
+    }
+    const prevGood = machinesLastGood.get(m.id)
+    return { ...m, lastSuccessAt: prevGood?.checkedAt || null }
+  })
+  machinesSnapshot = {
+    machines: merged,
+    checkedAt: new Date().toISOString(),
+    recommended: recommendHeavyWorkloadTarget(merged),
+  }
+}
+
+app.get('/api/machines', (_req, res) => {
+  res.json(machinesSnapshot)
+})
+
+setTimeout(() => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }, 2000)
+setInterval(() => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }, MACHINES_POLL_MS)
 
 app.post('/api/historian/waker/start', asyncWrap(async (req, res) => {
   const { live } = req.body || {}

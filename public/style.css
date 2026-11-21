@@ -6076,6 +6076,61 @@ body.workspace-active .landing-overlay { display: none; }
 .akari-attention-text { color: var(--warning); }
 .akari-expandable { cursor: pointer; }
 .akari-expandable:hover td { background: var(--bg-hover); }
+
+/* ── Machine board (nanomach_1645) ─────────────────────────────── */
+
+.mach-banner {
+  font-size: 13px;
+  font-weight: 600;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  margin-bottom: var(--s-3);
+}
+.mach-banner-ok { color: var(--success); }
+.mach-banner-warn { color: var(--warning); }
+.mach-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s-3);
+  max-width: 940px;
+}
+.mach-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--s-3);
+  background: var(--bg-card);
+}
+.mach-card-warn { border-color: var(--warning); }
+.mach-card-down { border-color: var(--error); opacity: 0.85; }
+.mach-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: var(--s-2);
+}
+.mach-headline {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: var(--s-2);
+}
+.mach-headline-down { font-size: 14px; color: var(--error); font-weight: 600; }
+.mach-headline-unit { font-size: 11px; font-weight: 400; color: var(--text-tertiary); }
+.mach-warn-text { color: var(--warning); }
+.mach-detail { display: flex; flex-direction: column; gap: 2px; }
+.mach-row { display: flex; justify-content: space-between; gap: var(--s-2); font-size: 11px; }
+.mach-row-label { color: var(--text-tertiary); }
+.mach-row-value { color: var(--text-secondary); font-family: var(--font-mono); }
+.mach-row-warn .mach-row-value { color: var(--warning); font-weight: 600; }
+.mach-meta { margin-top: var(--s-2); font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+@media (max-width: 480px) {
+  .mach-grid { grid-template-columns: 1fr; max-width: none; }
+}
 .akari-detail-row td { padding: 0 !important; }
 .akari-detail-cell {
   padding: 6px 8px !important;
