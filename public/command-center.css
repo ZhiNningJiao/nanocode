@@ -327,7 +327,13 @@ body.cockpit-active #sidebar-toggle, body.cockpit-active #back-to-menu, body.coc
 .ck-car { display: grid; grid-template-columns: 10px 150px 76px 196px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
 .ck-car:hover, .ck-car.open { background: var(--bg-hover); }
 .ck-car-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ck-car-state, .ck-car-time { color: var(--text-secondary); white-space: nowrap; }
+/* ck-car-state's column is a fixed 76px (see .ck-car grid-template-columns) —
+   a long English status word ("Delivered, not yet checked") must truncate
+   with an ellipsis instead of spilling into .ck-car-time; full text on hover
+   (title attribute, set in cockpit-views.js). Chinese labels are short enough
+   to never hit this, but the rule must hold for any label length. */
+.ck-car-state { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ck-car-time { color: var(--text-secondary); white-space: nowrap; }
 .ck-car-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 .ck-cars .cc-car, .ck-lane-detail .cc-car, .ck-graph-detail .cc-car { margin: 2px 0 6px 18px; }
 
@@ -386,7 +392,7 @@ body.cockpit-active #sidebar-toggle, body.cockpit-active #back-to-menu, body.coc
   .ck-block { max-height: none; }
   .ck-main-head { position: static; }
   .ck-views { margin-left: 0; }
-  .ck-car { grid-template-columns: 10px minmax(0, 1fr) auto; }
+  .ck-car { grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1fr); }
   .ck-car-time, .ck-car-last { grid-column: 2 / -1; }
   .ck-ev-meta, .ck-ev > .cc-prog, .ck-ev > .cc-ei-last, .ck-cars { margin-left: 0; }
   .ck-cars .cc-car, .ck-lane-detail .cc-car, .ck-graph-detail .cc-car { margin-left: 0; }

@@ -79,7 +79,7 @@ function carsListHtml(e, ui) {
       <div class="ck-car${open ? ' open' : ''}" data-act="car" data-car="${esc(c.traceId)}" data-event="${esc(e.key)}">
         <span class="cc-dot cc-st-${esc(c.state)}"></span>
         <span class="ck-car-name">${esc(c.car)}</span>
-        <span class="ck-car-state">${esc(stateLabel(c.state))}</span>
+        <span class="ck-car-state" title="${esc(stateLabel(c.state))}">${esc(stateLabel(c.state))}</span>
         <span class="ck-car-time">${esc(fmtTime(c.start))} → ${c.endOpen ? esc(t('plugin.cc.now')) : esc(fmtTime(c.end))}</span>
         <span class="ck-car-last">${esc(lastPt ? lastPt.label : c.title || '')}</span>
       </div>
