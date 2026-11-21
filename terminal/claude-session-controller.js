@@ -1618,36 +1618,39 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
           const doneEvent = { type: 'result', subtype: 'success' }
           try { ws.send(JSON.stringify({ type: 'claude-event', event: doneEvent })) } catch {}
 
-          // Use getRecentAgentsCached() (not getCachedEntries()) to guarantee a
-          // fresh scan even if primeRecentAgentsCache() hasn't run yet (e.g. the
-          // user typed /resume before the history API call completed).
-          let cache
-          try { cache = recentAgents.getRecentAgentsCached() } catch { cache = [] }
-          // Prefer entries matching the current project cwd, fall back to global most-recent
-          const projectEntries = cache.filter(e => e.cwd === project.cwd)
-          const candidates = projectEntries.length ? projectEntries : cache
-          // Skip the session already loaded in this tab so we go "back" to the previous one
-          const entry = candidates.find(e => e.sessionId !== cs.claudeSessionId) || candidates[0]
-          if (entry && entry.sessionId) {
-            // Tell the client to trigger the resume flow (same as clicking in Recent Agents)
-            const resumeEvent = {
-              type: 'system',
-              subtype: 'resume-trigger',
-              projectId,
-              sessionId: entry.sessionId,
-              projectName: entry.projectName || '',
-              cwd: entry.cwd || project.cwd,
-            }
-            try { ws.send(JSON.stringify({ type: 'claude-event', event: resumeEvent })) } catch {}
-          } else {
-            // No previous session found — show an info message
-            const infoEvent = {
-              type: 'system',
-              subtype: 'info',
-              text: 'No previous session found. Start a new conversation to create one.',
-            }
-            try { ws.send(JSON.stringify({ type: 'claude-event', event: infoEvent })) } catch {}
-          }
+          // getRecentAgents() (not getCachedEntries()) so a /resume typed before
+          // the first prime finished still waits (bounded) for a real scan. The
+          // scan is async, so this never stalls the event loop.
+          Promise.resolve()
+            .then(() => recentAgents.getRecentAgents({ deadlineMs: 3000 }))
+            .then((r) => r.entries, () => [])
+            .then((cache) => {
+              // Prefer entries matching the current project cwd, fall back to global most-recent
+              const projectEntries = cache.filter(e => e.cwd === project.cwd)
+              const candidates = projectEntries.length ? projectEntries : cache
+              // Skip the session already loaded in this tab so we go "back" to the previous one
+              const entry = candidates.find(e => e.sessionId !== cs.claudeSessionId) || candidates[0]
+              if (entry && entry.sessionId) {
+                // Tell the client to trigger the resume flow (same as clicking in Recent Agents)
+                const resumeEvent = {
+                  type: 'system',
+                  subtype: 'resume-trigger',
+                  projectId,
+                  sessionId: entry.sessionId,
+                  projectName: entry.projectName || '',
+                  cwd: entry.cwd || project.cwd,
+                }
+                try { ws.send(JSON.stringify({ type: 'claude-event', event: resumeEvent })) } catch {}
+              } else {
+                // No previous session found — show an info message
+                const infoEvent = {
+                  type: 'system',
+                  subtype: 'info',
+                  text: 'No previous session found. Start a new conversation to create one.',
+                }
+                try { ws.send(JSON.stringify({ type: 'claude-event', event: infoEvent })) } catch {}
+              }
+            })
           return
         }
         const userEvent = {

@@ -310,18 +310,22 @@ export function listTeams(home, store) {
     seen.add(path)
     teams.push({ id, name: nameByPath[path] || name, path, exists: existsSync(path) })
   }
-  // 1. auto-discover ~/.claude (team1) + ~/.claude-team*
-  const defaultDir = join(homeDir, '.claude')
-  pushTeam('team1', 'Team 1', defaultDir)
-  let entries = []
-  try { entries = readdirSync(homeDir, { withFileTypes: true }) } catch {}
-  for (const d of entries) {
-    if (!d.isDirectory()) continue
-    if (!d.name.startsWith('.claude-team') && !d.name.startsWith('.claude_team')) continue
-    const fullPath = join(homeDir, d.name)
-    const m = d.name.match(/claude[-_](.+)$/)
-    const id = m ? m[1] : d.name
-    pushTeam(id, `Team ${id}`, fullPath)
+  // 1. auto-discover ~/.claude (team1) + ~/.claude-team* — skipped when the
+  // personal config sets claude.autoDiscoverTeams=false (home on a slow mount:
+  // only the declared pools below are used, home is never listed).
+  if (personal?.claude?.autoDiscoverTeams !== false) {
+    const defaultDir = join(homeDir, '.claude')
+    pushTeam('team1', 'Team 1', defaultDir)
+    let entries = []
+    try { entries = readdirSync(homeDir, { withFileTypes: true }) } catch {}
+    for (const d of entries) {
+      if (!d.isDirectory()) continue
+      if (!d.name.startsWith('.claude-team') && !d.name.startsWith('.claude_team')) continue
+      const fullPath = join(homeDir, d.name)
+      const m = d.name.match(/claude[-_](.+)$/)
+      const id = m ? m[1] : d.name
+      pushTeam(id, `Team ${id}`, fullPath)
+    }
   }
   // 2. merge extra teams declared only in the personal config
   for (const t of personalTeams) {
@@ -334,6 +338,30 @@ export function listTeams(home, store) {
   }
   const active = effectiveClaudeConfigDir(store, homeDir)
   return { teams, activePath: active }
+}
+
+/**
+ * Session-file roots the session listings (sessions browser, recent agents)
+ * scan. Auto-discovery on (default): ~/.claude/projects + ~/.codex/sessions,
+ * exactly as before. Auto-discovery off (personal claude.autoDiscoverTeams=
+ * false): only the declared pools' projects/ dirs and the declared
+ * codex.sessionsDir — nothing under home is touched.
+ * Returns { claudeProjectRoots: string[], codexSessionsDir: string|null }.
+ */
+export function sessionSourceRoots(home) {
+  const homeDir = home || homedir()
+  const personal = loadPersonalConfig({ home: homeDir })
+  const declaredCodex = personal?.codex?.sessionsDir || null
+  if (personal?.claude?.autoDiscoverTeams !== false) {
+    return {
+      claudeProjectRoots: [join(homeDir, '.claude', 'projects')],
+      codexSessionsDir: declaredCodex || join(homeDir, '.codex', 'sessions'),
+    }
+  }
+  return {
+    claudeProjectRoots: listTeams(homeDir, null).teams.map((t) => join(t.path, 'projects')),
+    codexSessionsDir: declaredCodex,
+  }
 }
 
 // ── AIGW model list + cost probe ─────────────────────────────────────────────

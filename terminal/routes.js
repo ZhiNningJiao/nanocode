@@ -1525,23 +1525,23 @@ export function createTerminalRoutes(store, opts = {}) {
   // resume a previous agent session into a new tab — porting `codex resume`
   // (picker) and `codex fork` to the nanocode plugin surface.
 
-  router.get('/api/sessions/list', (req, res) => {
+  router.get('/api/sessions/list', async (req, res) => {
     try {
       const source = typeof req.query.source === 'string' ? req.query.source : ''
       const limit = parseInt(req.query.limit, 10) || 50
-      res.json(listSessions({ source, limit }))
+      res.json(await listSessions({ source, limit, home }))
     } catch (err) {
       console.error('[/api/sessions/list]', err)
       res.status(500).json({ error: err.message })
     }
   })
 
-  router.get('/api/sessions/preview', (req, res) => {
+  router.get('/api/sessions/preview', async (req, res) => {
     try {
       const source = typeof req.query.source === 'string' ? req.query.source : ''
       const id = typeof req.query.id === 'string' ? req.query.id : ''
       const file = typeof req.query.file === 'string' ? req.query.file : ''
-      res.json(previewSession({ source, id, file }))
+      res.json(await previewSession({ source, id, file, home }))
     } catch (err) {
       console.error('[/api/sessions/preview]', err)
       res.status(500).json({ error: err.message })
@@ -1707,8 +1707,16 @@ export function createTerminalRoutes(store, opts = {}) {
   //
   // Perf: cache results for 10 seconds to avoid re-reading all jsonl files on
   // every drawer open (scanning 38+ files totalling 100+ MB takes ~300ms).
-  router.get('/api/recent-agents', (req, res) => {
-    res.json(recentAgents.getRecentAgentsCached())
+  router.get('/api/recent-agents', async (req, res) => {
+    try {
+      const { entries, partial, partialReason } = await recentAgents.getRecentAgents()
+      // Body stays a plain array (agents.js contract); partial is a header.
+      if (partial) res.set('X-Nanocode-Partial', String(partialReason || 'partial'))
+      res.json(entries)
+    } catch (err) {
+      console.error('[/api/recent-agents]', err)
+      res.status(500).json({ error: err.message })
+    }
   })
   // ── Pending queue persistence ─────────────────────────────────────────────
   //

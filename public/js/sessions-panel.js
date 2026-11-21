@@ -23,6 +23,7 @@ const LIMIT_KEY = 'sessions:listLimit'
 let activePane = null
 let sessions = []
 let total = 0
+let partialReason = '' // non-empty: server returned a partial (still-scanning) list
 let source = ''        // '' | 'codex' | 'claude'
 let limit = 50
 let loading = false
@@ -47,6 +48,7 @@ export function resetSessionsLoadState() {
   activePane = null
   sessions = []
   total = 0
+  partialReason = ''
   source = ''
   loading = false
   preview = null
@@ -73,6 +75,7 @@ async function loadSessions() {
     }
     sessions = Array.isArray(data.sessions) ? data.sessions : []
     total = data.total || sessions.length
+    partialReason = data.partial ? String(data.partialReason || '') || '?' : ''
     renderControls()
     renderList()
   } catch (err) {
@@ -193,8 +196,15 @@ function renderList() {
   if (!body) return
   body.innerHTML = ''
 
+  // Partial: the server's disk scan is still running (slow mount). Say so
+  // instead of presenting an incomplete list as the whole story.
+  if (partialReason) {
+    const warn = sesHint(fmtKey('sessions.partial', { reason: partialReason }))
+    warn.classList.add('ses-partial')
+    body.appendChild(warn)
+  }
   if (!sessions.length) {
-    body.appendChild(sesHint(t('sessions.empty')))
+    body.appendChild(sesHint(t(partialReason ? 'sessions.partialEmpty' : 'sessions.empty')))
     return
   }
 

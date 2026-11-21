@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractSummary, relTimeFromMtime, cwdFromJsonl } from './recent-agents.js'
@@ -624,7 +623,7 @@ export function scanRecentConversationsMulti(home, cwd, store, limit = 5, now = 
  * (`~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`). When the tab has
  * no explicit sessionId or its jsonl is missing, it falls back to the most
  * recently modified jsonl in the project directory. The active-session
- * guard (main session / recent write / held file) prevents resuming a
+ * guard (main session / recent write) prevents resuming a
  * session that is currently active in another Claude process.
  *
  * Returns:
@@ -675,14 +674,13 @@ export function resolveSessionJsonl({ store, home, project, tab }) {
           const st = statSync(newest.path)
           isRecentlyWritten = (Date.now() - st.mtimeMs) < ACTIVE_THRESHOLD_MS
         } catch {}
-        let isFileHeld = false
-        if (!isMainSession && !isRecentlyWritten) {
-          try {
-            const r = spawnSync('lsof', ['-t', newest.path], { encoding: 'utf8', timeout: 1000 })
-            isFileHeld = r.status === 0 && r.stdout.trim().length > 0
-          } catch {}
-        }
-        if (isMainSession || isRecentlyWritten || isFileHeld) {
+        // No `lsof` "file held open" probe: Claude CLI appends to its jsonl
+        // with open-append-close and never keeps the fd open (verified: a live
+        // session's jsonl has no holder), so the probe could never fire — it
+        // only blocked the event loop up to 1 s per call (lsof stats every
+        // mount; on a network home it hits its timeout). Activity is detected
+        // by the recent-write window above.
+        if (isMainSession || isRecentlyWritten) {
           skipped = true
           freshSessionId = randomUUID()
           resolvedSessionId = freshSessionId

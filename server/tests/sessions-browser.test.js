@@ -1,82 +1,129 @@
-import { describe, it } from 'node:test'
+import { describe, it, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { listSessions, previewSession, resetSessionsCache } from '../../terminal/sessions-browser.js'
+import { sessionSourceRoots, listTeams } from '../../terminal/usage.js'
+import { resetPersonalConfigCache } from '../../terminal/personal-config.js'
 
-describe('sessions-browser (MES-14031 抄 codex resume/fork)', () => {
-  it('listSessions returns newest-first sessions with total count', () => {
-    resetSessionsCache()
-    const data = listSessions({ limit: 10 })
-    assert.ok(Array.isArray(data.sessions), 'sessions must be an array')
-    assert.equal(typeof data.total, 'number')
-    assert.ok(data.total >= 0)
-    if (data.sessions.length >= 2) {
-      for (let i = 1; i < data.sessions.length; i++) {
-        const a = data.sessions[i - 1].timestamp || ''
-        const b = data.sessions[i].timestamp || ''
-        assert.ok(a >= b, `sessions must be newest-first: ${a} < ${b}`)
-      }
-    }
+// Fixture homes live under the OS temp dir (TMPDIR) and are removed afterwards;
+// nothing here reads the real home of the machine running the tests.
+let root
+const CLAUDE_ID = '11111111-2222-3333-4444-555555555555'
+const POOL_ID = '66666666-7777-8888-9999-000000000000'
+
+function claudeSession(dir, id, cwd, prompt, ts, extraTurns = 0) {
+  mkdirSync(dir, { recursive: true })
+  const rows = [
+    { type: 'user', sessionId: id, cwd, timestamp: ts, message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
+    { type: 'assistant', sessionId: id, message: { role: 'assistant', content: [{ type: 'text', text: `answer to ${prompt}` }] } },
+  ]
+  for (let i = 0; i < extraTurns; i++) {
+    rows.push({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: `turn ${i}` }] } })
+  }
+  writeFileSync(join(dir, `${id}.jsonl`), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+}
+
+function codexSession(home, id, ts) {
+  const dir = join(home, '.codex', 'sessions', '2026', '11', '21')
+  mkdirSync(dir, { recursive: true })
+  const rows = [
+    { type: 'session_meta', payload: { id, timestamp: ts, cwd: '/work/codex', cli_version: '0.1', model: 'm' } },
+    { type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: 'codex prompt' }] } },
+    { type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: 'codex answer' }] } },
+  ]
+  writeFileSync(join(dir, `rollout-2026-11-21-${id}.jsonl`), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+}
+
+let homeA // auto-discovery on (default behaviour)
+let homeB // auto-discovery off, one declared pool outside home
+let pool
+
+before(() => {
+  root = mkdtempSync(join(tmpdir(), 'nanocode-sessions-browser-'))
+  homeA = join(root, 'homeA')
+  claudeSession(join(homeA, '.claude', 'projects', '-work-a'), CLAUDE_ID, '/work/a', 'hello claude', '2026-11-20T10:00:00.000Z', 20)
+  codexSession(homeA, 'codex-aaa', '2026-11-21T10:00:00.000Z')
+
+  homeB = join(root, 'homeB')
+  pool = join(root, 'pools', 'claude-team1')
+  claudeSession(join(homeB, '.claude', 'projects', '-work-home'), CLAUDE_ID, '/work/home', 'home session', '2026-11-20T10:00:00.000Z')
+  codexSession(homeB, 'codex-home', '2026-11-21T10:00:00.000Z')
+  claudeSession(join(pool, 'projects', '-work-pool'), POOL_ID, '/work/pool', 'pool session', '2026-11-21T09:00:00.000Z')
+  mkdirSync(join(homeB, '.config', 'nanocode'), { recursive: true })
+  writeFileSync(join(homeB, '.config', 'nanocode', 'personal.json'), JSON.stringify({
+    claude: { autoDiscoverTeams: false, teams: [{ name: 'Pool 1', configDir: pool }] },
+  }))
+})
+
+after(() => { rmSync(root, { recursive: true, force: true }) })
+
+beforeEach(() => { resetSessionsCache(); resetPersonalConfigCache() })
+
+describe('sessions-browser (codex resume/fork picker)', () => {
+  it('listSessions returns newest-first sessions from ~/.claude + ~/.codex by default', async () => {
+    const data = await listSessions({ limit: 10, home: homeA })
+    assert.equal(data.total, 2)
+    assert.equal(data.partial, false)
+    assert.deepEqual(data.sessions.map((s) => s.source), ['codex', 'claude'])
+    const c = data.sessions[1]
+    assert.equal(c.id, CLAUDE_ID)
+    assert.equal(c.firstMessage, 'hello claude')
+    // Regression: the slug round-trips to an absolute cwd.
+    assert.equal(c.cwd, '/work/a')
   })
 
-  it('each session has the required fields', () => {
-    const data = listSessions({ limit: 5 })
-    for (const s of data.sessions) {
-      assert.ok(s.id, 'session must have an id')
-      assert.ok(s.source === 'codex' || s.source === 'claude', `bad source: ${s.source}`)
-      assert.equal(typeof s.cwd, 'string')
-      assert.equal(typeof s.timestamp, 'string')
-      assert.equal(typeof s.firstMessage, 'string')
-      assert.equal(typeof s.lines, 'number')
-    }
+  it('listSessions respects the source filter and clamps the limit', async () => {
+    const codex = await listSessions({ source: 'codex', limit: 50, home: homeA })
+    assert.deepEqual(codex.sessions.map((s) => s.source), ['codex'])
+    const claude = await listSessions({ source: 'claude', limit: 1, home: homeA })
+    assert.equal(claude.sessions.length, 1)
+    assert.equal(claude.sessions[0].source, 'claude')
   })
 
-  it('listSessions respects the source filter (codex only)', () => {
-    const data = listSessions({ source: 'codex', limit: 50 })
-    for (const s of data.sessions) assert.equal(s.source, 'codex')
+  it('previewSession returns the tail turns by file and by id', async () => {
+    const list = await listSessions({ source: 'claude', home: homeA })
+    const byFile = await previewSession({ source: 'claude', id: CLAUDE_ID, file: list.sessions[0].file, home: homeA })
+    assert.ok(!byFile.error, byFile.error)
+    assert.equal(byFile.turns.length, 6)
+    assert.equal(byFile.turns.at(-1).text, 'turn 19')
+    assert.equal(byFile.totalTurns, 22)
+    const byId = await previewSession({ source: 'codex', id: 'codex-aaa', home: homeA })
+    assert.ok(!byId.error, byId.error)
+    assert.equal(byId.cwd, '/work/codex')
+    assert.deepEqual(byId.turns.map((t) => t.role), ['user', 'assistant'])
   })
 
-  it('listSessions respects the source filter (claude only)', () => {
-    const data = listSessions({ source: 'claude', limit: 50 })
-    for (const s of data.sessions) assert.equal(s.source, 'claude')
+  it('previewSession refuses files outside the configured roots and unknown ids/sources', async () => {
+    const outside = await previewSession({ source: 'claude', file: join(homeB, '.config', 'nanocode', 'personal.json'), home: homeA })
+    assert.match(outside.error, /outside the configured session roots/)
+    const traversal = await previewSession({ source: 'claude', file: join(homeA, '.claude', 'projects', '..', '..', 'x.jsonl'), home: homeA })
+    assert.match(traversal.error, /outside/)
+    assert.ok((await previewSession({ source: 'codex', id: 'nonexistent-id-xyz', home: homeA })).error)
+    assert.ok((await previewSession({ source: 'unknown', id: 'x', home: homeA })).error)
   })
 
-  it('listSessions clamps the limit', () => {
-    const data = listSessions({ limit: 5 })
-    assert.ok(data.sessions.length <= 5)
+  it('autoDiscoverTeams=false: only declared pools, nothing under HOME is scanned', async () => {
+    const roots = sessionSourceRoots(homeB)
+    assert.deepEqual(roots, { claudeProjectRoots: [join(pool, 'projects')], codexSessionsDir: null })
+    const teams = listTeams(homeB, null).teams
+    assert.deepEqual(teams.map((t) => t.path), [pool])
+    const data = await listSessions({ limit: 50, home: homeB })
+    assert.deepEqual(data.sessions.map((s) => s.id), [POOL_ID])
+    for (const s of data.sessions) assert.ok(!s.file.startsWith(homeB), `scanned home: ${s.file}`)
+    // A home file is not previewable either (outside the configured roots).
+    const homeFile = join(homeB, '.claude', 'projects', '-work-home', `${CLAUDE_ID}.jsonl`)
+    assert.match((await previewSession({ source: 'claude', file: homeFile, home: homeB })).error, /outside/)
   })
 
-  it('previewSession returns turns for a real codex session', () => {
-    const list = listSessions({ source: 'codex', limit: 20 })
-    const codex = list.sessions.find((s) => s.source === 'codex')
-    if (!codex) return // no codex sessions on this machine — skip
-    const p = previewSession({ source: 'codex', id: codex.id, file: codex.file })
-    assert.ok(!p.error, `preview should not error: ${p.error}`)
-    assert.equal(p.source, 'codex')
-    assert.ok(Array.isArray(p.turns))
-  })
-
-  it('previewSession returns error for unknown id', () => {
-    const p = previewSession({ source: 'codex', id: 'nonexistent-id-xyz' })
-    assert.ok(p.error)
-  })
-
-  it('previewSession returns error for unknown source', () => {
-    const p = previewSession({ source: 'unknown', id: 'x' })
-    assert.ok(p.error)
-  })
-
-  it('claude session cwd preserves the leading slash (MES-14031 regression)', () => {
-    // Claude Code encodes an absolute cwd "/jfs/home/x" as slug "-jfs-home-x".
-    // The cwd must round-trip back to "/jfs/home/x" (leading slash intact), not
-    // "jfs/home/x" — otherwise the Sessions list shows a wrong path and the
-    // fork flow can never match an existing project by cwd.
-    const data = listSessions({ source: 'claude', limit: 50 })
-    for (const s of data.sessions) {
-      if (!s.cwd) continue
-      assert.ok(
-        s.cwd.startsWith('/'),
-        `claude cwd must be absolute (start with '/'), got: ${JSON.stringify(s.cwd)}`,
-      )
-    }
+  it('default (switch absent) keeps the historical discovery: ~/.claude + ~/.claude-team*', () => {
+    mkdirSync(join(homeA, '.claude-team2'), { recursive: true })
+    const paths = listTeams(homeA, null).teams.map((t) => t.path)
+    assert.deepEqual(paths, [join(homeA, '.claude'), join(homeA, '.claude-team2')])
+    assert.deepEqual(sessionSourceRoots(homeA), {
+      claudeProjectRoots: [join(homeA, '.claude', 'projects')],
+      codexSessionsDir: join(homeA, '.codex', 'sessions'),
+    })
   })
 })

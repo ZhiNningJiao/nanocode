@@ -15,6 +15,8 @@
  *   linear.apiKey  -> personal.linear.apiKey       -> ~/.config/linear-api.key
  *   remote.machines -> personal.remote.machines[]  -> null (no dev machines declared)
  *   claude.teams   -> personal.claude.teams[]       -> null (auto-discover ~/.claude + ~/.claude-team*)
+ *   claude.autoDiscoverTeams -> personal.claude.autoDiscoverTeams -> true (false = declared teams only)
+ *   codex.sessionsDir -> personal.codex.sessionsDir -> null (~/.codex/sessions unless auto-discovery is off)
  *   ntfy.url       -> personal.ntfy.url            -> null (backend still reads store setting ntfy_url)
  *   akari.serverUrl-> personal.akari.serverUrl     -> $AKARI_SERVER_URL -> http://10.18.8.55:9481
  *   akari.lensUrl  -> personal.akari.lensUrl       -> $AKARI_LENS_URL   -> http://10.18.8.55:9482
@@ -182,6 +184,15 @@ export function loadPersonalConfig({ home, configPath } = {}) {
   }
 
   // ntfy ---------------------------------------------------------------
+  // false = do NOT auto-discover ~/.claude + ~/.claude-team*; only the declared
+  // claude.teams[] are pools (for hosts whose home is a slow network mount).
+  const claudeAutoDiscoverTeams = file?.claude?.autoDiscoverTeams !== false
+
+  // codex.sessionsDir: explicit Codex session root for the sessions browser.
+  // null => ~/.codex/sessions while auto-discovery is on, none when it is off.
+  const codexSessionsDir =
+    (typeof file?.codex?.sessionsDir === 'string' && file.codex.sessionsDir.trim()) || null
+
   const ntfyUrl =
     typeof file?.ntfy?.url === 'string' && file.ntfy.url.trim()
       ? file.ntfy.url.trim()
@@ -204,7 +215,8 @@ export function loadPersonalConfig({ home, configPath } = {}) {
     aigw: Object.freeze({ base: aigwBase, key: aigwKey, budgetUsd: aigwBudgetUsd }),
     linear: Object.freeze({ apiKey: linearApiKey }),
     remote: Object.freeze({ machines: remoteMachines }),
-    claude: Object.freeze({ teams: claudeTeams }),
+    claude: Object.freeze({ teams: claudeTeams, autoDiscoverTeams: claudeAutoDiscoverTeams }),
+    codex: Object.freeze({ sessionsDir: codexSessionsDir }),
     ntfy: Object.freeze({ url: ntfyUrl }),
     akari: Object.freeze({ serverUrl: akariServerUrl, lensUrl: akariLensUrl }),
     _source: Object.freeze({
