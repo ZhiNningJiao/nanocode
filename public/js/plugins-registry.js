@@ -311,6 +311,45 @@ export const BUILTIN_PLUGINS = [
     refreshOnActivate: true,
     builtin: true,
   },
+  {
+    // Command Center P0-4 — "waiting on you" (等你): cars stuck / delivered
+    // (from the cars export) + owner decisions (a secretary-kept file).
+    // Tab + an app-header chip with the count (right-panel `global` mount).
+    name: 'cc-waiting',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'cc-waiting', labelKey: 'plugin.ccw.label' },
+    permissions: ['fs.read'],
+    descriptionKey: 'plugin.ccw.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
+    // Command Center P0-5 — quota per pool from the on-disk header cache
+    // (never calls a model API). Tab + header chip with the tightest pools.
+    name: 'cc-quota',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'cc-quota', labelKey: 'plugin.ccq.label' },
+    permissions: ['fs.read'],
+    descriptionKey: 'plugin.ccq.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
+    // Command Center P0-6 — chat drawer: a floating button that attaches to
+    // the duty secretary's existing agent tab (no new session, no tab here).
+    name: 'cc-chat',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    permissions: ['network'],
+    labelKey: 'plugin.ccc.label',
+    descriptionKey: 'plugin.ccc.desc',
+    builtin: true,
+  },
 ]
 
 export function builtinPlugin(name) {

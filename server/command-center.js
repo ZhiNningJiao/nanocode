@@ -18,18 +18,26 @@
  * network); the source objects do the IO; the router only parses, calls and
  * responds.
  *
+ * Phase 2 adds two more blocks on the same router, each its own module and
+ * its own source: the "waiting on you" queue (command-center-waiting.js) and
+ * per-pool quota (command-center-quota.js).
+ *
  * Config: config/command-center.local.json (gitignored — real issue keys and
  * paths never committed); config/command-center.example.json is the shape.
  */
 
 import express from 'express'
 import { readFileSync } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, stat, open } from 'node:fs/promises'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadPersonalConfig, resolvePluginSecrets } from '../terminal/personal-config.js'
 import { builtinPlugin } from '../public/js/plugins-registry.js'
 import { CARS_EXPORT_SCHEMA, GANTT_SCHEMA } from '../tools/command-center/export-cars.mjs'
+import { safeHttpUrl } from '../public/js/command-center-url.js'
+import { str, arr, validIso } from './command-center-fields.js'
+import { mapExportWaiting, buildWaitingView, createOwnerPendingSource } from './command-center-waiting.js'
+import { DEFAULT_QUOTA_STALE_SEC, createQuotaSource } from './command-center-quota.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
@@ -147,7 +155,7 @@ export function mapLinearResponse(json) {
       return {
         key: n.identifier,
         title: typeof n.title === 'string' ? n.title : n.identifier,
-        url: typeof n.url === 'string' ? n.url : null,
+        url: safeHttpUrl(n.url),
         trackerState: mapLinearState(n.state),
         updatedAt,
         subIssues: {
@@ -161,7 +169,7 @@ export function mapLinearResponse(json) {
     root: {
       key: root.identifier,
       title: root.title || root.identifier,
-      url: root.url || null,
+      url: safeHttpUrl(root.url),
       trackerState: mapLinearState(root.state),
     },
     events,
@@ -170,10 +178,6 @@ export function mapLinearResponse(json) {
 }
 
 // ─── Cars export mapping (pure) ─────────────────────────────────────────────
-
-function str(v) { return typeof v === 'string' && v ? v : null }
-function arr(v) { return Array.isArray(v) ? v : [] }
-function validIso(v) { return typeof v === 'string' && Number.isFinite(Date.parse(v)) ? v : null }
 
 function mapPoint(p) {
   if (!p || typeof p !== 'object') return null
@@ -185,7 +189,8 @@ function mapPoint(p) {
 /**
  * One gantt bar → one car. Missing fields degrade to null / [] (and an
  * unparseable start makes the car list-only, not drawn); paths stay
- * server-side — the browser only learns *which* documents exist.
+ * server-side — the browser only learns *which* documents exist. PR / board
+ * links come from free text: only absolute http(s) URLs survive.
  */
 export function mapBar(b) {
   const { state, reason } = mapTraceStatus(b?.status)
@@ -224,9 +229,9 @@ export function mapBar(b) {
       end: validIso(s?.end_t),
     })),
     docs: { task: !!str(links.task), step: !!str(links.step), report: !!str(links.report) },
-    prs: arr(links.prs).filter((u) => typeof u === 'string'),
+    prs: arr(links.prs).map(safeHttpUrl).filter(Boolean),
     branches: arr(links.branches).filter((u) => typeof u === 'string'),
-    boards: arr(links.boards).filter((u) => typeof u === 'string'),
+    boards: arr(links.boards).map(safeHttpUrl).filter(Boolean),
   }
 }
 
@@ -392,6 +397,7 @@ export function loadCommandCenterConfig(path = CC_CONFIG_PATH) {
   if (missing.length) return { error: `config ${basename(path)} missing ${missing.join(', ')}` }
   const cacheSec = Number(parsed.linear.cacheSeconds)
   const staleSec = Number(parsed.carsExport.staleSeconds)
+  const quotaStaleSec = Number(parsed.quota?.staleSeconds)
   return {
     config: {
       rootIssue,
@@ -399,6 +405,11 @@ export function loadCommandCenterConfig(path = CC_CONFIG_PATH) {
       linearCacheSec: Math.max(LINEAR_MIN_CACHE_SEC, Number.isFinite(cacheSec) ? cacheSec : LINEAR_MIN_CACHE_SEC),
       carsPath,
       carsStaleSec: Number.isFinite(staleSec) && staleSec > 0 ? staleSec : DEFAULT_CARS_STALE_SEC,
+      // phase 2 — optional: absent = that block shows "not connected"
+      ownerPendingPath: str(parsed.ownerPending?.path),
+      waitingIgnoreTagPrefixes: arr(parsed.waiting?.ignoreTagPrefixes).filter((x) => typeof x === 'string' && x),
+      quotaDir: str(parsed.quota?.dir),
+      quotaStaleSec: Number.isFinite(quotaStaleSec) && quotaStaleSec > 0 ? quotaStaleSec : DEFAULT_QUOTA_STALE_SEC,
     },
   }
 }
@@ -456,10 +467,12 @@ export function createLinearSource({ fetchImpl = fetch, getApiKey = defaultLinea
 /**
  * Cars export reader: one file, re-parsed only when its mtime changes. An
  * export older than staleSec counts as unreachable ("the exporter stopped"),
- * with the export time as last success.
+ * with the export time as last success. The same file carries the
+ * "waiting on you" signals (`waiting`): returned alongside, available even
+ * when the trace part failed, gone when the whole file is stale/unreadable.
  */
 export function createCarsSource({ now = () => Date.now() } = {}) {
-  let cache = null // { path, mtimeMs, mapped, docPaths }
+  let cache = null // { path, mtimeMs, mapped, docPaths, waiting }
   let lastOkAt = null
 
   return {
@@ -469,20 +482,21 @@ export function createCarsSource({ now = () => Date.now() } = {}) {
         const st = await stat(path)
         if (!cache || cache.path !== path || cache.mtimeMs !== st.mtimeMs) {
           const env = JSON.parse(await readFile(path, 'utf8'))
-          cache = { path, mtimeMs: st.mtimeMs, mapped: mapCarsExport(env), docPaths: docPathsByTrace(env.gantt) }
+          cache = { path, mtimeMs: st.mtimeMs, mapped: mapCarsExport(env), docPaths: docPathsByTrace(env.gantt), waiting: mapExportWaiting(env.waiting) }
         }
       } catch (err) {
         cache = null
-        return { ok: false, checkedAt, lastOkAt, error: `cars export unreadable: ${err.code || err.message}`, data: null }
+        return { ok: false, checkedAt, lastOkAt, error: `cars export unreadable: ${err.code || err.message}`, data: null, waiting: null }
       }
       const m = cache.mapped
       if (m.lastOkAt && (!lastOkAt || Date.parse(m.lastOkAt) > Date.parse(lastOkAt))) lastOkAt = m.lastOkAt
-      if (!m.ok) return { ok: false, checkedAt, lastOkAt, error: m.error, data: null }
       const ageSec = (now() - Date.parse(m.exportedAt || 0)) / 1000
       if (!(ageSec <= staleSec)) {
-        return { ok: false, checkedAt, lastOkAt, error: `cars export stale (${Math.round(ageSec)}s old, limit ${staleSec}s)`, data: null }
+        const error = `cars export stale (${Math.round(ageSec)}s old, limit ${staleSec}s)`
+        return { ok: false, checkedAt, lastOkAt, error, data: null, waiting: { ok: false, error, signals: [] } }
       }
-      return { ok: true, checkedAt, lastOkAt, error: null, data: m }
+      if (!m.ok) return { ok: false, checkedAt, lastOkAt, error: m.error, data: null, waiting: cache.waiting }
+      return { ok: true, checkedAt, lastOkAt, error: null, data: m, waiting: cache.waiting }
     },
     docPath(traceId, kind) {
       return cache?.docPaths.get(traceId)?.[kind] || null
@@ -494,7 +508,35 @@ export function createCarsSource({ now = () => Date.now() } = {}) {
 
 const DOCUMENT_KINDS = new Set(['task', 'step', 'report'])
 
-export function createCommandCenterRoutes({ configPath = CC_CONFIG_PATH, linearSource = createLinearSource(), carsSource = createCarsSource() } = {}) {
+/**
+ * Read at most maxBytes of a regular file in one bounded read — the size is
+ * decided by what was read, not by an earlier stat (a file growing between
+ * stat and read can't push more than maxBytes into memory).
+ */
+export async function readTextCapped(p, maxBytes) {
+  const fh = await open(p, 'r')
+  try {
+    if (!(await fh.stat()).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTFILE' })
+    const buf = Buffer.alloc(maxBytes + 1)
+    let n = 0
+    while (n < buf.length) {
+      const { bytesRead } = await fh.read(buf, n, buf.length - n, n)
+      if (!bytesRead) break
+      n += bytesRead
+    }
+    return { text: buf.subarray(0, Math.min(n, maxBytes)).toString('utf8'), truncated: n > maxBytes }
+  } finally {
+    await fh.close()
+  }
+}
+
+export function createCommandCenterRoutes({
+  configPath = CC_CONFIG_PATH,
+  linearSource = createLinearSource(),
+  carsSource = createCarsSource(),
+  ownerSource = createOwnerPendingSource(),
+  quotaSource = createQuotaSource(),
+} = {}) {
   const router = express.Router()
 
   router.get('/api/command-center', async (_req, res, next) => {
@@ -518,10 +560,34 @@ export function createCommandCenterRoutes({ configPath = CC_CONFIG_PATH, linearS
       if (!DOCUMENT_KINDS.has(kind)) return res.status(400).json({ error: 'bad kind' })
       const p = carsSource.docPath(traceId, kind)
       if (!p) return res.status(404).json({ error: 'no such document for this trace' })
-      let st
-      try { st = await stat(p) } catch (err) { return res.status(404).json({ error: `document unreadable: ${err.code || err.message}` }) }
-      if (st.size > DOCUMENT_MAX_BYTES) return res.status(413).json({ error: `document too large (${st.size} bytes)` })
-      res.type('text/plain; charset=utf-8').send(await readFile(p, 'utf8'))
+      let doc
+      try { doc = await readTextCapped(p, DOCUMENT_MAX_BYTES) } catch (err) { return res.status(404).json({ error: `document unreadable: ${err.code || err.message}` }) }
+      if (doc.truncated) res.set('X-Truncated', String(DOCUMENT_MAX_BYTES))
+      res.type('text/plain; charset=utf-8').send(doc.truncated ? `${doc.text}\n\n[… truncated at ${DOCUMENT_MAX_BYTES} bytes]` : doc.text)
+    } catch (err) { next(err) }
+  })
+
+  // P0-4 "waiting on you": car signals (from the cars export) + owner decisions.
+  router.get('/api/command-center/waiting', async (_req, res, next) => {
+    try {
+      const { config, error } = loadCommandCenterConfig(configPath)
+      if (error) return res.json({ configured: false, error })
+      const [carsSnap, owner] = await Promise.all([
+        carsSource.get(config.carsPath, config.carsStaleSec),
+        ownerSource.get(config.ownerPendingPath),
+      ])
+      res.json({ configured: true, ...buildWaitingView({ carsSnap, owner, ignoreTagPrefixes: config.waitingIgnoreTagPrefixes }) })
+    } catch (err) { next(err) }
+  })
+
+  // P0-5 quota per pool, from the on-disk header-reading cache (no model API calls).
+  router.get('/api/command-center/quota', async (_req, res, next) => {
+    try {
+      const { config, error } = loadCommandCenterConfig(configPath)
+      if (error) return res.json({ configured: false, error })
+      const q = await quotaSource.get(config.quotaDir, config.quotaStaleSec)
+      const { data, ...source } = q
+      res.json({ configured: true, staleSec: config.quotaStaleSec, ...(data || { pools: [], tightest: [] }), source })
     } catch (err) { next(err) }
   })
 

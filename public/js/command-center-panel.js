@@ -16,10 +16,10 @@
  */
 import { t } from './i18n.js'
 import { layoutGantt, ganttWindow } from './command-center-layout.js'
+import { ensureCss, esc, pad2, fmtTime, fmtAgo, downBlock, linkHtml } from './command-center-format.js'
 
 const POLL_MS = 60_000
 const SELECTED_KEY = 'commandCenter:selected'
-const CSS_HREF = '/command-center.css'
 const LABEL_COL_PX = 128
 const CAR_MILESTONES_SHOWN = 3
 const TICK_EDGE_PX = 18 // a centred tick label closer than this to an edge would be clipped
@@ -53,15 +53,6 @@ export function resetCommandCenterLoadState() {
   stopPolling()
   pollInFlight = false
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null }
-}
-
-function ensureCss() {
-  if (document.querySelector(`link[data-cc-css]`)) return
-  const link = document.createElement('link')
-  link.rel = 'stylesheet'
-  link.href = CSS_HREF
-  link.dataset.ccCss = '1'
-  document.head.appendChild(link)
 }
 
 function startPolling() {
@@ -288,7 +279,7 @@ function renderDetail() {
     <button class="rp-btn-sm cc-back" data-act="back">← ${esc(t('plugin.cc.back'))}</button>
     <div class="cc-ed-head">
       <h3>${esc(eventTitle(e, isNone))}</h3>
-      ${!isNone ? (e.url ? `<a class="cc-key" href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.key)} ↗</a>` : `<span class="cc-key">${esc(e.key)}</span>`) : ''}
+      ${!isNone ? (e.url ? linkHtml(e.url, e.key, 'cc-key') : `<span class="cc-key">${esc(e.key)}</span>`) : ''}
       ${!isNone ? trackerBadge(e) : ''}
     </div>
     <div class="cc-ed-meta">
@@ -357,8 +348,9 @@ function carDetailHtml(c) {
   const ms = c.points.slice(-CAR_MILESTONES_SHOWN).reverse()
   const docs = ['task', 'step', 'report'].filter((k) => c.docs[k])
     .map((k) => `<button class="rp-btn-sm" data-act="doc" data-kind="${k}" data-trace="${esc(c.traceId)}">${esc(t(`plugin.cc.doc.${k}`))}</button>`).join('')
-  const prs = c.prs.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">PR ${esc(prNum(u))} ↗</a>`).join('')
-  const boards = c.boards.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t('plugin.cc.board'))} ${i + 1} ↗</a>`).join('')
+  // the server already drops non-http(s) links; linkHtml re-checks (plain text if not)
+  const prs = c.prs.map((u) => linkHtml(u, `PR ${prNum(u)}`)).join('')
+  const boards = c.boards.map((u, i) => linkHtml(u, `${t('plugin.cc.board')} ${i + 1}`)).join('')
   const reason = c.reason ? ` · ${t(`plugin.cc.reason.${c.reason}`)}` : ''
   const meta = [c.effort || c.model, c.pool, c.verdict].filter(Boolean).map(esc).join(' · ')
   return `
@@ -405,11 +397,6 @@ async function openDoc(trace, kind) {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function downBlock(title, s) {
-  const last = s?.lastOkAt ? `${fmtTime(s.lastOkAt)}（${fmtAgo(s.lastOkAt)}）` : t('plugin.cc.never')
-  return `<div class="cc-block-down"><span class="service-dot down"></span> ${esc(title)}<div class="cc-sub">${esc(t('plugin.cc.lastSuccess'))}: ${esc(last)}</div>${s?.error ? `<div class="cc-sub cc-err">${esc(s.error)}</div>` : ''}</div>`
-}
-
 function stateLabel(st) { return t(`plugin.cc.state.${st}`) }
 
 function kindLabel(k) {
@@ -423,34 +410,9 @@ function prNum(u) {
   return m ? `#${m[1]}` : ''
 }
 
-function pad2(n) { return String(n).padStart(2, '0') }
-
-function fmtTime(iso) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (!Number.isFinite(d.getTime())) return '—'
-  const today = new Date()
-  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-  return d.toDateString() === today.toDateString() ? hm : `${d.getMonth() + 1}-${pad2(d.getDate())} ${hm}`
-}
-
 function fmtTick(ms, stepMin) {
   const d = new Date(ms)
   const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
   if (stepMin >= 1440 || (d.getHours() === 0 && d.getMinutes() === 0)) return `${d.getMonth() + 1}-${pad2(d.getDate())}`
   return hm
-}
-
-function fmtAgo(iso) {
-  const ms = Date.parse(iso)
-  if (!Number.isFinite(ms)) return '—'
-  const sec = Math.max(0, Math.round((Date.now() - ms) / 1000))
-  if (sec < 60) return t('plugin.cc.agoSec', sec)
-  if (sec < 3600) return t('plugin.cc.agoMin', Math.round(sec / 60))
-  if (sec < 86400) return t('plugin.cc.agoHour', Math.round(sec / 3600))
-  return t('plugin.cc.agoDay', Math.round(sec / 86400))
-}
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }

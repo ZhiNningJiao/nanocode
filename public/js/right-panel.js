@@ -45,6 +45,7 @@ function _isModLoaded(cacheKey) { return _modCache.has(cacheKey) }
 //   render(m, pane, plugin)        : 渲染 pane（插件 tab 激活时调用）
 //   settingsRender(m, body)        : 渲染设置面板（plugin manager 展开时调用）
 //   reset(m)                       : 清空加载状态（插件卸载时调用，仅模块已缓存时执行）
+//   global: { mount(m), unmount(m) } : 右栏之外的界面（顶栏徽章 / 浮动按钮），插件开着就挂、关掉就摘
 const LAZY_PLUGINS = {
   'team-model': {
     key: 'plugins-panel', imp: () => import('./plugins-panel.js'),
@@ -124,6 +125,24 @@ const LAZY_PLUGINS = {
     render: (m, pane) => m.renderCommandCenterPane(pane),
     reset: (m) => m.resetCommandCenterLoadState(),
   },
+  // `global`: UI that lives outside the right panel (header chip / floating
+  // button) — mounted while the plugin is enabled, removed when it is turned off.
+  'cc-waiting': {
+    key: 'command-center-waiting-panel', imp: () => import('./command-center-waiting-panel.js'),
+    render: (m, pane) => m.renderWaitingPane(pane),
+    reset: (m) => m.resetWaitingLoadState(),
+    global: { mount: (m) => m.mountWaitingChip(), unmount: (m) => m.unmountWaitingChip() },
+  },
+  'cc-quota': {
+    key: 'command-center-quota-panel', imp: () => import('./command-center-quota-panel.js'),
+    render: (m, pane) => m.renderQuotaPane(pane),
+    reset: (m) => m.resetQuotaLoadState(),
+    global: { mount: (m) => m.mountQuotaChip(), unmount: (m) => m.unmountQuotaChip() },
+  },
+  'cc-chat': {
+    key: 'command-center-chat-drawer', imp: () => import('./command-center-chat-drawer.js'),
+    global: { mount: (m) => m.mountChatDrawer(), unmount: (m) => m.unmountChatDrawer() },
+  },
 }
 
 const DOMAIN_KEY = 'rightPanel:domain'
@@ -177,6 +196,7 @@ export function initRightPanel() {
   for (const name of enabledNames) {
     const plugin = builtinPlugin(name)
     if (plugin) mountPlugin(plugin, { silent: true })
+    if (plugin) applyGlobal(name, true)
   }
   resolveActiveSubTabs()
   renderPluginManager(getPane('plugin-manager'))
@@ -222,6 +242,7 @@ function setEnabled(name, on) {
     enabledNames.delete(name)
     unmountPlugin(plugin)
   }
+  applyGlobal(name, on)
   persistEnabled()
   // Reflect toggle states without losing the manager's scroll.
   renderPluginManager(getPane('plugin-manager'))
@@ -334,9 +355,10 @@ function renderPluginManager(pane) {
     row.appendChild(head)
     row.appendChild(perms)
 
-    // Plugins that mount a tab get an enable toggle. Settings-only plugins
-    // (no tab) have nothing to toggle — their settings panel always shows.
-    if (plugin.tab) {
+    // Plugins that mount a tab — or UI outside the panel (`global`, e.g. the
+    // chat drawer's floating button) — get an enable toggle. Settings-only
+    // plugins (no tab) have nothing to toggle — their settings panel always shows.
+    if (plugin.tab || LAZY_PLUGINS[plugin.name]?.global) {
       const toggle = document.createElement('label')
       toggle.className = 'pm-toggle'
       const cb = document.createElement('input')
@@ -498,6 +520,16 @@ function hideDomainEmpty(domain) {
   const bodyEl = getDomainBodyEl(domain)
   const el = bodyEl && bodyEl.querySelector('.right-domain-empty')
   if (el) el.style.display = 'none'
+}
+
+// Plugins with UI outside the right panel (LAZY_PLUGINS[name].global).
+function applyGlobal(name, on) {
+  const lazy = LAZY_PLUGINS[name]
+  if (!lazy?.global) return
+  _loadMod(lazy.key, lazy.imp).then((m) => {
+    // the toggle may have flipped again while the module loaded
+    if (isEnabled(name) === on) (on ? lazy.global.mount : lazy.global.unmount)(m)
+  })
 }
 
 function resetPluginLoadStateFor(name) {

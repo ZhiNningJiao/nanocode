@@ -170,3 +170,106 @@ a.cc-key:hover { color: var(--primary); }
   .cc-grow { min-height: 36px; }
   .cc-top-actions .rp-btn-sm, .cc-back { min-height: 36px; min-width: 36px; }
 }
+
+/* ── phase 2: shared module frame (等你 / 额度 tabs) ── */
+.cc-mod { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; background: var(--bg); color: var(--text); font-size: 12.5px; }
+.cc-mod-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); position: sticky; top: 0; z-index: 1; }
+.cc-mod-head .rp-btn-sm { margin-left: auto; }
+.cc-mod-meta { font-size: 11px; color: var(--error); }
+.cc-unsafe-link { color: var(--text-secondary); text-decoration: line-through dotted; }
+
+/* app-header chips (等你 N / 最紧额度) */
+.cc-header-chips { display: inline-flex; gap: 6px; align-items: center; }
+.cc-hchip {
+  font: inherit; font-size: 11.5px; line-height: 1; padding: 4px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary); white-space: nowrap;
+}
+.cc-hchip:hover { border-color: var(--primary); color: var(--text); }
+.cc-hchip[data-cc-chip="waiting"] { order: -1; } /* 等你 always first, whichever module loads first */
+.cc-hchip-hot { background: var(--error); border-color: var(--error); color: #fff; font-weight: 700; }
+.cc-hchip-warn { background: var(--warning-bg); border-color: var(--warning); color: var(--warning); font-weight: 700; }
+.cc-hchip-down { border-style: dashed; }
+@media (max-width: 768px) {
+  .cc-hchip { padding: 3px 6px; font-size: 11px; }
+  .cc-hchip[data-cc-chip="quota"] { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ── 等你 list ── */
+.ccw-list { list-style: none; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }
+.ccw-item { border: 1px solid var(--border); border-left: 3px solid var(--text-secondary); border-radius: 6px; padding: 7px 9px; background: var(--bg-secondary); }
+.ccw-item.ccw-decision { border-left-color: var(--error); }
+.ccw-item.ccw-blocked { border-left-color: var(--warning); }
+.ccw-item.ccw-delivered { border-left-color: var(--primary); }
+.ccw-top { display: flex; align-items: baseline; gap: 6px; }
+.ccw-kind { flex-shrink: 0; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: var(--bg-elevated); }
+.ccw-decision .ccw-kind { color: var(--error); }
+.ccw-blocked .ccw-kind { color: var(--warning); }
+.ccw-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ccw-wait { flex-shrink: 0; font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.ccw-meta { margin-top: 3px; font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.ccw-detail { margin-top: 4px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: auto; }
+.ccw-rec { margin-top: 4px; font-size: 12px; font-weight: 600; }
+.ccw-opts { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+.ccw-foot { padding: 4px 10px 10px; }
+
+/* ── 额度 cards ── */
+.ccq-legend { padding: 6px 10px 0; }
+.ccq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; padding: 8px; }
+.ccq-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--bg-secondary); }
+.ccq-card-stale { border-style: dashed; }
+.ccq-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.ccq-pool { font-weight: 800; font-size: 14px; }
+.ccq-login { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--bg-elevated); }
+.ccq-login-yes { color: var(--success); }
+.ccq-login-no { color: var(--error); font-weight: 700; }
+.ccq-login-unknown { color: var(--text-secondary); }
+.ccq-stale { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; color: var(--warning); background: var(--warning-bg); }
+.ccq-win { display: grid; grid-template-columns: 48px 1fr 46px; grid-template-areas: "n b v" "r r r"; align-items: center; gap: 2px 6px; margin: 4px 0; }
+.ccq-wname { grid-area: n; font-size: 11.5px; color: var(--text-secondary); }
+.ccq-bar { grid-area: b; height: 8px; border-radius: 4px; background: var(--bg-elevated); overflow: hidden; }
+.ccq-fill { display: block; height: 100%; border-radius: 4px; }
+.ccq-fill.ccq-ok { background: var(--success); }
+.ccq-fill.ccq-warn { background: var(--warning); }
+.ccq-fill.ccq-hot { background: var(--error); }
+.ccq-wval { grid-area: v; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ccq-void .ccq-wval { grid-column: 2 / 4; text-align: left; font-weight: 400; color: var(--text-secondary); }
+.ccq-t-hot { color: var(--error); }
+.ccq-t-warn { color: var(--warning); }
+.ccq-reset { grid-area: r; font-size: 11px; color: var(--text-secondary); }
+.ccq-src { margin-top: 6px; }
+
+/* ── 对话抽屉 (floating button + drawer; outside the main layout) ── */
+.ccc-fab {
+  position: fixed; right: 18px; bottom: 76px; z-index: 900;
+  height: 40px; min-width: 40px; padding: 0 14px; border-radius: 20px; border: none; cursor: pointer;
+  background: var(--primary); color: #fff; font: inherit; font-weight: 700; font-size: 13px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+}
+.ccc-fab:hover { filter: brightness(1.08); }
+.ccc-fab.ccc-fab-open { opacity: .6; }
+.ccc-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 950;
+  width: min(460px, 100vw); display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text); border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, .25);
+}
+.ccc-drawer[hidden] { display: none; }
+.ccc-drawer.ccc-offline .ccc-head { background: var(--warning-bg); }
+.ccc-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); flex-shrink: 0; }
+.ccc-title { font-weight: 800; font-size: 13px; }
+.ccc-who { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ccc-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ccc-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.ccc-msg { padding: 12px; font-size: 12.5px; color: var(--text-secondary); }
+.ccc-compose { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); background: var(--bg-secondary); flex-shrink: 0; }
+.ccc-compose[hidden] { display: none; }
+.ccc-compose textarea {
+  flex: 1; min-width: 0; resize: none; font: inherit; font-size: 14px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text);
+}
+.ccc-send { flex-shrink: 0; padding: 0 14px; border: none; border-radius: 6px; background: var(--primary); color: #fff; font-weight: 700; cursor: pointer; }
+@media (max-width: 768px) {
+  .ccc-fab { right: 12px; bottom: 84px; }
+  .ccc-drawer { width: 100vw; border-left: none; }
+  .ccc-compose { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+}

@@ -1,0 +1,18 @@
+{
+  "schema": "nanocc-owner-pending/v1",
+  "updated_at": "2026-01-01T09:30:00+08:00",
+  "items": [
+    {
+      "id": "pr-42-merge",
+      "title": "Merge PR 42 (exporter retries)?",
+      "summary": "Review passed, tests green; merging lets the exporter retry once before reporting a failure.",
+      "url": "https://github.example/org/repo/pull/42",
+      "since": "2026-01-01T08:10:00+08:00",
+      "recommendation": "Merge — low risk, rollback is one revert.",
+      "options": ["merge", "hold"],
+      "waiter": "secretary",
+      "trace_id": "exporter_retry_0800",
+      "deadline": "2026-01-01T18:00:00+08:00"
+    }
+  ]
+}
