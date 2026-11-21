@@ -41,9 +41,6 @@ try { ({ DatabaseSync: _DatabaseSync } = _require('node:sqlite')) } catch { /* n
 function getAigwBase({ home } = {}) {
   return loadPersonalConfig({ home }).aigw.base
 }
-function getAigwBudgetUsd({ home } = {}) {
-  return loadPersonalConfig({ home }).aigw.budgetUsd
-}
 
 /** Read the AIGW key (personal config -> ~/.config/meshy-aigw.key). Returns '' if absent. */
 export function readAigwKey({ home } = {}) {
@@ -860,11 +857,6 @@ const CLAUDE_OAUTH_TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL || 'https://pl
 const CLAUDE_OAUTH_CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID || '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const WINDOW_5H_MS = 5 * 60 * 60 * 1000
 const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000
-// LiteLLM admin/billing endpoints probed in order by the legacy probeAigwSpend
-// fallback (CodexBar docs/litellm.md). The primary AIGW source now uses the
-// verified-live /key/info?key=KEY + /spend/logs/v2 flow (fetchAigwKeyInfo /
-// fetchAigwSpendLogs below); this list is kept for the legacy fallback.
-const AIGW_ADMIN_ENDPOINTS = ['/key/info', '/user/info', '/global/spend', '/spend/logs']
 // /spend/logs/v2 window sample size. The full history can be 20k+ rows; we
 // fetch the most-recent bounded page and compute burn from its active span
 // (labelled estimated/sampled in the window note).
@@ -1383,116 +1375,6 @@ export async function fetchAigwSpendLogs({ key, base, fetchImpl, days = AIGW_SPE
   }
 }
 
-/**
- * Legacy probe of LiteLLM admin/billing endpoints (kept as a fallback; the
- * primary AIGW source uses fetchAigwKeyInfo + fetchAigwSpendLogs). Tries
- * /key/info, /user/info, /global/spend, /spend/logs in order. Never throws;
- * returns { available, tried[], error?, spend? } so a caller can label honestly.
- */
-export async function probeAigwSpend({ key, base, fetchImpl, home } = {}) {
-  const apiKey = String(key ?? readAigwKey({ home })).trim()
-  const b = base || getAigwBase({ home })
-  if (!apiKey) {
-    return { available: false, error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)', tried: [] }
-  }
-  const f = fetchImpl || fetch
-  const tried = []
-  for (const ep of AIGW_ADMIN_ENDPOINTS) {
-    const url = `${b}${ep}`
-    try {
-      const res = await f(url, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(10000),
-      })
-      tried.push({ endpoint: ep, status: res.status })
-      if (res.ok) {
-        let body = null
-        try { body = await res.json() } catch {}
-        return mapAigwSpendResponse(ep, body, { tried })
-      }
-      if (res.status === 403) {
-        let body = null
-        try { body = await res.json() } catch {}
-        const msg = body?.detail || body?.error || `HTTP ${res.status}`
-        if (/llm_api_routes|not allowed/i.test(String(msg))) {
-          return {
-            available: false,
-            error: `AIGW key is virtual LLM-only (403 on ${ep}: ${msg}). Admin/billing routes are not permitted; spend/budget unavailable.`,
-            tried,
-          }
-        }
-      }
-    } catch (err) {
-      tried.push({ endpoint: ep, error: String(err?.message || err) })
-    }
-  }
-  return {
-    available: false,
-    error: 'All AIGW admin endpoints rejected or unreachable (no spend/budget data).',
-    tried,
-  }
-}
-
-/**
- * Pure: map a successful AIGW admin response into a monthly-budget window.
- * LiteLLM /key/info returns `{ info: { spend, max_budget, key_alias, ... } }`
- * (verified live; max_budget is null for a virtual LLM-only key) — we accept
- * both the nested `info.*` shape and the flat `{ soft_budget, spend }` shape
- * (the latter is the legacy/CodexBar-documented shape). /global/spend returns
- * `{ total_spend }`. We surface whatever the gateway gave us, labelled with its
- * unit, and never invent fields. Returns { available:true, windows, raw } or
- * { available:false, error }.
- */
-export function mapAigwSpendResponse(endpoint, body, { tried } = {}) {
-  if (!body || typeof body !== 'object') {
-    return { available: false, error: `${endpoint} returned no parseable body`, tried }
-  }
-  if (endpoint === '/key/info') {
-    const info = body.info || body
-    const soft = Number(info?.soft_budget ?? body.soft_budget)
-    const spend = Number(info?.spend ?? body.spend)
-    if (Number.isFinite(spend)) {
-      const limit = Number.isFinite(soft) && soft > 0 ? soft : null
-      return {
-        available: true,
-        tried,
-        raw: { endpoint, soft_budget: info?.soft_budget ?? body.soft_budget, spend: info?.spend ?? body.spend },
-        windows: [{
-          source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
-          windowType: 'monthly',
-          used: spend, limit, remaining: limit != null ? limit - spend : null,
-          utilization: limit != null ? (spend / limit) * 100 : null,
-          unit: 'usd',
-          resetAt: null, burnRatePerMin: null, projectedHitAt: null,
-          estimated: false, severity: severityFor(limit != null ? (spend / limit) * 100 : null),
-          usedTokens: null,
-          note: `AIGW LiteLLM /key/info: spend $${spend.toFixed(4)}${limit != null ? ` of $${limit.toFixed(4)} soft budget` : ''} (real).`,
-        }],
-      }
-    }
-  }
-  if (endpoint === '/global/spend') {
-    const total = Number(body.total_spend ?? body.spend)
-    if (Number.isFinite(total)) {
-      return {
-        available: true,
-        tried,
-        raw: { endpoint, total_spend: body.total_spend },
-        windows: [{
-          source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
-          windowType: 'monthly',
-          used: total, limit: null, remaining: null,
-          utilization: null, unit: 'usd',
-          resetAt: null, burnRatePerMin: null, projectedHitAt: null,
-          estimated: false, severity: null, usedTokens: null,
-          note: `AIGW LiteLLM /global/spend: total spend $${total.toFixed(4)} (real, no budget limit exposed).`,
-        }],
-      }
-    }
-  }
-  return { available: false, error: `${endpoint} response had no usable spend/budget fields`, tried, raw: body }
-}
-
 function aigwUnavailableWindow(note) {
   return {
     source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
@@ -1716,10 +1598,11 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), home, fet
   }
   if (budget.available) {
     const pctUsed = budget.pct_used
-    const sev = pctUsed == null ? null : (pctUsed >= 90 ? 'critical' : pctUsed >= 75 ? 'warning' : 'normal')
+    const sev = pctUsed == null ? null : severityFor(pctUsed)
     return {
       ...base,
       user_email: budget.user_email,
+      pct_used: pctUsed,
       max_budget: budget.max_budget,
       spend: budget.spend,
       remaining: budget.remaining,

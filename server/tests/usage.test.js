@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty, readClaudeOAuthCredentials, mapClaudeOAuthToWindows, computeBurnRate, projectHitAt, estimateClaudeWindowsFromTimeline, attachBurnAndProjection, streamJsonlTimeline, mapAigwSpendResponse, buildUsageSummary, fetchAigwKeyInfo, fetchAigwSpendLogs, buildAigwSourceSummary, computeAigwBudgetTier, computeBudgetDaysLeft, mapAigwBudgetResponse, fetchAigwBudget, AIGW_BUDGET_ADVICE } from '../../terminal/usage.js'
+import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty, readClaudeOAuthCredentials, mapClaudeOAuthToWindows, computeBurnRate, projectHitAt, estimateClaudeWindowsFromTimeline, attachBurnAndProjection, streamJsonlTimeline, buildUsageSummary, fetchAigwKeyInfo, fetchAigwSpendLogs, buildAigwSourceSummary, computeAigwBudgetTier, computeBudgetDaysLeft, mapAigwBudgetResponse, fetchAigwBudget, AIGW_BUDGET_ADVICE } from '../../terminal/usage.js'
 import { loadPersonalConfig, resetPersonalConfigCache } from '../../terminal/personal-config.js'
 import { createStore } from '../store.js'
 
@@ -490,31 +490,6 @@ describe('usage: streamJsonlTimeline + readClaudeOAuthCredentials', () => {
   })
 })
 
-describe('usage: mapAigwSpendResponse (pure)', () => {
-  it('maps /key/info soft_budget + spend into a monthly usd window', () => {
-    const r = mapAigwSpendResponse('/key/info', { soft_budget: 100, spend: 12.5 }, { tried: [{ endpoint: '/key/info', status: 200 }] })
-    assert.equal(r.available, true)
-    assert.equal(r.windows[0].used, 12.5)
-    assert.equal(r.windows[0].limit, 100)
-    assert.equal(r.windows[0].remaining, 87.5)
-    assert.equal(r.windows[0].unit, 'usd')
-    assert.equal(r.windows[0].windowType, 'monthly')
-  })
-
-  it('maps /global/spend total_spend into a spend-only window (limit null, no fabrication)', () => {
-    const r = mapAigwSpendResponse('/global/spend', { total_spend: 42.1 }, { tried: [] })
-    assert.equal(r.available, true)
-    assert.equal(r.windows[0].used, 42.1)
-    assert.equal(r.windows[0].limit, null)
-  })
-
-  it('returns unavailable for an unparseable / empty body', () => {
-    const r = mapAigwSpendResponse('/key/info', null, { tried: [] })
-    assert.equal(r.available, false)
-    assert.ok(r.error)
-  })
-})
-
 // ── MES-13788 延续: AIGW /user/info monthly budget + self-adapting tier ─────────
 
 describe('usage: computeAigwBudgetTier (pure, aigw_budget.sh port)', () => {
@@ -700,7 +675,7 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
     process.env.XDG_DATA_HOME = join(tmp, 'xdg')
     delete process.env.GLM_XDG_DATA_HOME
     // no AIGW key in the fake home: readAigwKey still reads the real file, so
-    // probeAigwSpend will try the real gateway and get 403 -> unavailable.
+    // the AIGW sources get 403 from the stub -> unavailable.
     // That's honest and the shape is what we assert.
     try {
       const sum = await buildUsageSummary({ home: tmp, store, now: NOW })

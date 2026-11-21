@@ -341,6 +341,8 @@ const translations = {
     'plugin.machines.dstateTransient': 'Transient D-state (<60s)',
     // Command Center (指挥舱 phase 1)
     'plugin.cc.label': 'Command Center',
+    'plugin.cc.moved': 'Big events now live on the Command Center main page.',
+    'plugin.cc.open': 'Open Command Center',
     'plugin.cc.desc': 'Big events from the task tracker with the agents working on them folded underneath: tracker status, progress, a per-agent timeline, and who is waiting on you.',
     'plugin.cc.title': 'Command Center',
     'plugin.cc.refresh': 'Refresh',
@@ -1077,6 +1079,8 @@ const translations = {
     'plugin.machines.dstateTransient': '瞬时 D 态（<60 秒）',
     // 指挥舱（第一期）
     'plugin.cc.label': '指挥舱',
+    'plugin.cc.moved': '大事件只在指挥舱主页看，这里不再另开一份。',
+    'plugin.cc.open': '打开指挥舱',
     'plugin.cc.desc': '按大事件看进展：大事件来自任务单，派出去的车折叠在下面——单的状态、进度、每辆车一条时间线、谁在等你。',
     'plugin.cc.title': '指挥舱',
     'plugin.cc.refresh': '刷新',

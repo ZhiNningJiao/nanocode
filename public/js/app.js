@@ -442,61 +442,8 @@ function playNotifySound(eventType) {
 
 export { isGlobalMuted }
 
-function loadNotifySoundSettings() {
-  const prefs = getNotifySoundPrefs()
-  const enabledEl = document.getElementById('notify-sound-enabled')
-  const volEl = document.getElementById('notify-sound-volume')
-  const volVal = document.getElementById('notify-sound-volume-value')
-  if (enabledEl) enabledEl.checked = prefs.enabled !== false
-  if (volEl) {
-    volEl.value = prefs.volume ?? 0.7
-    if (volVal) volVal.textContent = Math.round((prefs.volume ?? 0.7) * 100) + '%'
-  }
-  for (const type of ['done', 'blocked', 'qa']) {
-    const sel = document.getElementById(`notify-sound-${type}`)
-    if (sel) sel.value = prefs[type + '_sound'] ?? _defaultSounds[type]
-  }
-}
-
-const _notifySoundVolEl = document.getElementById('notify-sound-volume')
-const _notifySoundVolVal = document.getElementById('notify-sound-volume-value')
-if (_notifySoundVolEl) {
-  _notifySoundVolEl.addEventListener('input', () => {
-    if (_notifySoundVolVal) _notifySoundVolVal.textContent = Math.round(_notifySoundVolEl.value * 100) + '%'
-  })
-}
-
-const _notifySoundSaveBtn = document.getElementById('notify-sound-save-btn')
-if (_notifySoundSaveBtn) {
-  _notifySoundSaveBtn.addEventListener('click', () => {
-    const prefs = {
-      enabled: document.getElementById('notify-sound-enabled')?.checked ?? true,
-      volume: parseFloat(document.getElementById('notify-sound-volume')?.value ?? 0.7),
-      done_sound: document.getElementById('notify-sound-done')?.value ?? 'bamboo',
-      blocked_sound: document.getElementById('notify-sound-blocked')?.value ?? 'thud',
-      qa_sound: document.getElementById('notify-sound-qa')?.value ?? 'ding',
-    }
-    localStorage.setItem(NOTIFY_SOUND_KEY, JSON.stringify(prefs))
-    const statusEl = document.getElementById('notify-sound-status')
-    if (statusEl) {
-      statusEl.textContent = 'Saved'
-      statusEl.className = 'settings-status success'
-      setTimeout(() => { statusEl.textContent = '' }, 3000)
-    }
-  })
-}
-
-for (const type of ['done', 'blocked', 'qa']) {
-  const btn = document.getElementById(`notify-test-${type}`)
-  if (btn) {
-    btn.addEventListener('click', () => {
-      const key = document.getElementById(`notify-sound-${type}`)?.value ?? _defaultSounds[type]
-      const vol = parseFloat(document.getElementById('notify-sound-volume')?.value ?? 0.7)
-      const fn = _soundFns[key]
-      if (fn) try { fn(vol) } catch {}
-    })
-  }
-}
+// The sound settings UI lives in the notify plugin (notify-panel.js); app.js
+// only plays sounds (playNotifySound) with the prefs that panel saves.
 
 // ─── Settings panel (font size + ntfy + renderMode + codexRenderMode) ──
 
@@ -548,9 +495,6 @@ function loadSettings(serverSettings) {
     fontSizeRange.value = state.fontSize
     if (fontSizeValue) fontSizeValue.textContent = state.fontSize + 'px'
   }
-  loadNotifySoundSettings()
-  loadTurnNotifySettings()
-  loadNtfySettings()
   loadToolFoldSettings()
   loadAutoResumeSettings()
   loadSubagentVisSettings()
@@ -739,90 +683,6 @@ if (fontSizeSaveBtn) {
   })
 }
 
-// ─── ntfy settings ────────────────────────────────────────────────────────────
-
-async function loadNtfySettings() {
-  try {
-    const s = await fetchSettings()
-    const urlEl = document.getElementById('ntfy-url')
-    const topicEl = document.getElementById('ntfy-topic')
-    // Apply defaults only when empty
-    const ntfyUrl = s.ntfy_url || ''
-    const ntfyTopic = s.ntfy_topic || ''
-    if (urlEl) urlEl.value = ntfyUrl
-    if (topicEl) topicEl.value = ntfyTopic
-    // Set defaults if not yet configured
-    if (!ntfyUrl) {
-      if (urlEl) urlEl.placeholder = 'http://localhost'
-      try { await updateSetting('ntfy_url', 'http://localhost') } catch {}
-    }
-    if (!ntfyTopic) {
-      if (topicEl) topicEl.placeholder = 'yourname'
-      // Do not auto-set a default topic — leave blank until the user fills it
-    }
-  } catch {}
-}
-
-const _ntfySaveBtn = document.getElementById('ntfy-save-btn')
-if (_ntfySaveBtn) {
-  _ntfySaveBtn.addEventListener('click', async () => {
-    const url = document.getElementById('ntfy-url')?.value.trim() || ''
-    const topic = document.getElementById('ntfy-topic')?.value.trim() || ''
-    const statusEl = document.getElementById('ntfy-status')
-    try {
-      await updateSetting('ntfy_url', url)
-      await updateSetting('ntfy_topic', topic)
-      if (statusEl) {
-        statusEl.textContent = 'Saved'
-        statusEl.className = 'settings-status success'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = err.message
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    }
-  })
-}
-
-const _ntfyTestBtn = document.getElementById('ntfy-test-btn')
-if (_ntfyTestBtn) {
-  _ntfyTestBtn.addEventListener('click', async () => {
-    const url = document.getElementById('ntfy-url')?.value.trim() || ''
-    const topic = document.getElementById('ntfy-topic')?.value.trim() || ''
-    const statusEl = document.getElementById('ntfy-status')
-    if (!url || !topic) {
-      if (statusEl) {
-        statusEl.textContent = 'Fill in URL and topic first'
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-      return
-    }
-    try {
-      const endpoint = url.replace(/\/$/, '') + '/' + topic
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Title': 'Nanocode test', 'Tags': 'tada', 'Priority': '3', 'Content-Type': 'text/plain' },
-        body: 'Nanocode ntfy test notification',
-      })
-      if (statusEl) {
-        statusEl.textContent = resp.ok ? 'Sent!' : `HTTP ${resp.status}`
-        statusEl.className = resp.ok ? 'settings-status success' : 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = err.message
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    }
-  })
-}
-
 // ─── Turn-complete notification ───────────────────────────────────────────────
 // When a claude tab turn finishes after exceeding the threshold, we:
 //   1. Play the 'done' sound (respects global mute)
@@ -849,29 +709,7 @@ export function getTurnNotifyNtfy() {
   return p.ntfy !== false
 }
 
-function loadTurnNotifySettings() {
-  const p = getTurnNotifyPrefs()
-  const threshEl = document.getElementById('turn-notify-threshold')
-  const ntfyEl = document.getElementById('turn-notify-ntfy')
-  if (threshEl) threshEl.value = p.threshold ?? 10
-  if (ntfyEl) ntfyEl.checked = p.ntfy !== false
-}
-
-const _turnNotifySaveBtn = document.getElementById('turn-notify-save-btn')
-if (_turnNotifySaveBtn) {
-  _turnNotifySaveBtn.addEventListener('click', () => {
-    const threshold = parseFloat(document.getElementById('turn-notify-threshold')?.value ?? 10)
-    const ntfy = document.getElementById('turn-notify-ntfy')?.checked ?? true
-    const prefs = { threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 10, ntfy }
-    localStorage.setItem(TURN_NOTIFY_KEY, JSON.stringify(prefs))
-    const statusEl = document.getElementById('turn-notify-status')
-    if (statusEl) {
-      statusEl.textContent = 'Saved'
-      statusEl.className = 'settings-status success'
-      setTimeout(() => { statusEl.textContent = '' }, 3000)
-    }
-  })
-}
+// The turn-notify settings UI lives in the notify plugin (notify-panel.js).
 
 /** Called by the nanocode:turn-complete CustomEvent dispatched by ClaudeBlockRenderer. */
 function _onTurnComplete(evt) {

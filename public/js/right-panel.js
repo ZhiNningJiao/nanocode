@@ -21,9 +21,12 @@
 import { t } from './i18n.js'
 import {
   BUILTIN_PLUGINS,
+  PLUGINS_SETTING_KEY,
   builtinPlugin,
+  defaultEnabledPlugins,
   validateManifest,
 } from './plugins-registry.js'
+import { updateSetting } from './api.js'
 
 // 块A: 插件 pane 模块懒加载。
 // 之前顶部 eager import 全部 8 个 pane 模块（~30KB / 8 个 HTTP 请求），在页面加载时
@@ -176,12 +179,17 @@ let pluginStateReady = false
  * the cockpit (cockpit.js) shows before the workspace (and this panel) is
  * ever initialised. Idempotent.
  */
-export function initPluginState() {
+export function initPluginState(serverSettings) {
   if (pluginStateReady) return
   pluginStateReady = true
-  loadPersisted()
+  const serverList = serverSettings?.[PLUGINS_SETTING_KEY]
+  loadPersisted(serverList)
   validateBuiltins()
   for (const name of enabledNames) applyGlobal(name, true)
+  // First run against this server: seed its copy so the server-side background
+  // work (machine poll, Linear notifier) follows the same switch.
+  if (serverSettings && !Array.isArray(serverList)) persistEnabled()
+  document.dispatchEvent(new CustomEvent('nanocode:plugins-ready'))
 }
 
 export function isPluginEnabled(name) { return isEnabled(name) }
@@ -571,7 +579,7 @@ function resetPluginLoadStateFor(name) {
 
 // ── persistence ───────────────────────────────────────────────────────────────
 
-function loadPersisted() {
+function loadPersisted(serverList) {
   try {
     const d = localStorage.getItem(DOMAIN_KEY)
     // R2 B-2 migration: old tri-domain (session/ops/artifacts) → dual-group.
@@ -586,18 +594,24 @@ function loadPersisted() {
       if (s) activeSubTab[d] = s
     } catch {}
   }
-  try {
-    const raw = localStorage.getItem(ENABLED_KEY)
-    const arr = raw ? JSON.parse(raw) : null
-    if (Array.isArray(arr)) enabledNames = new Set(arr.filter((n) => builtinPlugin(n)))
-    else enabledNames = new Set(BUILTIN_PLUGINS.map((p) => p.name))
-  } catch {
-    enabledNames = new Set(BUILTIN_PLUGINS.map((p) => p.name))
+  // Server copy wins (same switch on every browser); localStorage is only the
+  // no-flash cache for pages that start before settings arrive; no record at
+  // all = the kernel set (registry `defaultOn`), not "everything on".
+  let arr = Array.isArray(serverList) ? serverList : null
+  if (!arr) {
+    try {
+      const raw = localStorage.getItem(ENABLED_KEY)
+      const cached = raw ? JSON.parse(raw) : null
+      if (Array.isArray(cached)) arr = cached
+    } catch {}
   }
+  enabledNames = new Set((arr || defaultEnabledPlugins()).filter((n) => builtinPlugin(n)))
 }
 
 function persistEnabled() {
-  try { localStorage.setItem(ENABLED_KEY, JSON.stringify([...enabledNames])) } catch {}
+  const list = [...enabledNames]
+  try { localStorage.setItem(ENABLED_KEY, JSON.stringify(list)) } catch {}
+  updateSetting(PLUGINS_SETTING_KEY, list).catch((err) => console.warn('[plugins] saving the switch failed:', err?.message || err))
 }
 
 function validateBuiltins() {

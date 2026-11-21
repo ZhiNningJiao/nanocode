@@ -455,10 +455,15 @@ export async function renderUsagePane(pane) {
   // Probe section needs no fetch — render immediately.
   fill(probeSlot, renderAigwProbeSection(pane))
   // Fire each source independently; whichever resolves first paints first.
-  j('/api/usage/aigw-budget').then((d) => fill(budgetSlot, renderAigwBudgetSection(d)))
   j('/api/usage/claude').then((d) => fill(claudeSlot, renderClaudeUsageSection(d)))
   j('/api/usage/opencode').then((d) => fill(opencodeSlot, renderOpencodeUsageSection(d)))
-  j('/api/usage/summary').then((d) => fill(summarySlot, renderUsageSummarySection(d)))
+  // The AIGW monthly card reads the summary's `aigw-budget` source — one
+  // request, one number (the old separate /api/usage/aigw-budget is gone).
+  j('/api/usage/summary').then((d) => {
+    const budget = Array.isArray(d?.sources) ? d.sources.find((s) => s.source === 'aigw-budget') : null
+    fill(budgetSlot, renderAigwBudgetSection(budget || { error: d?.error || 'aigw-budget source missing' }))
+    fill(summarySlot, renderUsageSummarySection(d))
+  })
 }
 
 // ── AIGW monthly budget card (MES-13788 延续: /user/info 剩余额度 + 自适配档) ──

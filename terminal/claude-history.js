@@ -476,58 +476,6 @@ export async function countUserMessagesAsync(jsonlPath, capBytes = COUNT_CAP_BYT
 }
 
 /**
- * List the most recent "longer" conversations for a project's cwd.
- *
- * Used by the Claude Code tab picker (需求3 Auto Resume): when the user opens a
- * new Claude Code tab we show up to `limit` recent conversations sorted by length
- * (byte size = 字节数, an explicit sort criterion in the requirement) so they can
- * pick one to 继续 (resume) or start a 开启新对话 (fresh). Each entry carries a
- * summary (first user message), an approximate user-message count, byte size,
- * mtime and a relative time string — everything the picker needs without a second
- * round-trip.
- *
- * Returns an array of { sessionId, summary, messageCount, byteSize, mtime, relTime }.
- */
-export function scanRecentConversations(home, cwd, limit = 5, now = Date.now(), configDir = null) {
-  const projectDir = claudeProjectsDir(configDir || join(home, '.claude'), cwd)
-  if (!existsSync(projectDir)) return []
-  let files
-  try { files = readdirSync(projectDir) } catch { return [] }
-  const entries = []
-  for (const f of files) {
-    if (!f.endsWith('.jsonl')) continue
-    const fullPath = join(projectDir, f)
-    try {
-      const st = statSync(fullPath)
-      // Skip empty/trivial files (a brand-new session with no turns yet).
-      if (st.size < 200) continue
-      entries.push({
-        sessionId: f.replace(/\.jsonl$/, ''),
-        fullPath,
-        mtimeMs: st.mtimeMs,
-        byteSize: st.size,
-      })
-    } catch {}
-  }
-  // 需求3 紧急修正: "最近的 5 条较长对话" — sort by most-recent activity (mtime)
-  // desc as the PRIMARY key, with byte size desc as a secondary tiebreaker (the
-  // "较长" criterion among equally-recent files). The old byte-size-desc-first
-  // sort let big OLD sessions permanently suppress recent small ones (master saw
-  // only stale conversations on 9475). The < 200-byte skip above already drops
-  // fragmentary 1-message sessions, so "较长" survives as the secondary key.
-  entries.sort((a, b) => b.mtimeMs - a.mtimeMs || b.byteSize - a.byteSize)
-  const top = entries.slice(0, limit)
-  return top.map((e) => ({
-    sessionId: e.sessionId,
-    summary: extractSummary(e.fullPath),
-    messageCount: countUserMessages(e.fullPath),
-    byteSize: e.byteSize,
-    mtime: new Date(e.mtimeMs).toISOString(),
-    relTime: relTimeFromMtime(e.mtimeMs, now),
-  }))
-}
-
-/**
  * Scan a single (configDir, cwd) project-slug dir for jsonl conversations.
  * Internal helper used by scanRecentConversationsMulti so each (team, cwd)
  * pair is scanned exactly once with the same byte-size sort criteria.
@@ -576,7 +524,7 @@ function _scanProjectDirEntries(projectDir, teamMeta, sourceCwd, activeConfigDir
  *              project tab (主人常在 home 跑秘书会话). Home entries are
  *              flagged `isHome=true`.
  *
- * Each entry carries the fields scanRecentConversations returns plus:
+ * Each entry carries { sessionId, summary, messageCount, byteSize, mtime, relTime } plus:
  *   teamId, teamName, configDir, cwd (the session's real cwd from the jsonl),
  *   isCrossTeam, isHome — everything the picker needs to resume the session
  *   with the owning team's CLAUDE_CONFIG_DIR and the session's original cwd.

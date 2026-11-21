@@ -22,6 +22,7 @@ import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntr
 import { readArmyStatus, readWakerLogTail, getWakerHealth, collectBriefing } from './historian.js'
 import { startWaker, stopWaker, restartWaker, getWakerControlState, setInterval as setWakerInterval } from './waker-control.js'
 import { loadMachinesConfig, collectAllMachines, recommendHeavyWorkloadTarget } from './machines.js'
+import { PLUGINS_SETTING_KEY, isPluginEnabled } from './plugins-state.js'
 import { createCommandCenterRoutes } from './command-center.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
@@ -273,6 +274,7 @@ app.put('/api/settings', (req, res) => {
     return res.status(400).json({ error: `Invalid cli_provider: ${value}` })
   }
   store.setSetting(key, value)
+  if (key === PLUGINS_SETTING_KEY) syncPluginBackgroundWork()
   res.json({ ok: true })
 })
 
@@ -729,8 +731,22 @@ app.get('/api/machines', (_req, res) => {
 // ─── Command Center (指挥舱 phase 1) — see server/command-center.js ─────────
 app.use(createCommandCenterRoutes())
 
-setTimeout(() => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }, 2000)
-setInterval(() => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }, MACHINES_POLL_MS)
+// The machine board is an optional plugin (default off): its SSH poll runs
+// only while the plugin is switched on (plugins_enabled), not "whether or not
+// anyone looks" as before.
+let machinesTimer = null
+function syncMachinesPoll() {
+  const on = isPluginEnabled(store, 'machines')
+  if (on && !machinesTimer) {
+    const tick = () => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }
+    setTimeout(tick, 2000)
+    machinesTimer = setInterval(tick, MACHINES_POLL_MS)
+  } else if (!on && machinesTimer) {
+    clearInterval(machinesTimer)
+    machinesTimer = null
+    machinesSnapshot = { machines: [], checkedAt: null, recommended: null }
+  }
+}
 
 app.post('/api/historian/waker/start', asyncWrap(async (req, res) => {
   const { live } = req.body || {}
@@ -1023,7 +1039,15 @@ startQaWatcher(broadcastNotify)
 // Start the Linear → ntfy polling bridge (no webhook, all keys server-side).
 // Reads poll interval and API key from the store; gracefully degrades if
 // Linear key or lanes.json is unavailable.
-startLinearNotifier({ store, broadcastNotify })
+// Background work of optional plugins follows the one plugin switch: machine
+// board SSH poll ('machines'), Linear → ntfy notifier ('notify'; also needs a
+// Linear key). Re-synced whenever the browser saves plugins_enabled.
+function syncPluginBackgroundWork() {
+  syncMachinesPoll()
+  if (isPluginEnabled(store, 'notify')) startLinearNotifier({ store, broadcastNotify })
+  else stopLinearNotifier()
+}
+syncPluginBackgroundWork()
 
 // Run initial check after startup, then every 30s
 setTimeout(() => runServiceChecks(broadcastNotify), 5000)

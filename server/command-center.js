@@ -31,8 +31,7 @@ import { readFileSync } from 'node:fs'
 import { readFile, stat, open } from 'node:fs/promises'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadPersonalConfig, resolvePluginSecrets } from '../terminal/personal-config.js'
-import { builtinPlugin } from '../public/js/plugins-registry.js'
+import { resolveLinearApiKey } from './linear-key.js'
 import { CARS_EXPORT_SCHEMA, GANTT_SCHEMA } from '../tools/command-center/export-cars.mjs'
 import { safeHttpUrl } from '../public/js/command-center-url.js'
 import { str, arr, validIso } from './command-center-fields.js'
@@ -420,17 +419,12 @@ export function loadCommandCenterConfig(path = CC_CONFIG_PATH) {
 
 // ─── Sources (IO) ───────────────────────────────────────────────────────────
 
-// The key goes through the plugin permission gate (manifest declares
-// personal.linear) — server-side only, never serialized to the browser.
-function defaultLinearApiKey() {
-  return resolvePluginSecrets(loadPersonalConfig(), builtinPlugin('command-center')).linear?.apiKey || null
-}
 
 /**
  * Cached Linear reader. A failure keeps lastOkAt for the "last success" label
  * but drops the data (no silently stale numbers — PRD P0-8).
  */
-export function createLinearSource({ fetchImpl = fetch, getApiKey = defaultLinearApiKey, now = () => Date.now() } = {}) {
+export function createLinearSource({ fetchImpl = fetch, getApiKey = resolveLinearApiKey, now = () => Date.now() } = {}) {
   let snap = null
   let snapKey = null
   let lastOkAt = null

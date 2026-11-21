@@ -92,7 +92,7 @@ export function initCockpit({ serverSettings, enterWorkspace }) {
   try { view = normalizeView(localStorage.getItem(VIEW_KEY)) } catch { view = 'list' }
   try { span = normalizeSpan(localStorage.getItem(SPAN_KEY)) } catch { span = 24 }
   try { fold = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') || {} } catch { fold = {} }
-  initPluginState()
+  initPluginState(serverSettings)
   applyServerLayout(serverSettings?.[COCKPIT_SETTING_KEY])
   document.addEventListener('nanocode:plugin-toggled', onPluginToggled)
   document.addEventListener('nanocode:cockpit-focus', (ev) => focusModule(ev.detail?.plugin))
@@ -148,9 +148,9 @@ function updateHeaderSwitch() {
 function applyServerLayout(raw) {
   layout = normalizeLayout(raw)
   if (!layout.seeded) {
-    // first run: the cockpit is the main page, so every module starts on
-    for (const m of COCKPIT_MODULES) setPluginEnabled(m.plugin, true)
-    layout = { ...layout, off: [] }
+    // first run: modules follow the plugin switch (kernel plugins are on by
+    // default; the machine board is an optional plugin and starts off)
+    layout = { ...layout, off: COCKPIT_MODULES.filter((m) => !isPluginEnabled(m.plugin)).map((m) => m.id) }
     saveLayout()
     return
   }
