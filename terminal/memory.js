@@ -8,7 +8,7 @@ import { mapLimit, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bou
 import { claudeProjectSlugToCwd } from './session-naming.js'
 import { listTeams, listTeamsAsync } from './usage.js'
 
-// ── Claude memory viewer (MES-13740 需求7) ───────────────────────────────────
+// ── Claude memory viewer ──────────────────────────────────────────────────────
 //
 // Memory data source: each team config dir's `projects/<slug>/memory/*.md`
 // (MEMORY.md + fragment md files). The plugin lets the user browse by

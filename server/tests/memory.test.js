@@ -41,7 +41,7 @@ function writeMem(configDir, slug, file, content) {
 
 describe('memory: claudeProjectSlugToCwd (display decode)', () => {
   it('replaces - with / for an absolute path', () => {
-    assert.equal(claudeProjectSlugToCwd('-storage-home-someone'), '/storage/home/someone')
+    assert.equal(claudeProjectSlugToCwd('-data-users-someone'), '/data/users/someone')
   })
   it('decodes -tmp to /tmp', () => {
     assert.equal(claudeProjectSlugToCwd('-tmp'), '/tmp')
