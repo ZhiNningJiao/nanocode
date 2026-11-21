@@ -29,6 +29,7 @@ import { join, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { createScanCache, mapLimit, readHead, readTailLines, readdirSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 import { sessionSourceRoots } from './usage.js'
+import { claudeProjectSlugToCwd, isSystemWrapper } from './session-naming.js'
 
 const PREVIEW_MAXLEN = 200
 const TAIL_TURNS = 6
@@ -128,12 +129,6 @@ function extractCodexUserText(payload) {
   return ''
 }
 
-function isSystemWrapper(text) {
-  return text.startsWith('<environment_context>') ||
-    text.startsWith('<permissions') ||
-    text.startsWith('<system_')
-}
-
 // ── Claude ───────────────────────────────────────────────────────────────────
 
 async function scanClaudeRoot(root, progress) {
@@ -178,7 +173,7 @@ function extractClaudeSession(raw, { file, projectSlug }) {
   return {
     id: sessionId,
     source: 'claude',
-    cwd: claudeSlugToCwd(projectSlug),
+    cwd: claudeProjectSlugToCwd(projectSlug),
     timestamp,
     cliVersion: '',
     model: '',
@@ -200,16 +195,6 @@ function extractClaudeUserText(message) {
     }
   }
   return ''
-}
-
-function claudeSlugToCwd(slug) {
-  if (!slug) return ''
-  // Claude Code encodes cwd as a slug where every '/' (including the leading
-  // one of an absolute path) becomes '-': "/jfs/home/x" → "-jfs-home-x".
-  // Reversing is a single replace(/-/g,'/'). The old code stripped the leading
-  // '-' first, which dropped the root slash and yielded "jfs/home/x" — wrong
-  // cwd display + broke fork project matching (cwd never matched a project).
-  return slug.replace(/-/g, '/')
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────

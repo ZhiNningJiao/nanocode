@@ -17,8 +17,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { claudeProjectSlugToCwd } from '../../terminal/session-naming.js'
 import {
-  claudeProjectSlugToCwd,
   listMemoryProjects,
   listMemoryTree,
   listMemoryFiles,
@@ -41,7 +41,7 @@ function writeMem(configDir, slug, file, content) {
 
 describe('memory: claudeProjectSlugToCwd (display decode)', () => {
   it('replaces - with / for an absolute path', () => {
-    assert.equal(claudeProjectSlugToCwd('-storage-home-zhiningjiao'), '/storage/home/zhiningjiao')
+    assert.equal(claudeProjectSlugToCwd('-storage-home-someone'), '/storage/home/someone')
   })
   it('decodes -tmp to /tmp', () => {
     assert.equal(claudeProjectSlugToCwd('-tmp'), '/tmp')

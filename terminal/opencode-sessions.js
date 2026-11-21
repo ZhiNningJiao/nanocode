@@ -17,20 +17,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
-// Relative time formatter — kept local (identical to recent-agents.js
-// relTimeFromMtime) to avoid a cross-module dependency for one helper.
-function relTimeFromMtime(mtimeMs, nowMs) {
-  const diff = nowMs - mtimeMs
-  if (!Number.isFinite(diff) || diff < 0) return ''
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  return `${days}d ago`
-}
+import { relTimeFromMtime } from './session-naming.js'
 
 /**
  * Pure: normalise `opencode session list --format json` stdout into a

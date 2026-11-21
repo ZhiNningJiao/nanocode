@@ -25,6 +25,7 @@ import { createRequire } from 'node:module'
 import { loadPersonalConfig, DEFAULT_AIGW_BASE, DEFAULT_AIGW_BUDGET_USD } from './personal-config.js'
 import { forEachLine, mapLimit, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 import { quotaSeverity } from '../public/js/quota-levels.js'
+import { claudeProjectSlugToCwd } from './session-naming.js'
 
 // node:sqlite is experimental (Node 22+). Guarded require so an unavailable /
 // older runtime degrades to an honest "source unavailable" instead of crashing
@@ -450,17 +451,6 @@ function isValidSlug(slug) {
 }
 function isValidMemFile(name) {
   return typeof name === 'string' && name.length > 0 && MEM_FILE_RE.test(name) && !name.includes('..')
-}
-
-/**
- * Decode a Claude project slug back to an approximate cwd. Claude encodes cwd
- * by replacing '/' with '-' (see claudeProjectsDir), which is lossy when a path
- * segment itself contains '-'. This is for DISPLAY ONLY — file operations use
- * the exact slug, never the decoded cwd, so the lossiness never affects safety.
- */
-export function claudeProjectSlugToCwd(slug) {
-  if (!slug) return ''
-  return String(slug).replace(/-/g, '/')
 }
 
 /**
