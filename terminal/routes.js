@@ -342,7 +342,7 @@ export function createTerminalRoutes(store, opts = {}) {
   })
 
   // POST /api/projects/:id/tabs/:tabId/claude-session — start (or confirm) the
-  // claude session of an existing claude tab WITHOUT a browser (pc136btn_1915).
+  // claude session of an existing claude tab WITHOUT a browser.
   // Same localhost-only guard as /api/sessions + inject: it is the server-side
   // half of "open this tab", used by the restart guard / new-secretary script so
   // the tab shows up in GET /api/sessions and can take an inject. Idempotent:

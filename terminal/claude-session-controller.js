@@ -18,8 +18,8 @@ import { acquireSessionLock, releaseSessionLock, stealSessionLock, getLockHolder
 
 // cli driver binary. Unset → plain `claude` resolved by the login shell's PATH
 // (unchanged behaviour). Set → that executable (same env var the SDK/tmux
-// drivers already honour). On PC136 the login shell's PATH puts the JFS copy
-// (over sshfs) first; the unit points this at the local-disk binary instead.
+// drivers already honour). Useful when the login shell's PATH puts a copy on a
+// slow network mount first: the unit points this at a local-disk binary.
 function claudeCliBin() {
   const value = process.env.NANOCODE_CLAUDE_CODE_EXECUTABLE
   return typeof value === 'string' && value.trim() ? `'${value.trim().replace(/'/g, "'\\''")}'` : 'claude'
@@ -1368,7 +1368,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     // --resume a nonexistent session ("No conversation found") on its first turn.
     // Tabs persisted before the flag existed lack claudeSessionStarted entirely
     // (undefined !== false), so they keep the resume behaviour; tabs with real
-    // history are also covered by the disk-recovery path below (diskRecovered).
+    // history are also covered by the disk recovery path below (diskRecovered).
     const explicitSessionId = storedSessionId !== null && tab?.claudeSessionStarted !== false
     let claudeSessionId = storedSessionId || randomUUID()
 
@@ -1436,7 +1436,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
           )
         }
       } catch (err) {
-        // Best-effort recovery: never let a disk-read failure block attach.
+        // Best-effort recovery: never let a failed disk read block attach.
         console.warn(`[claude:session] Tab ${tabId} auto-recovery failed: ${err?.message}`)
       }
     }
@@ -1475,7 +1475,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       history: recoveredEvents.slice(-500),
       busy: false,
       turnCount: initialTurnCount,
-      // Carries the "try --resume on first turn" flag (store-chosen or disk-recovered).
+      // Carries the "try --resume on first turn" flag (store-chosen or recovered from disk).
       // Reset to false by fallback paths once --resume has been attempted.
       explicitSessionId: resolvedExplicit || diskRecovered,
       // 需求3: tab opened via "开启新对话" — forces a truly-new --session-id first
@@ -1566,7 +1566,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     }
   }
 
-  // Headless session start (pc136btn_1915): the same state + lock steps a WS attach
+  // Headless session start: the same state + lock steps a WS attach
   // runs, without a browser. After a server restart a tab only re-entered
   // claudeSessions (= GET /api/sessions, the table POST /api/sessions/:id/inject
   // routes on) when a browser websocket attached; this lets the restart guard and
@@ -2325,7 +2325,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     // starved libuv pool delaying gzip) a ping arrives first. A `ws.once`
     // listener consumed that ping and the later attach was never handled —
     // the WS stays open, the client never reconnects, the tab is gone until a
-    // page reload (nanolock2_2000: PC136 secretary tab after restart).
+    // page reload (e.g. the main-agent tab after a server restart).
     const once = (raw) => {
       let msg
       try {

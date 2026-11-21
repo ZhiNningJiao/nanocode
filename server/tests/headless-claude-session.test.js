@@ -1,6 +1,6 @@
 /**
  * POST /api/projects/:id/tabs/:tabId/claude-session — headless claude session
- * start (pc136btn_1915). Helpers copied from session-inject.test.js.
+ * start. Helpers copied from session-inject.test.js.
  *
  * Inject writes a user message into an ACTIVE session's input channel — the
  * server-side equivalent of the WS 'claude-input' message. It lets an external

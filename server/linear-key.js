@@ -1,5 +1,5 @@
 /**
- * The one place the server resolves the task-tracker (Linear) API key.
+ * The one place the server resolves the issue tracker (Linear) API key.
  *
  * Both Linear readers — the command-center big-event source and the Linear →
  * ntfy notifier — call this, so "the cockpit sees Linear but the notifier says

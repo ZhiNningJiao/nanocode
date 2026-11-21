@@ -675,7 +675,7 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
     process.env.XDG_DATA_HOME = join(tmp, 'xdg')
     delete process.env.GLM_XDG_DATA_HOME
     // no AIGW key in the fake home: readAigwKey still reads the real file, so
-    // the AIGW sources get 403 from the stub -> unavailable.
+    // the gateway sources get 403 from the stub -> unavailable.
     // That's honest and the shape is what we assert.
     try {
       const sum = await buildUsageSummary({ home: tmp, store, now: NOW })
@@ -706,9 +706,10 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
   it('includes the aigw-budget source via injected fetchImpl (MES-13788 延续)', async () => {
     mkdirSync(join(tmp, '.claude', 'projects'), { recursive: true })
     // The key is resolved from the summary's home (not the real one) — give the
-    // fake home a key so the stubbed /user/info is actually reached.
-    mkdirSync(join(tmp, '.config'), { recursive: true })
-    writeFileSync(join(tmp, '.config', 'meshy-aigw.key'), 'test-key\n')
+    // fake home a personal-config key so the stubbed /user/info is reached.
+    mkdirSync(join(tmp, '.config', 'nanocode'), { recursive: true })
+    writeFileSync(join(tmp, '.config', 'nanocode', 'personal.json'), JSON.stringify({ aigw: { key: 'test-key' } }))
+    resetPersonalConfigCache()
     const store = createStore(':memory:')
     store.setSetting('claude_config_dir', join(tmp, '.claude'))
     const prevXdg = process.env.XDG_DATA_HOME
@@ -742,6 +743,8 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
       assert.equal(monthly.limit, 1000)
       assert.equal(monthly.used, 197.83)
     } finally {
+      rmSync(join(tmp, '.config', 'nanocode', 'personal.json'), { force: true })
+      resetPersonalConfigCache()
       if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
       else process.env.XDG_DATA_HOME = prevXdg
       if (prevGlm === undefined) delete process.env.GLM_XDG_DATA_HOME

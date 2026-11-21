@@ -1,6 +1,6 @@
 /**
  * The one yellow / red line for every quota number in Nanocode — the cockpit
- * quota block + header chip, the usage panel, the AIGW monthly card and the
+ * quota block + header chip, the usage panel, the gateway monthly budget card and the
  * AI-readable /api/usage/summary `severity` all use these. (Before: the
  * cockpit said 80 / 95, the usage panel 75 / 90 — the same 78% was yellow in
  * one place and plain in the other.) Shared by server (terminal/usage.js) and
