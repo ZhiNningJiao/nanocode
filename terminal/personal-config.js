@@ -86,10 +86,16 @@ function readPersonalFile(path) {
 
 /**
  * Resolve the personal config path for a given home. Honours an explicit
- * `configPath` (used by tests), then `<home>/.config/nanocode/personal.json`.
+ * `configPath` (used by tests), then $NANOCODE_PERSONAL_CONFIG (host-local
+ * file on a shared home), then `<home>/.config/nanocode/personal.json`.
  */
 export function personalConfigPath({ home, configPath } = {}) {
   if (configPath) return configPath
+  // Deployment knob: a host whose home directory is shared with other machines
+  // points this at a host-local file, so host-specific settings (e.g.
+  // claude.autoDiscoverTeams=false + local pools) do not apply to every machine
+  // that shares the home. Keys missing there still fall back to ~/.config/*.key.
+  if (process.env.NANOCODE_PERSONAL_CONFIG) return process.env.NANOCODE_PERSONAL_CONFIG
   const homeDir = home || homedir()
   return join(homeDir, '.config', 'nanocode', 'personal.json')
 }

@@ -117,6 +117,22 @@ describe('sessions-browser (codex resume/fork picker)', () => {
     assert.match((await previewSession({ source: 'claude', file: homeFile, home: homeB })).error, /outside/)
   })
 
+  it('NANOCODE_PERSONAL_CONFIG points at a host-local file (shared home keeps its own personal.json)', () => {
+    const local = join(root, 'host-local-personal.json')
+    writeFileSync(local, JSON.stringify({ claude: { autoDiscoverTeams: false, teams: [{ name: 'Pool 1', configDir: pool }] } }))
+    const prev = process.env.NANOCODE_PERSONAL_CONFIG
+    process.env.NANOCODE_PERSONAL_CONFIG = local
+    try {
+      // homeA has no switch in its own personal.json; the host-local file wins.
+      assert.deepEqual(sessionSourceRoots(homeA), { claudeProjectRoots: [join(pool, 'projects')], codexSessionsDir: null })
+    } finally {
+      if (prev === undefined) delete process.env.NANOCODE_PERSONAL_CONFIG
+      else process.env.NANOCODE_PERSONAL_CONFIG = prev
+      resetPersonalConfigCache()
+    }
+    assert.equal(sessionSourceRoots(homeA).claudeProjectRoots[0], join(homeA, '.claude', 'projects'))
+  })
+
   it('default (switch absent) keeps the historical discovery: ~/.claude + ~/.claude-team*', () => {
     mkdirSync(join(homeA, '.claude-team2'), { recursive: true })
     const paths = listTeams(homeA, null).teams.map((t) => t.path)
