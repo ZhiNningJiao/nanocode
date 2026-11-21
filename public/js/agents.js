@@ -5,6 +5,7 @@
  */
 
 import { t } from './i18n.js'
+import { isCockpitActive } from './cockpit.js'
 
 let _agents = []
 let _drawerOpen = false
@@ -64,9 +65,14 @@ export function initAgentDrawer() {
     if (document.getElementById('agent-add-tmux')) document.getElementById('agent-add-tmux').value = ''
   })
 
-  // Initial badge update on load + periodic refresh
+  // Initial badge update on load + periodic refresh — only while the badge is
+  // on screen: not on the cockpit page (the workspace header is hidden there)
+  // and not in a background tab. It used to ask tmux every 30s regardless.
   _updateToggleBadge()
-  setInterval(_updateToggleBadge, 30000)
+  setInterval(() => {
+    if (document.hidden || isCockpitActive()) return
+    _updateToggleBadge()
+  }, 30000)
 }
 
 function _startAutoRefresh() {
