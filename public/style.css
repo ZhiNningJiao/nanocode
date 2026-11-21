@@ -6102,8 +6102,8 @@ body.workspace-active .landing-overlay { display: none; }
   padding: var(--s-3);
   background: var(--bg-card);
 }
-.mach-card-warn { border-color: var(--warning); }
-.mach-card-down { border-color: var(--error); opacity: 0.85; }
+.mach-card-warn { border-color: var(--warning); border-width: 2px; }
+.mach-card-down { border-color: var(--error); border-width: 2px; opacity: 0.85; }
 .mach-card-title {
   display: flex;
   align-items: center;

@@ -169,7 +169,7 @@ function renderCard(m) {
 
   const title = document.createElement('div')
   title.className = 'mach-card-title'
-  title.innerHTML = `<span class="service-dot up"></span> ${escapeHtml(m.label)}`
+  title.innerHTML = `<span class="service-dot ${anyWarn ? 'degraded' : 'up'}"></span> ${escapeHtml(m.label)}`
   card.appendChild(title)
 
   const headline = document.createElement('div')
