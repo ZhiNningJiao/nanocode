@@ -24,6 +24,7 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { loadPersonalConfig, DEFAULT_AIGW_BASE, DEFAULT_AIGW_BUDGET_USD } from './personal-config.js'
 import { forEachLine, mapLimit, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
+import { quotaSeverity } from '../public/js/quota-levels.js'
 
 // node:sqlite is experimental (Node 22+). Guarded require so an unavailable /
 // older runtime degrades to an honest "source unavailable" instead of crashing
@@ -334,25 +335,24 @@ export async function listTeamsAsync(home, store) {
 
 /**
  * Session-file roots the session listings (sessions browser, recent agents)
- * scan. Auto-discovery on (default): ~/.claude/projects + ~/.codex/sessions,
- * exactly as before. Auto-discovery off (personal claude.autoDiscoverTeams=
- * false): only the declared pools' projects/ dirs and the declared
- * codex.sessionsDir — nothing under home is touched.
+ * scan. The Claude pools are exactly listTeams' answer — the same pools the
+ * team picker, the resume picker and the usage summary see (before, the
+ * default here was ~/.claude/projects only, so Team2 sessions were missing
+ * from the sessions plugin and the recent-agents drawer). Auto-discovery off
+ * (personal claude.autoDiscoverTeams=false): only the declared pools and the
+ * declared codex.sessionsDir — nothing under home is touched. Async: the pool
+ * discovery reads HOME, which may be a slow mount.
  * Returns { claudeProjectRoots: string[], codexSessionsDir: string|null }.
  */
-export function sessionSourceRoots(home) {
+export async function sessionSourceRoots(home) {
   const homeDir = home || homedir()
   const personal = loadPersonalConfig({ home: homeDir })
   const declaredCodex = personal?.codex?.sessionsDir || null
-  if (personal?.claude?.autoDiscoverTeams !== false) {
-    return {
-      claudeProjectRoots: [join(homeDir, '.claude', 'projects')],
-      codexSessionsDir: declaredCodex || join(homeDir, '.codex', 'sessions'),
-    }
-  }
+  const autoDiscover = personal?.claude?.autoDiscoverTeams !== false
+  const { teams } = await listTeamsAsync(homeDir, null)
   return {
-    claudeProjectRoots: listTeams(homeDir, null).teams.map((t) => join(t.path, 'projects')),
-    codexSessionsDir: declaredCodex,
+    claudeProjectRoots: teams.map((t) => join(t.path, 'projects')),
+    codexSessionsDir: declaredCodex || (autoDiscover ? join(homeDir, '.codex', 'sessions') : null),
   }
 }
 
@@ -1164,11 +1164,7 @@ export function mapClaudeOAuthToWindows(apiResp, { source, label, now = Date.now
 }
 
 function severityFor(util) {
-  const u = Number(util)
-  if (!Number.isFinite(u)) return null
-  if (u >= 90) return 'critical'
-  if (u >= 75) return 'warning'
-  return 'normal'
+  return quotaSeverity(util)
 }
 
 /**

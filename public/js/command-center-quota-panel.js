@@ -9,13 +9,12 @@
  *     "旧"; a window past its reset time shows "已重置，读数作废" instead of a %.
  */
 import { t } from './i18n.js'
+import { quotaSeverity } from './quota-levels.js'
 import { ensureCss, esc, fmtTime, fmtAgo, downBlock, headerChip, removeHeaderChip, openPluginTab } from './command-center-format.js'
 
 const POLL_MS = 60_000
 const CHIP = 'quota'
 const TAB_ID = 'cc-quota'
-const WARN_PCT = 80
-const HOT_PCT = 95
 
 const views = new Set() // right-panel tab + cockpit block
 let chipOn = false
@@ -55,8 +54,8 @@ function syncTimer() {
 }
 
 function level(pct) {
-  if (pct == null) return 'none'
-  return pct >= HOT_PCT ? 'hot' : pct >= WARN_PCT ? 'warn' : 'ok'
+  const sev = quotaSeverity(pct)
+  return sev == null ? 'none' : sev === 'critical' ? 'hot' : sev === 'warning' ? 'warn' : 'ok'
 }
 
 // ─── header chip ────────────────────────────────────────────────────────────

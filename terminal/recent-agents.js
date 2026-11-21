@@ -105,7 +105,7 @@ export async function extractSummaryAsync(jsonlPath) {
 export async function scanRecentAgents(home, now = Date.now(), progress = { stopped: false }) {
   const stop = () => progress.stopped
   const dirs = []
-  for (const root of sessionSourceRoots(home).claudeProjectRoots) {
+  for (const root of (await sessionSourceRoots(home)).claudeProjectRoots) {
     for (const d of await readdirSafe(root, { withFileTypes: true })) {
       if (d.isDirectory()) dirs.push({ root, name: d.name })
     }

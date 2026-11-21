@@ -15,6 +15,7 @@
 
 import { fetchSettings, updateSetting } from './api.js'
 import { t } from './i18n.js'
+import { quotaSeverity } from './quota-levels.js'
 
 const AIGW_KEY = 'aigw_model'
 const CLAUDE_MODEL_KEY = 'claude_model'
@@ -526,8 +527,9 @@ function renderAigwBudgetSection(budget) {
   const fill = document.createElement('div')
   fill.className = 'rp-budget-bar-fill'
   if (Number.isFinite(pctUsed)) fill.style.width = `${Math.min(100, Math.max(0, pctUsed))}%`
-  if (pctUsed >= 90) fill.classList.add('rp-budget-bar-critical')
-  else if (pctUsed >= 75) fill.classList.add('rp-budget-bar-warning')
+  const sev = quotaSeverity(pctUsed)
+  if (sev === 'critical') fill.classList.add('rp-budget-bar-critical')
+  else if (sev === 'warning') fill.classList.add('rp-budget-bar-warning')
   bar.appendChild(fill)
   section.appendChild(bar)
 

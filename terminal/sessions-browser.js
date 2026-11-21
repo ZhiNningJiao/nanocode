@@ -49,8 +49,8 @@ const rootCache = createScanCache({
   },
 })
 
-function rootKeys(home, source) {
-  const { claudeProjectRoots, codexSessionsDir } = sessionSourceRoots(home)
+async function rootKeys(home, source) {
+  const { claudeProjectRoots, codexSessionsDir } = await sessionSourceRoots(home)
   const keys = []
   if (source !== 'claude' && codexSessionsDir) keys.push(`codex\0${codexSessionsDir}`)
   if (source !== 'codex') for (const dir of claudeProjectRoots) keys.push(`claude\0${dir}`)
@@ -226,7 +226,7 @@ export function resetSessionsCache() { rootCache.clear() }
  * refreshes in the background.
  */
 export async function listSessions({ source, limit, home = homedir(), deadlineMs = LIST_DEADLINE_MS } = {}) {
-  const results = await Promise.all(rootKeys(home, source).map((k) => rootCache.get(k, { deadlineMs })))
+  const results = await Promise.all((await rootKeys(home, source)).map((k) => rootCache.get(k, { deadlineMs })))
   const all = results.flatMap((r) => r.items)
   all.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
   const out = sliceSessions(all, source, limit)
@@ -256,7 +256,7 @@ function isUnder(file, dir) {
  * (cached, deadline-bounded) listing.
  */
 async function resolvePreviewFile(source, id, file, home, deadlineMs) {
-  const { claudeProjectRoots, codexSessionsDir } = sessionSourceRoots(home)
+  const { claudeProjectRoots, codexSessionsDir } = await sessionSourceRoots(home)
   const roots = source === 'codex' ? [codexSessionsDir].filter(Boolean) : claudeProjectRoots
   if (file) {
     if (!file.endsWith('.jsonl') || !roots.some((r) => isUnder(file, r))) {
@@ -266,7 +266,7 @@ async function resolvePreviewFile(source, id, file, home, deadlineMs) {
   }
   if (!id) return { error: 'session file not found' }
   const list = await listSessions({ source, limit: 200, home, deadlineMs })
-  const hit = (await Promise.all(rootKeys(home, source).map((k) => rootCache.get(k, { deadlineMs: 0 }))))
+  const hit = (await Promise.all((await rootKeys(home, source)).map((k) => rootCache.get(k, { deadlineMs: 0 }))))
     .flatMap((r) => r.items).find((s) => s.id === id)
   if (hit) return { file: hit.file }
   return { error: list.partial ? `session file not found (listing partial: ${list.partialReason})` : 'session file not found' }
