@@ -17,12 +17,13 @@
  * Team discovery: `~/.claude` (team1 / default) and any `~/.claude-team*` dirs.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, writeFileSync, copyFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { loadPersonalConfig, DEFAULT_AIGW_BASE, DEFAULT_AIGW_BUDGET_USD } from './personal-config.js'
+import { forEachLine, mapLimit, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 
 // node:sqlite is experimental (Node 22+). Guarded require so an unavailable /
 // older runtime degrades to an honest "source unavailable" instead of crashing
@@ -115,79 +116,35 @@ export function claudeProjectsDir(configDir, cwd) {
  */
 const USAGE_CAP_BYTES = 16 * 1024 * 1024
 
-export function aggregateJsonlUsage(jsonlPath, capBytes = USAGE_CAP_BYTES) {
-  let size = 0
-  try { size = statSync(jsonlPath).size } catch { return null }
-  if (size === 0) return null
-
-  const readCap = Math.min(size, capBytes)
-  const chunkBuf = Buffer.allocUnsafe(128 * 1024)
-  let fd
-  try { fd = openSync(jsonlPath, 'r') } catch { return null }
-
-  let pos = 0
-  let tail = ''   // leftover partial line across chunks
-  let truncated = size > readCap
+export async function aggregateJsonlUsage(jsonlPath, capBytes = USAGE_CAP_BYTES) {
   const totals = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, rows: 0 }
   const modelCounts = new Map()  // model -> { input, output, cacheCreation, cacheRead, rows }
-
-  // Quick reject: if the file has no usage markers at all, skip parsing entirely.
-  // We still stream (don't read whole file) for large files.
-  try {
-    while (pos < readCap) {
-      const n = readSync(fd, chunkBuf, 0, Math.min(chunkBuf.length, readCap - pos), pos)
-      if (n <= 0) break
-      tail += chunkBuf.subarray(0, n).toString('utf8')
-      // Process complete lines; keep the last partial line in `tail`.
-      const lastNl = tail.lastIndexOf('\n')
-      let block
-      if (lastNl >= 0) {
-        block = tail.slice(0, lastNl + 1)
-        tail = tail.slice(lastNl + 1)
-      } else if (pos + n >= readCap) {
-        // reached the cap end with no newline — process whatever we have
-        block = tail
-        tail = ''
-      } else {
-        // no newline yet in this chunk, keep buffering
-        pos += n
-        continue
-      }
-      pos += n
-
-      const lines = block.split('\n')
-      for (const line of lines) {
-        if (!line || line.length < 8) continue
-        // Fast path: only assistant rows carry usage, and only ones with a
-        // "usage": field are interesting. This substring check avoids JSON.parse
-        // for the vast majority of lines (user rows, queue-operation rows).
-        if (line.indexOf('"usage"') === -1) continue
-        let row
-        try { row = JSON.parse(line) } catch { continue }
-        if (row.type !== 'assistant') continue
-        const u = row.message?.usage
-        if (!u || typeof u !== 'object') continue
-        const input = Number(u.input_tokens) || 0
-        const output = Number(u.output_tokens) || 0
-        const cacheCreation = Number(u.cache_creation_input_tokens) || 0
-        const cacheRead = Number(u.cache_read_input_tokens) || 0
-        totals.input += input
-        totals.output += output
-        totals.cacheCreation += cacheCreation
-        totals.cacheRead += cacheRead
-        totals.rows++
-        const model = row.message?.model || '(unknown)'
-        let m = modelCounts.get(model)
-        if (!m) { m = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, rows: 0 }; modelCounts.set(model, m) }
-        m.input += input; m.output += output; m.cacheCreation += cacheCreation; m.cacheRead += cacheRead; m.rows++
-      }
-    }
-  } catch {
-    // best-effort — return what we have
-  } finally {
-    try { closeSync(fd) } catch {}
-  }
-
+  const r = await forEachLine(jsonlPath, capBytes, (line) => {
+    if (!line || line.length < 8) return
+    // Fast path: only assistant rows carry usage, and only ones with a
+    // "usage": field are interesting. This substring check avoids JSON.parse
+    // for the vast majority of lines (user rows, queue-operation rows).
+    if (line.indexOf('"usage"') === -1) return
+    let row
+    try { row = JSON.parse(line) } catch { return }
+    if (row.type !== 'assistant') return
+    const u = row.message?.usage
+    if (!u || typeof u !== 'object') return
+    const input = Number(u.input_tokens) || 0
+    const output = Number(u.output_tokens) || 0
+    const cacheCreation = Number(u.cache_creation_input_tokens) || 0
+    const cacheRead = Number(u.cache_read_input_tokens) || 0
+    totals.input += input
+    totals.output += output
+    totals.cacheCreation += cacheCreation
+    totals.cacheRead += cacheRead
+    totals.rows++
+    const model = row.message?.model || '(unknown)'
+    let m = modelCounts.get(model)
+    if (!m) { m = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, rows: 0 }; modelCounts.set(model, m) }
+    m.input += input; m.output += output; m.cacheCreation += cacheCreation; m.cacheRead += cacheRead; m.rows++
+  })
+  if (!r) return null
   return {
     input: totals.input,
     output: totals.output,
@@ -195,8 +152,32 @@ export function aggregateJsonlUsage(jsonlPath, capBytes = USAGE_CAP_BYTES) {
     cacheRead: totals.cacheRead,
     rows: totals.rows,
     modelCounts: Object.fromEntries(modelCounts),
-    truncated,
+    truncated: r.truncated,
   }
+}
+
+/**
+ * All `*.jsonl` (≥200 bytes) under `$configDir/projects/<slug>/`, newest mtime
+ * first: [{ path, mtimeMs, size }]. null when the projects dir is absent.
+ * Async + bounded concurrency (the config dir may sit on a slow home mount).
+ */
+export async function listProjectJsonl(configDir) {
+  const projectsRoot = join(configDir, 'projects')
+  if (!(await statSafe(projectsRoot))) return null
+  const dirs = (await readdirSafe(projectsRoot, { withFileTypes: true })).filter((d) => d.isDirectory())
+  const paths = []
+  await mapLimit(dirs, DEFAULT_SCAN_CONCURRENCY, async (d) => {
+    for (const name of await readdirSafe(join(projectsRoot, d.name))) {
+      if (name.endsWith('.jsonl')) paths.push(join(projectsRoot, d.name, name))
+    }
+  })
+  const files = []
+  await mapLimit(paths, DEFAULT_SCAN_CONCURRENCY, async (path) => {
+    const st = await statSafe(path)
+    if (st && st.size >= 200) files.push({ path, mtimeMs: st.mtimeMs, size: st.size })
+  })
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs || (a.path < b.path ? -1 : 1))
+  return files
 }
 
 /**
@@ -208,33 +189,11 @@ export function aggregateJsonlUsage(jsonlPath, capBytes = USAGE_CAP_BYTES) {
  * scan bounded, `maxFiles` caps how many jsonl files are scanned (default 200,
  * most-recent first by mtime) and each file is capped at USAGE_CAP_BYTES.
  */
-export function scanClaudeUsage(configDir, { maxFiles = 200, days } = {}) {
-  const projectsRoot = join(configDir, 'projects')
-  if (!existsSync(projectsRoot)) {
+export async function scanClaudeUsage(configDir, { maxFiles = 200, days, files: listed } = {}) {
+  const files = listed || await listProjectJsonl(configDir)
+  if (!files) {
     return { totals: { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, rows: 0 }, byModel: [], byDay: [], files: 0, truncatedFiles: 0, sampledBytes: 0, configDir }
   }
-
-  // Collect all jsonl files across project dirs with mtime for ordering.
-  const files = []
-  let projectDirs = []
-  try { projectDirs = readdirSync(projectsRoot, { withFileTypes: true }) } catch {}
-  for (const dirent of projectDirs) {
-    if (!dirent.isDirectory()) continue
-    const dirPath = join(projectsRoot, dirent.name)
-    let names = []
-    try { names = readdirSync(dirPath) } catch { continue }
-    for (const name of names) {
-      if (!name.endsWith('.jsonl')) continue
-      const fullPath = join(dirPath, name)
-      try {
-        const st = statSync(fullPath)
-        if (st.size < 200) continue
-        files.push({ path: fullPath, mtimeMs: st.mtimeMs, size: st.size })
-      } catch {}
-    }
-  }
-  // Most-recent first so the cap keeps the freshest sessions.
-  files.sort((a, b) => b.mtimeMs - a.mtimeMs)
 
   const sinceMs = days ? Date.now() - days * 86400_000 : 0
   const scan = files.slice(0, maxFiles)
@@ -246,12 +205,15 @@ export function scanClaudeUsage(configDir, { maxFiles = 200, days } = {}) {
   let sampledBytes = 0
   let scanned = 0
 
-  for (const f of scan) {
+  const aggs = new Array(scan.length)
+  await mapLimit(scan, DEFAULT_SCAN_CONCURRENCY, async (f, i) => { aggs[i] = await aggregateJsonlUsage(f.path) })
+  for (let i = 0; i < scan.length; i++) {
+    const f = scan[i]
     if (sinceMs && f.mtimeMs < sinceMs) {
       // Even old-mtime files may contain recent rows, but as a cheap filter we
       // only skip entirely-old files when a days window is requested.
     }
-    const agg = aggregateJsonlUsage(f.path)
+    const agg = aggs[i]
     sampledBytes += Math.min(f.size, USAGE_CAP_BYTES)
     if (!agg) continue
     scanned++
@@ -964,67 +926,35 @@ export async function fetchClaudeOAuthUsage(configDir, { fetchImpl } = {}) {
  * timestamp or before sinceMs are skipped. Mirrors aggregateJsonlUsage's
  * streaming + fast `"usage"` substring pre-check, but keeps per-row timestamps.
  */
-export function streamJsonlTimeline(jsonlPath, sinceMs, capBytes = USAGE_CAP_BYTES) {
-  let size = 0
-  try { size = statSync(jsonlPath).size } catch { return [] }
-  if (size === 0) return []
-  const readCap = Math.min(size, capBytes)
-  const chunkBuf = Buffer.allocUnsafe(128 * 1024)
-  let fd
-  try { fd = openSync(jsonlPath, 'r') } catch { return [] }
+export async function streamJsonlTimeline(jsonlPath, sinceMs, capBytes = USAGE_CAP_BYTES) {
   const out = []
-  let pos = 0
-  let tail = ''
-  try {
-    while (pos < readCap) {
-      const n = readSync(fd, chunkBuf, 0, Math.min(chunkBuf.length, readCap - pos), pos)
-      if (n <= 0) break
-      tail += chunkBuf.subarray(0, n).toString('utf8')
-      const lastNl = tail.lastIndexOf('\n')
-      let block
-      if (lastNl >= 0) {
-        block = tail.slice(0, lastNl + 1)
-        tail = tail.slice(lastNl + 1)
-      } else if (pos + n >= readCap) {
-        block = tail; tail = ''
-      } else {
-        pos += n; continue
-      }
-      pos += n
-      const lines = block.split('\n')
-      for (const line of lines) {
-        if (!line || line.length < 8) continue
-        if (line.indexOf('"usage"') === -1) continue
-        let row
-        try { row = JSON.parse(line) } catch { continue }
-        if (row.type !== 'assistant') continue
-        const u = row.message?.usage
-        if (!u || typeof u !== 'object') continue
-        const tsStr = row.timestamp
-        let ts = 0
-        if (typeof tsStr === 'string' && tsStr) {
-          const t = Date.parse(tsStr)
-          if (Number.isFinite(t)) ts = t
-        }
-        if (!ts) continue
-        if (sinceMs && ts < sinceMs) continue
-        const input = Number(u.input_tokens) || 0
-        const output = Number(u.output_tokens) || 0
-        const cacheCreation = Number(u.cache_creation_input_tokens) || 0
-        const cacheRead = Number(u.cache_read_input_tokens) || 0
-        out.push({
-          ts,
-          input, output, cacheCreation, cacheRead,
-          tokens: input + output + cacheCreation + cacheRead,
-          model: row.message?.model || '(unknown)',
-        })
-      }
+  await forEachLine(jsonlPath, capBytes, (line) => {
+    if (!line || line.length < 8) return
+    if (line.indexOf('"usage"') === -1) return
+    let row
+    try { row = JSON.parse(line) } catch { return }
+    if (row.type !== 'assistant') return
+    const u = row.message?.usage
+    if (!u || typeof u !== 'object') return
+    const tsStr = row.timestamp
+    let ts = 0
+    if (typeof tsStr === 'string' && tsStr) {
+      const t = Date.parse(tsStr)
+      if (Number.isFinite(t)) ts = t
     }
-  } catch {
-    // best-effort
-  } finally {
-    try { closeSync(fd) } catch {}
-  }
+    if (!ts) return
+    if (sinceMs && ts < sinceMs) return
+    const input = Number(u.input_tokens) || 0
+    const output = Number(u.output_tokens) || 0
+    const cacheCreation = Number(u.cache_creation_input_tokens) || 0
+    const cacheRead = Number(u.cache_read_input_tokens) || 0
+    out.push({
+      ts,
+      input, output, cacheCreation, cacheRead,
+      tokens: input + output + cacheCreation + cacheRead,
+      model: row.message?.model || '(unknown)',
+    })
+  })
   return out
 }
 
@@ -1034,34 +964,14 @@ export function streamJsonlTimeline(jsonlPath, sinceMs, capBytes = USAGE_CAP_BYT
  * (up to maxFiles); files whose mtime is older than sinceMs are skipped (cheap).
  * Returns entries sorted by ts ascending.
  */
-export function collectClaudeTimeline(configDir, { sinceMs = 0, maxFiles = 200 } = {}) {
-  const projectsRoot = join(configDir, 'projects')
+export async function collectClaudeTimeline(configDir, { sinceMs = 0, maxFiles = 200, files: listed } = {}) {
+  const files = listed || await listProjectJsonl(configDir)
   const out = []
-  if (!existsSync(projectsRoot)) return out
-  const files = []
-  let projectDirs = []
-  try { projectDirs = readdirSync(projectsRoot, { withFileTypes: true }) } catch { return out }
-  for (const dirent of projectDirs) {
-    if (!dirent.isDirectory()) continue
-    const dirPath = join(projectsRoot, dirent.name)
-    let names = []
-    try { names = readdirSync(dirPath) } catch { continue }
-    for (const name of names) {
-      if (!name.endsWith('.jsonl')) continue
-      const fullPath = join(dirPath, name)
-      try {
-        const st = statSync(fullPath)
-        if (st.size < 200) continue
-        files.push({ path: fullPath, mtimeMs: st.mtimeMs, size: st.size })
-      } catch {}
-    }
-  }
-  files.sort((a, b) => b.mtimeMs - a.mtimeMs)
-  for (const f of files.slice(0, maxFiles)) {
-    if (sinceMs && f.mtimeMs < sinceMs) continue
-    const rows = streamJsonlTimeline(f.path, sinceMs)
-    for (const r of rows) out.push(r)
-  }
+  if (!files) return out
+  const picked = files.slice(0, maxFiles).filter((f) => !(sinceMs && f.mtimeMs < sinceMs))
+  await mapLimit(picked, DEFAULT_SCAN_CONCURRENCY, async (f) => {
+    for (const r of await streamJsonlTimeline(f.path, sinceMs)) out.push(r)
+  })
   out.sort((a, b) => a.ts - b.ts)
   return out
 }
@@ -1276,8 +1186,10 @@ export async function buildClaudeSourceSummary({ configDir, source, label, home,
   // Per-model token breakdown for THIS team (Fable / Opus / Sonnet / Haiku …),
   // from the team's own jsonl. OAuth gives no per-model limit, so this is token
   // counts + message rows — surfaced under each team card in the UI.
+  // List the team's jsonl once; both the per-model scan and the timeline use it.
+  const files = await listProjectJsonl(dir)
   try {
-    const scan = scanClaudeUsage(dir, {})
+    const scan = await scanClaudeUsage(dir, { files })
     base.byModel = (scan.byModel || [])
       .filter((m) => m.model && m.model !== '<synthetic>')
       .map((m) => ({
@@ -1293,7 +1205,7 @@ export async function buildClaudeSourceSummary({ configDir, source, label, home,
     base.filesScanned = scan.files || 0
   } catch { base.byModel = [] }
   // collect the 7d timeline once (used for both 5h and weekly burn)
-  const timeline = collectClaudeTimeline(dir, { sinceMs: now - WINDOW_7D_MS })
+  const timeline = await collectClaudeTimeline(dir, { sinceMs: now - WINDOW_7D_MS, files })
   const oauth = await fetchClaudeOAuthUsage(dir)
   if (oauth.data) {
     let windows = mapClaudeOAuthToWindows(oauth.data, { source, label, now })

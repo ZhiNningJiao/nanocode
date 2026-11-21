@@ -78,6 +78,52 @@ export async function readTailLines(filePath, maxBytes) {
   return { lines: body.split('\n').filter(Boolean), truncated, ok }
 }
 
+/**
+ * Stream the complete lines of the first `capBytes` of a file (128 KB chunks),
+ * calling onLine(line) for each. A final unterminated line is delivered only
+ * when the cap/end is reached. Returns { size, truncated } or null when the
+ * file is missing, unreadable or empty.
+ */
+export async function forEachLine(filePath, capBytes, onLine) {
+  let fh
+  try {
+    fh = await open(filePath, 'r')
+    const { size } = await fh.stat()
+    if (size === 0) return null
+    const readCap = Math.min(size, capBytes)
+    const chunk = Buffer.allocUnsafe(128 * 1024)
+    let pos = 0
+    let tail = ''
+    try {
+      while (pos < readCap) {
+        const { bytesRead: n } = await fh.read(chunk, 0, Math.min(chunk.length, readCap - pos), pos)
+        if (n <= 0) break
+        pos += n
+        tail += chunk.subarray(0, n).toString('utf8')
+        const lastNl = tail.lastIndexOf('\n')
+        let block
+        if (lastNl >= 0) {
+          block = tail.slice(0, lastNl + 1)
+          tail = tail.slice(lastNl + 1)
+        } else if (pos >= readCap) {
+          block = tail; tail = ''
+        } else {
+          continue
+        }
+        for (const line of block.split('\n')) onLine(line)
+      }
+      if (tail) onLine(tail)
+    } catch {
+      // best-effort: keep what was delivered so far
+    }
+    return { size, truncated: size > readCap }
+  } catch {
+    return null
+  } finally {
+    if (fh) await fh.close().catch(() => {})
+  }
+}
+
 /** readdir that returns [] instead of throwing (missing dir / permission). */
 export async function readdirSafe(dir, opts) {
   try { return await readdir(dir, opts) } catch { return [] }
@@ -123,9 +169,11 @@ export function createScanCache({ ttlMs, scanTimeoutMs, scan, now = () => Date.n
         (err) => ({ partialReason: `scan failed: ${err?.message || err}` }))
     const promise = Promise.race([run, timeout]).then(({ partialReason }) => {
       clearTimeout(timer)
+      // Age counts from completion: a scan slower than the TTL must not be
+      // stale the moment it lands (that would rescan on every request).
       entries.set(key, {
         items: progress.items.slice(),
-        scannedAt: startedAt,
+        scannedAt: now(),
         partial: !!partialReason,
         partialReason,
       })

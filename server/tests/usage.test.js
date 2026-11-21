@@ -54,7 +54,7 @@ describe('usage: aggregateJsonlUsage', () => {
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-usage-')) })
   afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-  it('sums usage across assistant rows and ignores non-usage rows', () => {
+  it('sums usage across assistant rows and ignores non-usage rows', async () => {
     const p = join(tmp, 's.jsonl')
     const lines = [
       JSON.stringify({ type: 'queue-operation', operation: 'foo', timestamp: 't', sessionId: 's' }),
@@ -64,7 +64,7 @@ describe('usage: aggregateJsonlUsage', () => {
       '', // trailing newline friendliness
     ]
     writeFileSync(p, lines.join('\n'))
-    const agg = aggregateJsonlUsage(p)
+    const agg = await aggregateJsonlUsage(p)
     assert.equal(agg.input, 30)
     assert.equal(agg.output, 20)
     assert.equal(agg.cacheCreation, 100)
@@ -76,20 +76,20 @@ describe('usage: aggregateJsonlUsage', () => {
     assert.equal(agg.modelCounts['claude-opus-4-8'].input, 20)
   })
 
-  it('returns null for empty/missing files', () => {
-    assert.equal(aggregateJsonlUsage(join(tmp, 'nope.jsonl')), null)
+  it('returns null for empty/missing files', async () => {
+    assert.equal(await aggregateJsonlUsage(join(tmp, 'nope.jsonl')), null)
     writeFileSync(join(tmp, 'empty.jsonl'), '')
-    assert.equal(aggregateJsonlUsage(join(tmp, 'empty.jsonl')), null)
+    assert.equal(await aggregateJsonlUsage(join(tmp, 'empty.jsonl')), null)
   })
 
-  it('skips assistant rows without a usage block', () => {
+  it('skips assistant rows without a usage block', async () => {
     const p = join(tmp, 's2.jsonl')
     const noUsage = JSON.stringify({
       type: 'assistant', uuid: 'x', requestId: 'r',
       message: { model: 'm', role: 'assistant', content: [{ type: 'text', text: 'x' }] },
     })
     writeFileSync(p, noUsage + '\n' + makeJsonlRow({ input: 7, output: 3 }) + '\n')
-    const agg = aggregateJsonlUsage(p)
+    const agg = await aggregateJsonlUsage(p)
     assert.equal(agg.rows, 1)
     assert.equal(agg.input, 7)
     assert.equal(agg.output, 3)
@@ -101,7 +101,7 @@ describe('usage: scanClaudeUsage', () => {
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-scan-')) })
   afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-  it('aggregates across project dirs under $configDir/projects', () => {
+  it('aggregates across project dirs under $configDir/projects', async () => {
     // Two encoded project dirs (cwd '/' -> '-').
     const projA = join(tmp, 'projects', '-tmp-alpha')
     const projB = join(tmp, 'projects', '-tmp-beta')
@@ -109,7 +109,7 @@ describe('usage: scanClaudeUsage', () => {
     mkdirSync(projB, { recursive: true })
     writeFileSync(join(projA, 'aaa.jsonl'), makeJsonlRow({ input: 100, output: 10, model: 'claude-sonnet-4-6' }) + '\n')
     writeFileSync(join(projB, 'bbb.jsonl'), makeJsonlRow({ input: 1, output: 2, model: 'claude-opus-4-8' }) + '\n')
-    const result = scanClaudeUsage(tmp)
+    const result = await scanClaudeUsage(tmp)
     assert.equal(result.totals.input, 101)
     assert.equal(result.totals.output, 12)
     assert.equal(result.files, 2)
@@ -121,8 +121,8 @@ describe('usage: scanClaudeUsage', () => {
     assert.ok(result.byDay.length >= 1)
   })
 
-  it('returns zeroed shape when projects dir is missing', () => {
-    const result = scanClaudeUsage(join(tmp, 'no-such'))
+  it('returns zeroed shape when projects dir is missing', async () => {
+    const result = await scanClaudeUsage(join(tmp, 'no-such'))
     assert.equal(result.totals.input, 0)
     assert.equal(result.totals.rows, 0)
     assert.equal(result.files, 0)
@@ -448,7 +448,7 @@ describe('usage: streamJsonlTimeline + readClaudeOAuthCredentials', () => {
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-tl-')) })
   afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-  it('streamJsonlTimeline collects assistant rows with ts + tokens since sinceMs', () => {
+  it('streamJsonlTimeline collects assistant rows with ts + tokens since sinceMs', async () => {
     const p = join(tmp, 's.jsonl')
     const oldTs = '2026-07-01T00:00:00.000Z'
     const newTs = '2026-07-06T05:30:00.000Z'
@@ -459,7 +459,7 @@ describe('usage: streamJsonlTimeline + readClaudeOAuthCredentials', () => {
     ]
     writeFileSync(p, lines.join('\n') + '\n')
     const since = Date.parse('2026-07-06T00:00:00Z')
-    const rows = streamJsonlTimeline(p, since)
+    const rows = await streamJsonlTimeline(p, since)
     assert.equal(rows.length, 1) // old row filtered out
     assert.equal(rows[0].tokens, 150)
     assert.equal(rows[0].ts, Date.parse(newTs))

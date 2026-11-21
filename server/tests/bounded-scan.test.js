@@ -85,6 +85,19 @@ describe('bounded-scan', () => {
     assert.deepEqual((await cache.get('pool', { deadlineMs: 1_000 })).items, ['gen2'])
   })
 
+  it('cache age counts from scan completion, so a scan slower than the TTL is fresh when it lands', async () => {
+    let clock = 0
+    let scans = 0
+    const cache = createScanCache({
+      ttlMs: 1_000, scanTimeoutMs: 5_000, now: () => clock,
+      scan: async (_k, p) => { scans++; await tick(10); clock += 3_000; p.items.push('x') },
+    })
+    await cache.get('pool', { deadlineMs: 1_000 })
+    const again = await cache.get('pool', { deadlineMs: 1_000 })
+    assert.equal(again.stale, false)
+    assert.equal(scans, 1)
+  })
+
   it('a hung scan is cut off by scanTimeoutMs and the single-flight slot is released', async () => {
     let calls = 0
     const cache = createScanCache({

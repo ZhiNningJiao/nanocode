@@ -15,6 +15,7 @@ import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listAigwModels, probe
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
 import { listSessions, previewSession } from './sessions-browser.js'
+import { createScanCache } from './bounded-scan.js'
 import { buildCheckpoints, rewindConversation } from './rewind.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand, mergePersonalMachines } from './remote.js'
 import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
@@ -1229,14 +1230,32 @@ export function createTerminalRoutes(store, opts = {}) {
     }
   })
 
-  router.get('/api/usage/claude', (req, res) => {
+  // Usage scans read up to 16 MB of each of 200 jsonl per team. They are async
+  // (never block the loop) and go through one single-flight + stale-while-
+  // revalidate cache so repeated panel opens / refresh clicks share one scan
+  // instead of stacking disk walks.
+  const usageScans = createScanCache({
+    ttlMs: 30_000,
+    scanTimeoutMs: 300_000,
+    scan: async (key, progress) => {
+      const [kind, configDir, days] = key.split('\0')
+      progress.items.push(kind === 'summary'
+        ? await buildUsageSummary({ home, store })
+        : await scanClaudeUsage(configDir, days ? { days: Number(days) } : {}))
+    },
+  })
+  const usageScan = async (key) => {
+    const r = await usageScans.get(key, { deadlineMs: 120_000 })
+    if (r.items.length) return r.stale ? { ...r.items[0], stale: true } : r.items[0]
+    return { error: `usage scan unavailable: ${r.partialReason || 'no result'}`, partial: true }
+  }
+
+  router.get('/api/usage/claude', async (req, res) => {
     try {
       const configDir = effectiveClaudeConfigDir(store, home)
       const days = parseInt(req.query.days, 10)
-      const opts = {}
-      if (Number.isFinite(days) && days > 0) opts.days = days
-      const result = scanClaudeUsage(configDir, opts)
-      res.json(result)
+      const daysKey = Number.isFinite(days) && days > 0 ? String(days) : ''
+      res.json(await usageScan(`claude\0${configDir}\0${daysKey}`))
     } catch (err) {
       console.error('[/api/usage/claude]', err)
       res.status(500).json({ error: err.message })
@@ -1267,8 +1286,7 @@ export function createTerminalRoutes(store, opts = {}) {
   // independently (OAuth → jsonl estimate; AIGW → unavailable) and never throws.
   router.get('/api/usage/summary', async (_req, res) => {
     try {
-      const result = await buildUsageSummary({ home, store })
-      res.json(result)
+      res.json(await usageScan('summary'))
     } catch (err) {
       console.error('[/api/usage/summary]', err)
       res.status(500).json({ error: err.message })
