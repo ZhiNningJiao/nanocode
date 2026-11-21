@@ -410,6 +410,10 @@ export function loadCommandCenterConfig(path = CC_CONFIG_PATH) {
       waitingIgnoreTagPrefixes: arr(parsed.waiting?.ignoreTagPrefixes).filter((x) => typeof x === 'string' && x),
       quotaDir: str(parsed.quota?.dir),
       quotaStaleSec: Number.isFinite(quotaStaleSec) && quotaStaleSec > 0 ? quotaStaleSec : DEFAULT_QUOTA_STALE_SEC,
+      // Both optional — absent means that one extra source is just not
+      // scanned (the cache-dir reading still shows, same as before this).
+      quotaUsageSnapLogPath: str(parsed.quota?.usageSnapLogPath),
+      quotaDispatchLogDirs: arr(parsed.quota?.dispatchLogDirs).filter((x) => typeof x === 'string' && x),
     },
   }
 }
@@ -580,12 +584,17 @@ export function createCommandCenterRoutes({
     } catch (err) { next(err) }
   })
 
-  // P0-5 quota per pool, from the on-disk header-reading cache (no model API calls).
+  // P0-5 quota per pool — freshest of three readings per pool (on-disk
+  // header-reading cache / usage_snap.log / dispatch-log QUOTA_HDR lines),
+  // still no model API calls from nanocode itself.
   router.get('/api/command-center/quota', async (_req, res, next) => {
     try {
       const { config, error } = loadCommandCenterConfig(configPath)
       if (error) return res.json({ configured: false, error })
-      const q = await quotaSource.get(config.quotaDir, config.quotaStaleSec)
+      const q = await quotaSource.get(config.quotaDir, config.quotaStaleSec, {
+        usageSnapLogPath: config.quotaUsageSnapLogPath,
+        dispatchLogDirs: config.quotaDispatchLogDirs,
+      })
       const { data, ...source } = q
       res.json({ configured: true, staleSec: config.quotaStaleSec, ...(data || { pools: [], tightest: [] }), source })
     } catch (err) { next(err) }
