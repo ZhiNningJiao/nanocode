@@ -12,12 +12,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createStore } from '../store.js'
-import {
-  listTeams,
-  listTeamsAsync,
-  listMemoryTree,
-  listMemoryTreeAsync,
-} from '../../terminal/usage.js'
+import { listTeams, listTeamsAsync } from '../../terminal/usage.js'
+import { listMemoryTree, listMemoryTreeAsync } from '../../terminal/memory.js'
 import {
   findNewestJsonl,
   findNewestJsonlAsync,

@@ -25,8 +25,8 @@ import {
   readMemoryFile,
   searchMemory,
   saveMemoryFile,
-  listTeams,
-} from '../../terminal/usage.js'
+} from '../../terminal/memory.js'
+import { listTeams } from '../../terminal/usage.js'
 import { createStore } from '../store.js'
 
 function memDir(configDir, slug) {
