@@ -766,6 +766,24 @@ function syncMachinesPoll() {
   }
 }
 
+// The services (Port Health) grid is an optional plugin (default off): its TCP
+// poll runs only while the plugin is switched on, same gating as the machine
+// board above (owner 2026-11-22: he doesn't watch port liveness himself, doesn't
+// want it running "whether or not anyone looks"; asking the agent covers the rare check).
+let servicesTimer = null
+function syncServicesPoll() {
+  const on = isPluginEnabled(store, 'services')
+  if (on && !servicesTimer) {
+    const tick = () => { runServiceChecks(broadcastNotify).catch((e) => console.error('[services] check failed:', e.message)) }
+    setTimeout(tick, 5000)
+    servicesTimer = setInterval(tick, SERVICE_CHECK_MS)
+  } else if (!on && servicesTimer) {
+    clearInterval(servicesTimer)
+    servicesTimer = null
+    for (const name of Object.keys(serviceStatus)) serviceStatus[name] = { status: 'unknown', checkedAt: null }
+  }
+}
+
 app.post('/api/historian/waker/start', asyncWrap(async (req, res) => {
   const { live } = req.body || {}
   const result = await startWaker({ live: !!live })
@@ -1065,6 +1083,7 @@ startQaWatcher(broadcastNotify)
 // plugins_enabled.
 function syncPluginBackgroundWork() {
   syncMachinesPoll()
+  syncServicesPoll()
   if (isPluginEnabled(store, 'linear-mobile-push') && isDesignatedLinearPushInstance(PORT)) {
     startLinearNotifier({ store, broadcastNotify })
   } else {
@@ -1072,10 +1091,6 @@ function syncPluginBackgroundWork() {
   }
 }
 syncPluginBackgroundWork()
-
-// Run initial check after startup, then every 30s
-setTimeout(() => runServiceChecks(broadcastNotify), 5000)
-setInterval(() => runServiceChecks(broadcastNotify), SERVICE_CHECK_MS)
 
 // P2 兜底 error middleware（必须在所有 route 之后）— 接住 asyncWrap .catch(next) 传出的 rejection，
 // 统一 log + 返回 500，绝不让路由层错误冒泡成 unhandledRejection 把进程 crash。Express 靠 4 个参数识别 error handler。

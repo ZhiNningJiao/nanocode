@@ -239,9 +239,8 @@ function initNotifyWs() {
         if (document.hidden || !document.hasFocus()) _addUnread()
         console.log('[notify]', text)
       } else if (msg.type === 'service_status') {
-        updateServiceDot(msg.name, msg.status, msg.checkedAt)
-        // 需求13: services plugin pane (Ops → Port Health) listens on this event
-        // for live dot updates; legacy Settings grid keeps using updateServiceDot.
+        // services plugin pane (Ops → Port Health) is the only consumer now
+        // (lazy-loaded, listens for this event itself: services-panel.js).
         document.dispatchEvent(new CustomEvent('nanocode:service-status', {
           detail: { name: msg.name, status: msg.status, checkedAt: msg.checkedAt },
         }))
@@ -260,122 +259,6 @@ function initNotifyWs() {
     setTimeout(initNotifyWs, delay)
   }
   ws.onerror = () => {}
-}
-
-// ─── Services health ──────────────────────────────────────────────────────────
-
-let _servicesConfig = []
-
-function updateServiceDot(name, status, checkedAt) {
-  const dot = document.getElementById(`svc-dot-${name}`)
-  if (dot) {
-    dot.className = `service-dot ${status}`
-    dot.title = `${name}: ${status}${checkedAt ? ' (checked ' + checkedAt.slice(11, 16) + ' UTC)' : ''}`
-  }
-}
-
-function _renderServicesGrid(services, status) {
-  const grid = document.getElementById('services-grid')
-  if (!grid) return
-  grid.innerHTML = ''
-  for (const svc of services) {
-    const info = status[svc.name] || { status: 'unknown' }
-    const row = document.createElement('div')
-    row.className = 'service-item'
-    row.dataset.svc = svc.name
-    row.innerHTML = `
-      <span class="service-dot ${info.status}" id="svc-dot-${svc.name}" title="${svc.name}: ${info.status}"></span>
-      <span class="service-name">${svc.name} <span class="service-port">${svc.host}:${svc.port}</span></span>
-      <span class="service-actions">
-        <button type="button" class="svc-btn svc-edit-btn" data-name="${svc.name}" title="Edit">&#9998;</button>
-        <button type="button" class="svc-btn svc-del-btn" data-name="${svc.name}" title="Delete">&#10005;</button>
-      </span>`
-    grid.appendChild(row)
-  }
-
-  grid.querySelectorAll('.svc-del-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      _servicesConfig = _servicesConfig.filter(s => s.name !== btn.dataset.name)
-      await _saveServicesConfig()
-    })
-  })
-
-  grid.querySelectorAll('.svc-edit-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const name = btn.dataset.name
-      const svc = _servicesConfig.find(s => s.name === name)
-      if (!svc) return
-      const row = btn.closest('.service-item')
-      const dotStatus = (status[name] || {}).status || 'unknown'
-      row.innerHTML = `
-        <span class="service-dot ${dotStatus}" id="svc-dot-${name}"></span>
-        <input type="text" class="settings-input svc-edit-name" value="${svc.name}" style="width:90px" />
-        <input type="text" class="settings-input svc-edit-host" value="${svc.host}" style="width:120px" />
-        <input type="number" class="settings-input svc-edit-port" value="${svc.port}" min="1" max="65535" style="width:60px" />
-        <button type="button" class="btn btn-primary svc-save-btn" style="padding:2px 8px;font-size:12px">Save</button>
-        <button type="button" class="svc-btn svc-cancel-btn">&#10005;</button>`
-      row.querySelector('.svc-save-btn').addEventListener('click', async () => {
-        const newName = row.querySelector('.svc-edit-name').value.trim()
-        const newHost = row.querySelector('.svc-edit-host').value.trim()
-        const newPort = parseInt(row.querySelector('.svc-edit-port').value, 10)
-        if (!newName || !newHost || !newPort) return
-        const idx = _servicesConfig.findIndex(s => s.name === name)
-        if (idx >= 0) _servicesConfig[idx] = { name: newName, host: newHost, port: newPort }
-        await _saveServicesConfig()
-      })
-      row.querySelector('.svc-cancel-btn').addEventListener('click', () => loadServices())
-    })
-  })
-}
-
-async function _saveServicesConfig() {
-  try {
-    await fetch('/api/services-config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ services: _servicesConfig }),
-    })
-    await loadServices()
-  } catch {}
-}
-
-async function loadServices() {
-  try {
-    const [cfgRes, statusRes] = await Promise.all([
-      fetch('/api/services-config').then(r => r.json()),
-      fetch('/api/services').then(r => r.json()),
-    ])
-    _servicesConfig = cfgRes.services || []
-
-    const ipEl = document.getElementById('services-local-ip')
-    if (ipEl && cfgRes.localIPs?.length) ipEl.textContent = `Local: ${cfgRes.localIPs.join(', ')}`
-
-    _renderServicesGrid(_servicesConfig, statusRes)
-
-    let lastChecked = null
-    for (const info of Object.values(statusRes)) {
-      if (info.checkedAt && (!lastChecked || info.checkedAt > lastChecked)) lastChecked = info.checkedAt
-    }
-    const el = document.getElementById('services-checked-at')
-    if (el && lastChecked) el.textContent = `Last checked: ${lastChecked.slice(0, 16).replace('T', ' ')} UTC`
-  } catch {}
-}
-
-// Wire Add service form
-const _svcAddForm = document.getElementById('services-add-form')
-if (_svcAddForm) {
-  _svcAddForm.addEventListener('submit', async (e) => {
-    e.preventDefault()
-    const name = document.getElementById('svc-add-name').value.trim()
-    const host = document.getElementById('svc-add-host').value.trim()
-    const port = parseInt(document.getElementById('svc-add-port').value, 10)
-    if (!name || !host || !port) return
-    _servicesConfig = [..._servicesConfig, { name, host, port }]
-    await _saveServicesConfig()
-    document.getElementById('svc-add-name').value = ''
-    document.getElementById('svc-add-host').value = ''
-    document.getElementById('svc-add-port').value = ''
-  })
 }
 
 // ─── Notification Sounds ──────────────────────────────────────────────────────
@@ -1033,7 +916,6 @@ async function openSettingsPanel() {
   loadSettings(serverSettings)
   renderCockpitSettings(document.getElementById('cockpit-settings'))
   renderSkinSettings(document.getElementById('skin-settings'))
-  loadServices()
   loadAuthStatus()  // P1-4: refresh auth status on each open
   // Dynamic model options (init-snapshot / codex config) now load inside the
   // team-model plugin pane when it renders — not here. MES-13740 R2.
