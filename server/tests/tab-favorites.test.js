@@ -244,7 +244,7 @@ describe('seedSecretaryFavorites', () => {
   it('creates all four favorites in the home project when none exist', () => {
     const store = createStore(':memory:')
     const home = '/tmp/home-seed-fresh'
-    store.createProject('zhiningjiao', home)
+    store.createProject('testuser', home)
 
     const changed = store.seedSecretaryFavorites(home)
     assert.equal(changed, true)
@@ -267,7 +267,7 @@ describe('seedSecretaryFavorites', () => {
   it('reconciles by label (no duplicate) and only fills ABSENT fields', () => {
     const store = createStore(':memory:')
     const home = '/tmp/home-seed-reconcile'
-    const project = store.createProject('zhiningjiao', home)
+    const project = store.createProject('testuser', home)
     // Master already has 秘书T1 (claude) with a model they chose themselves —
     // the seed must NOT overwrite that model, only pin + block where absent.
     store.createTab(project.id, { type: 'claude', label: '秘书T1', modelOverride: 'claude-opus-4-8' })
@@ -291,7 +291,7 @@ describe('seedSecretaryFavorites', () => {
   it('is idempotent — a second call is a no-op once the flag is set', () => {
     const store = createStore(':memory:')
     const home = '/tmp/home-seed-idem'
-    store.createProject('zhiningjiao', home)
+    store.createProject('testuser', home)
     store.seedSecretaryFavorites(home)
     const before = store.listTabs(store.listProjects().find((p) => p.cwd === home).id).length
     const changed = store.seedSecretaryFavorites(home)
@@ -355,7 +355,7 @@ describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
   it('seeded claude favorite tabs are born SESSION-LESS (no phantom claudeSessionId)', () => {
     const store = createStore(':memory:')
     const home = '/tmp/home-seedfix-sessionless'
-    store.createProject('zhiningjiao', home)
+    store.createProject('testuser', home)
 
     store.seedSecretaryFavorites(home)
     const pid = store.listProjects().find((p) => p.cwd === home).id
@@ -392,7 +392,7 @@ describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
   it('no seeded favorite tab claudeSessionId equals the active session at seed runtime', () => {
     const store = createStore(':memory:')
     const home = '/tmp/home-seedfix-active'
-    store.createProject('zhiningjiao', home)
+    store.createProject('testuser', home)
 
     // Simulate the 9476 restart condition: an active secretary session exists
     // at seed time (env var). The seed must not pull it into any tab.
@@ -418,7 +418,7 @@ describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
     // the active session.
     const store = createStore(':memory:')
     const home = '/tmp/home-seedfix-twice'
-    const project = store.createProject('zhiningjiao', home)
+    const project = store.createProject('testuser', home)
 
     // --- Seed #1: creates all four favorites. ---
     store.seedSecretaryFavorites(home)
@@ -481,7 +481,7 @@ describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
     // active session.
     const store = createStore(':memory:')
     const home = '/tmp/home-seedfix-reconcile'
-    const project = store.createProject('zhiningjiao', home)
+    const project = store.createProject('testuser', home)
     const t1 = store.createTab(project.id, {
       type: 'claude', label: '秘书T1',
       claudeSessionId: ACTIVE_SESSION, // the real secretary session — must survive
@@ -533,7 +533,7 @@ describe('seedSecretaryFavorites — seedfix jsonl-fork regression', () => {
     // latent fork risk would survive the seedfix for all pre-existing tabs.
     const store = createStore(':memory:')
     const home = '/tmp/home-seedfix-skip-backfill'
-    const project = store.createProject('zhiningjiao', home)
+    const project = store.createProject('testuser', home)
     // Three claude favorites created by the OLD seed: they have session ids +
     // favorite/model/render but NO skipAutoResume (the legacy gap).
     const t1 = store.createTab(project.id, {

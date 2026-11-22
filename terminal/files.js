@@ -11,7 +11,7 @@
  * Cross-project / home-root access (read-only routes only):
  *   When an absolute path is supplied, the sandbox check is expanded:
  *   1. If any project's cwd is an ancestor of the path, use that project's sandbox.
- *   2. Otherwise, fall back to HOME_ROOT (/storage/home/zhiningjiao) as the sandbox root.
+ *   2. Otherwise, fall back to HOME_ROOT (this process's home directory) as the sandbox root.
  *   3. Paths outside HOME_ROOT are always rejected (403).
  */
 
@@ -31,10 +31,16 @@ import {
   mkdirSync,
 } from 'node:fs'
 import { resolve, relative, isAbsolute, basename, dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 import Busboy from 'busboy'
 
-/** Home-root sandbox for cross-project / codex_work access (single-user dev box). */
-const HOME_ROOT = resolve('/storage/home/zhiningjiao')
+/**
+ * Home-root sandbox for cross-project / home-dir access (single-user dev
+ * box). Neutral default is the OS home dir of whichever user runs the
+ * process — never a hardcoded path. Override with NANOCODE_HOME_ROOT if a
+ * deployment's sandbox root should differ from $HOME.
+ */
+const HOME_ROOT = resolve(process.env.NANOCODE_HOME_ROOT || homedir())
 
 const TEXT_SIZE_CAP = 256 * 1024 // 256 KB
 const UPLOAD_SIZE_CAP = 50 * 1024 * 1024 // 50 MB
@@ -103,7 +109,12 @@ function resolveWithFallback(project, store, inputPath) {
     throw err
   }
 
-  const input = String(inputPath || '')
+  let input = String(inputPath || '')
+  // Expand a leading ~/ (or bare ~) to HOME_ROOT server-side — the client
+  // never hardcodes a home path, it just forwards the tilde form.
+  if (input === '~' || input.startsWith('~/')) {
+    input = join(HOME_ROOT, input.slice(1))
+  }
 
   // ── Case A: not absolute → standard project sandbox ──
   if (!isAbsolute(input)) {

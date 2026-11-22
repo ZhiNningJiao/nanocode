@@ -347,7 +347,9 @@ const TTS_CB = {
 function getTtsConfig() {
   const s = store.getAllSettings()
   return {
-    ref_audio_path: s.tts_ref_audio || '/storage/home/zhiningjiao/code/GPT-SoVITS/ref_audio.wav',
+    // No universal default reference-audio path exists (it's a per-install
+    // GPT-SoVITS asset) — unset means "not configured yet", not a guess.
+    ref_audio_path: s.tts_ref_audio || '',
     prompt_text: s.tts_prompt_text || '这是猫娘秘书的声音喵，主人你好呀',
     prompt_lang: s.tts_prompt_lang || 'zh',
     text_lang: s.tts_text_lang || 'en',
@@ -553,17 +555,24 @@ app.get('/api/tts/status', asyncWrap(async (_req, res) => {
 
 // ─── Service port health checker ─────────────────────────────────────────────
 
+// Deployment-specific service hosts (internal addresses) never belong in the
+// tracked default — see services-config.json (neutral, localhost-only). A
+// site adds its own services by dropping a services-config.local.json next
+// to it (gitignored); that file wins when present.
+const SERVICES_CONFIG_LOCAL_PATH = path.join(__dirname, 'services-config.local.json')
 const SERVICES_CONFIG_PATH = path.join(__dirname, 'services-config.json')
 const DEFAULT_SERVICES = [
-  { name: 'mblend',      host: '10.18.8.55', port: 5050 },
-  { name: 'dccpipeline', host: '10.18.8.55', port: 8765 },
-  { name: 'regression',  host: '10.18.8.55', port: 8000 },
-  { name: 'nanocode',    host: 'localhost',  port: 9475 },
-  { name: 'TTS',         host: 'localhost',  port: 9880 },
+  { name: 'nanocode', host: 'localhost', port: 9475 },
+  { name: 'TTS',      host: 'localhost', port: 9880 },
 ]
 
 let watchedServices = DEFAULT_SERVICES
-try { watchedServices = JSON.parse(readFileSync(SERVICES_CONFIG_PATH, 'utf8')) } catch {}
+try {
+  watchedServices = JSON.parse(readFileSync(SERVICES_CONFIG_LOCAL_PATH, 'utf8'))
+} catch {
+  try { watchedServices = JSON.parse(readFileSync(SERVICES_CONFIG_PATH, 'utf8')) }
+  catch { console.warn(`[services-config] no local or tracked config readable, using built-in default (${DEFAULT_SERVICES.length} services)`) }
+}
 
 const SERVICE_CHECK_MS = 30_000
 const serviceStatus = {}
@@ -571,7 +580,7 @@ for (const s of watchedServices) serviceStatus[s.name] = { status: 'unknown', ch
 
 // ─── akari dispatch server (MES-14049) ───────────────────────────────────────
 // The akari server URL is personal-config driven (personal.akari.serverUrl /
-// AKARI_SERVER_URL, default http://10.18.8.55:9481). Re-read on each call so an
+// AKARI_SERVER_URL, default http://127.0.0.1:9481). Re-read on each call so an
 // operator URL change propagates without a server restart. The akari row in the
 // Port Health grid is a MANAGED entry (up/down via the real /api/health HTTP
 // probe, not a bare TCP connect) — injected into /api/services-config fresh on
@@ -581,9 +590,14 @@ serviceStatus['akari'] = { status: 'unknown', checkedAt: null }
 
 // ─── Agent manager ───────────────────────────────────────────────────────────
 
+// Same local-override convention as services-config above: a site's real
+// agent roster goes in agents-config.local.json (gitignored); the tracked
+// file stays an empty placeholder.
+const AGENTS_CONFIG_LOCAL_PATH = path.join(__dirname, 'agents-config.local.json')
 const AGENTS_CONFIG_PATH = path.join(__dirname, 'agents-config.json')
 let agentsConfig = []
-try { agentsConfig = JSON.parse(readFileSync(AGENTS_CONFIG_PATH, 'utf8')) } catch {}
+try { agentsConfig = JSON.parse(readFileSync(AGENTS_CONFIG_LOCAL_PATH, 'utf8')) }
+catch { try { agentsConfig = JSON.parse(readFileSync(AGENTS_CONFIG_PATH, 'utf8')) } catch {} }
 
 async function checkTmuxWindow(target) {
   if (!target) return 'unknown'

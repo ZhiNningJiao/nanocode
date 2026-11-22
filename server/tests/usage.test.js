@@ -758,7 +758,7 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
 // Mock fetch for the AIGW /key/info + /spend/logs/v2 endpoints. Returns a
 // controlled Response-ish object (ok/status/json/headers.get) so the source
 // can be exercised hermetically without hitting the real gateway.
-function mockAigwFetch({ spend = 426.34, alias = 'test@meshy.ai', maxBudget = null, logs = [] } = {}) {
+function mockAigwFetch({ spend = 426.34, alias = 'test@example.invalid', maxBudget = null, logs = [] } = {}) {
   return async (url) => {
     const u = String(url)
     if (u.includes('/key/info')) {
@@ -886,11 +886,11 @@ describe('usage: buildAigwSourceSummary (available path, mocked)', () => {
       { startTime: '2026-07-06T05:00:00.000+00:00', total_tokens: 100000, model_group: 'litellm/x' },
       { startTime: '2026-07-06T05:20:00.000+00:00', total_tokens: 50000, model_group: 'litellm/x' },
     ]
-    const f = mockAigwFetch({ spend: 426.34, alias: 'test@meshy.ai', maxBudget: null, logs })
+    const f = mockAigwFetch({ spend: 426.34, alias: 'test@example.invalid', maxBudget: null, logs })
     const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: f, now: Date.parse('2026-07-06T06:00:00Z') })
     assert.equal(src.available, true)
     assert.equal(src.source, 'aigw-litellm')
-    assert.equal(src.alias, 'test@meshy.ai')
+    assert.equal(src.alias, 'test@example.invalid')
     const w = src.windows[0]
     assert.equal(w.used, 426.34)
     assert.equal(w.limit, 500)            // local budgetUsd (key max_budget is null)

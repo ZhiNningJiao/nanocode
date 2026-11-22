@@ -1,20 +1,5 @@
 [
   {
-    "name": "mblend",
-    "host": "10.18.8.55",
-    "port": 5050
-  },
-  {
-    "name": "dccpipeline",
-    "host": "10.18.8.55",
-    "port": 8765
-  },
-  {
-    "name": "regression",
-    "host": "10.18.8.55",
-    "port": 8000
-  },
-  {
     "name": "nanocode",
     "host": "localhost",
     "port": 9475

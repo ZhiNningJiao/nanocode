@@ -1047,8 +1047,9 @@ export function createExplorer(container, projectId) {
      * Absolute-path strategy (method C):
      *   1. Fetch all projects; find one whose cwd is a prefix of the path.
      *      If found, switch to that project then navigate to the relative path.
-     *   2. Otherwise, pass the absolute path directly to the backend — the server
-     *      will sandbox it against the home root (/storage/home/zhiningjiao).
+     *   2. Otherwise, pass the path directly to the backend — the server
+     *      resolves a leading ~/ and sandboxes it against its own home root
+     *      (terminal/files.js resolveWithFallback(); never hardcoded here).
      *      The file is previewed using the current project's API endpoint, which
      *      now accepts absolute paths via resolveWithFallback().
      *
@@ -1058,13 +1059,8 @@ export function createExplorer(container, projectId) {
       if (remote || cancelled) return
       let filePath = rawPath
 
-      // Expand ~/ to absolute home path
-      if (filePath.startsWith('~/')) {
-        filePath = '/storage/home/zhiningjiao/' + filePath.slice(2)
-      }
-
-      // ── Absolute path handling ────────────────────────────────────────────
-      if (filePath.startsWith('/')) {
+      // ── Absolute (or ~/-home) path handling ────────────────────────────────
+      if (filePath.startsWith('/') || filePath.startsWith('~/')) {
         // Try to find a project whose cwd covers this path
         let projects = []
         try {

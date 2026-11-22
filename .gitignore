@@ -33,6 +33,10 @@ server/tests/.fixtures-tmp/
 
 # command center — real root issue key / export path, never committed
 config/command-center.local.json
+
+# services / agents — real internal hosts, never committed (public-repo hygiene)
+server/services-config.local.json
+server/agents-config.local.json
 .nanocode/
 # car run artifacts never go into the repo (荣耻篇 〇·3)
 /REPORT_*.md

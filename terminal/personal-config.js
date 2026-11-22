@@ -18,8 +18,8 @@
  *   claude.autoDiscoverTeams -> personal.claude.autoDiscoverTeams -> true (false = declared teams only)
  *   codex.sessionsDir -> personal.codex.sessionsDir -> null (~/.codex/sessions unless auto-discovery is off)
  *   ntfy.url       -> personal.ntfy.url            -> null (backend still reads store setting ntfy_url)
- *   akari.serverUrl-> personal.akari.serverUrl     -> $AKARI_SERVER_URL -> http://10.18.8.55:9481
- *   akari.lensUrl  -> personal.akari.lensUrl       -> $AKARI_LENS_URL   -> http://10.18.8.55:9482
+ *   akari.serverUrl-> personal.akari.serverUrl     -> $AKARI_SERVER_URL -> http://127.0.0.1:9481
+ *   akari.lensUrl  -> personal.akari.lensUrl       -> $AKARI_LENS_URL   -> http://127.0.0.1:9482
  *
  * The loader NEVER throws — a missing/parse-broken personal file degrades to
  * the scattered fallbacks. Secrets are only the same secrets the caller could
@@ -49,10 +49,11 @@ export const DEFAULT_AIGW_BUDGET_USD = 1000
 
 // MES-14049 — akari 检察插件 defaults. The akari server URL is NOT a secret (it's
 // an internal dispatch server), so it is projected to the frontend in full for
-// display + the lens jump button. Env overrides let operators repoint without a
-// personal.json edit.
-export const DEFAULT_AKARI_SERVER_URL = 'http://10.18.8.55:9481'
-export const DEFAULT_AKARI_LENS_URL = 'http://10.18.8.55:9482'
+// display + the lens jump button. Env overrides (or personal.json) let a site
+// point this at its real akari host; the shipped default is a neutral loopback
+// placeholder, never a real internal address.
+export const DEFAULT_AKARI_SERVER_URL = 'http://127.0.0.1:9481'
+export const DEFAULT_AKARI_LENS_URL = 'http://127.0.0.1:9482'
 
 // Cache keyed by resolved path so repeated calls in one request don't re-read
 // the tiny file. Reset via `resetPersonalConfigCache()` in tests.

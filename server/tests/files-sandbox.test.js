@@ -7,9 +7,13 @@
 
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { homedir } from 'node:os'
 import { _resolveWithFallback } from '../../terminal/files.js'
 
-const HOME_ROOT = '/storage/home/zhiningjiao'
+// terminal/files.js defaults HOME_ROOT to this same process's home dir
+// (NANOCODE_HOME_ROOT unset here), so these tests must match that, not a
+// hardcoded path tied to one machine/user.
+const HOME_ROOT = homedir()
 
 // Minimal mock store
 function makeStore(projects = []) {
