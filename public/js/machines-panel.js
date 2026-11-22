@@ -243,9 +243,11 @@ function renderCard(m) {
   headline.className = 'mach-headline'
   const freeCores = m.derived.freeCores
   const memPct = s.mem.availablePct
+  // say what the numbers are: free cores, and the share of memory still AVAILABLE
+  // (a bare "93% mem" read as 93% used)
   headline.innerHTML = [
-    freeCores != null ? `${freeCores} <span class="mach-headline-unit">cores</span>` : '—',
-    memPct != null ? `<span class="${memWarn ? 'mach-warn-text' : ''}">${memPct}%</span> <span class="mach-headline-unit">mem</span>` : '',
+    freeCores != null ? `<span class="mach-headline-unit">${escapeHtml(t('plugin.machines.freeCores'))}</span> ${freeCores}` : '—',
+    memPct != null ? `<span class="mach-headline-unit">${escapeHtml(t('plugin.machines.memAvailable'))}</span> <span class="${memWarn ? 'mach-warn-text' : ''}">${memPct}%</span>` : '',
   ].filter(Boolean).join(' · ')
   card.appendChild(headline)
 

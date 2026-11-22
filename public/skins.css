@@ -5,7 +5,7 @@
  * hooks it styles:
  *   .ck-enter        on the cockpit main body for the first render after the
  *                    page / view is shown (entry animation; not on polls);
- *   [data-changed]   on an event card / lane whose state, car count, waiting
+ *   [data-changed]   on a gantt lane whose state, car count, waiting
  *                    count or progress changed since the previous poll.
  *
  * All three skins are the Meshy brand palette (lime on near-black, tokens
@@ -71,17 +71,14 @@ html[data-skin^="meshy"] ::selection { background: var(--primary-glow); color: v
 
 /* rounder cards (these four hard-code 8px rather than var(--radius-md), so the
    shared --radius bump above doesn't reach them on its own) */
-html[data-skin^="meshy"] .ck-main,
-html[data-skin^="meshy"] .ck-block,
+html[data-skin^="meshy"] .ck-card,
+html[data-skin^="meshy"] .ck-qcard,
 html[data-skin^="meshy"] .ck-toast { border-radius: var(--radius-lg); }
-html[data-skin^="meshy"] .ck-main-head { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
-html[data-skin^="meshy"] .ck-ev { border-radius: var(--radius-md); }
 
 /* accent-label is black (brand: lime is a light fill) — the elements below
    hard-code #fff for text on var(--primary) */
 html[data-skin^="meshy"] .btn-primary,
 html[data-skin^="meshy"] .main-view-toggle:hover,
-html[data-skin^="meshy"] .ck-view-btn.active,
 html[data-skin^="meshy"] .ccc-fab,
 html[data-skin^="meshy"] .ccc-send {
   color: #000;
@@ -89,10 +86,10 @@ html[data-skin^="meshy"] .ccc-send {
 
 html[data-skin^="meshy"] .settings-radio-label input[type="radio"] { accent-color: var(--primary); }
 
-/* running state reads as the brand accent, not the generic info-blue */
-html[data-skin^="meshy"] .cc-st-running { background: var(--primary); box-shadow: 0 0 6px var(--primary-glow); }
+/* G4 gantt colours (owner 11-22): done = brand lime, running = blue, waiting = orange */
+html[data-skin^="meshy"] .cc-st-done { background: var(--primary); }
+html[data-skin^="meshy"] .cc-st-running { background: var(--info); box-shadow: 0 0 6px rgba(64, 128, 255, .45); }
 html[data-skin^="meshy"] .cc-prog-fill { background: var(--primary); }
-html[data-skin^="meshy"] .ck-g-ring { stroke: var(--primary); }
 
 /* ── meshy-glass ───────────────────────────────────────────────────────── */
 html[data-skin="meshy-glass"] {
@@ -109,7 +106,6 @@ html[data-skin="meshy-glass"] {
 html[data-skin="meshy-glass"] body { background: var(--glass-field) fixed; }
 html[data-skin="meshy-glass"] .cockpit { background: var(--glass-field) fixed; }
 html[data-skin="meshy-glass"] .app-header,
-html[data-skin="meshy-glass"] .ck-main-head,
 html[data-skin="meshy-glass"] .ccc-drawer,
 html[data-skin="meshy-glass"] .settings-panel,
 html[data-skin="meshy-glass"] .ck-toast {
@@ -118,21 +114,21 @@ html[data-skin="meshy-glass"] .ck-toast {
   backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
   border-color: var(--glass-line);
 }
-html[data-skin="meshy-glass"] .ck-main,
-html[data-skin="meshy-glass"] .ck-block,
-html[data-skin="meshy-glass"] .ck-ev,
+html[data-skin="meshy-glass"] .ck-card,
+html[data-skin="meshy-glass"] .ck-qcard,
+html[data-skin="meshy-glass"] .ck-rail,
+html[data-skin="meshy-glass"] .ck-feed,
 html[data-skin="meshy-glass"] .ck-block .cc-mod,
 html[data-skin="meshy-glass"] .ck-block .cc-mod-head {
   background: var(--glass-tint);
   border-color: var(--glass-line);
 }
-html[data-skin="meshy-glass"] .ck-main,
-html[data-skin="meshy-glass"] .ck-block {
+html[data-skin="meshy-glass"] .ck-card,
+html[data-skin="meshy-glass"] .ck-qcard {
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 var(--glass-line);
 }
-html[data-skin="meshy-glass"] .ck-ev.open { box-shadow: inset 0 0 0 1px var(--primary); }
 html[data-skin="meshy-glass"] .ccw-item,
 html[data-skin="meshy-glass"] .ccq-pool,
 html[data-skin="meshy-glass"] .mach-card,
@@ -146,53 +142,45 @@ html[data-skin="meshy-glass"] .main-view-toggle {
 html[data-skin="meshy-glass"] .ccc-fab { box-shadow: 0 6px 24px var(--primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.25); }
 /* browsers without backdrop-filter: keep text readable on the colour field */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  html[data-skin="meshy-glass"] .ck-main, html[data-skin="meshy-glass"] .ck-block { background: var(--bg-secondary); }
+  html[data-skin="meshy-glass"] .ck-card, html[data-skin="meshy-glass"] .ck-qcard { background: var(--bg-secondary); }
 }
 
 /* ── meshy-motion ──────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: no-preference) {
-  html[data-skin="meshy-motion"] .ck-ev,
-  html[data-skin="meshy-motion"] .ck-block,
-  html[data-skin="meshy-motion"] .ck-car,
+  html[data-skin="meshy-motion"] .ck-card,
+  html[data-skin="meshy-motion"] .ck-qcard,
   html[data-skin="meshy-motion"] .ck-lane,
+  html[data-skin="meshy-motion"] .ck-rail-btn,
   html[data-skin="meshy-motion"] .cc-hchip,
-  html[data-skin="meshy-motion"] .ck-view-btn,
   html[data-skin="meshy-motion"] .main-view-toggle {
     transition: background-color .25s ease, border-color .25s ease, box-shadow .25s ease, transform .2s ease, color .2s ease;
   }
-  html[data-skin="meshy-motion"] .ck-ev:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+  html[data-skin="meshy-motion"] .ck-qcard:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
   html[data-skin="meshy-motion"] .cc-hchip:hover, html[data-skin="meshy-motion"] .main-view-toggle:hover { transform: translateY(-1px) scale(1.03); }
 
   /* entry: cards / lanes / nodes rise in, staggered (first render only) */
-  html[data-skin="meshy-motion"] .ck-enter .ck-ev,
-  html[data-skin="meshy-motion"] .ck-enter .ck-lane,
-  html[data-skin="meshy-motion"] .ck-enter .ck-g-node {
+  html[data-skin="meshy-motion"] .ck-enter .ck-lane {
     animation: skin-rise .45s cubic-bezier(.2, .8, .2, 1) both;
   }
-  html[data-skin="meshy-motion"] .ck-enter .ck-ev:nth-child(2), html[data-skin="meshy-motion"] .ck-enter .ck-g-node:nth-child(2) { animation-delay: .04s; }
-  html[data-skin="meshy-motion"] .ck-enter .ck-ev:nth-child(3), html[data-skin="meshy-motion"] .ck-enter .ck-g-node:nth-child(3) { animation-delay: .08s; }
-  html[data-skin="meshy-motion"] .ck-enter .ck-ev:nth-child(4), html[data-skin="meshy-motion"] .ck-enter .ck-g-node:nth-child(4) { animation-delay: .12s; }
-  html[data-skin="meshy-motion"] .ck-enter .ck-ev:nth-child(5), html[data-skin="meshy-motion"] .ck-enter .ck-g-node:nth-child(5) { animation-delay: .16s; }
-  html[data-skin="meshy-motion"] .ck-enter .ck-ev:nth-child(n+6), html[data-skin="meshy-motion"] .ck-enter .ck-g-node:nth-child(n+6) { animation-delay: .2s; }
+  html[data-skin="meshy-motion"] .ck-enter .ck-lane:nth-of-type(2) { animation-delay: .04s; }
+  html[data-skin="meshy-motion"] .ck-enter .ck-lane:nth-of-type(3) { animation-delay: .08s; }
+  html[data-skin="meshy-motion"] .ck-enter .ck-lane:nth-of-type(4) { animation-delay: .12s; }
+  html[data-skin="meshy-motion"] .ck-enter .ck-lane:nth-of-type(5) { animation-delay: .16s; }
+  html[data-skin="meshy-motion"] .ck-enter .ck-lane:nth-of-type(n+6) { animation-delay: .2s; }
   html[data-skin="meshy-motion"] .ck-enter .cc-prog-fill { animation: skin-grow .8s cubic-bezier(.2, .8, .2, 1) both .15s; transform-origin: left center; }
   html[data-skin="meshy-motion"] .ck-enter .cc-bar { animation: skin-grow .6s cubic-bezier(.2, .8, .2, 1) both .1s; transform-origin: left center; }
-  html[data-skin="meshy-motion"] .ck-enter .ck-g-ring { animation: skin-ring 1s cubic-bezier(.2, .8, .2, 1) both .2s; }
   html[data-skin="meshy-motion"] .ck-block { animation: skin-fade .4s ease both; }
 
   /* data change since the previous poll: a soft pulse on that card / lane */
-  html[data-skin="meshy-motion"] .ck-ev[data-changed],
   html[data-skin="meshy-motion"] .ck-lane[data-changed] { animation: skin-changed 1.6s ease-out 1; }
   html[data-skin="meshy-motion"] .cc-hchip { animation: skin-pop .35s ease both; }
 
   /* motion-graphics accent: a slow light sweep along the cockpit head */
-  html[data-skin="meshy-motion"] .ck-main-head { background-image: linear-gradient(100deg, transparent 30%, var(--primary-subtle) 50%, transparent 70%); background-size: 300% 100%; animation: skin-sweep 9s linear infinite; }
-  html[data-skin="meshy-motion"] .ck-g-sat.ck-g-running { animation: skin-orbit-pulse 1.4s ease-in-out infinite; }
+  html[data-skin="meshy-motion"] .ck-gantt-card > .ck-card-head { background-image: linear-gradient(100deg, transparent 30%, var(--primary-subtle) 50%, transparent 70%); background-size: 300% 100%; animation: skin-sweep 9s linear infinite; }
 }
 @keyframes skin-rise { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
 @keyframes skin-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes skin-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-@keyframes skin-ring { from { stroke-dashoffset: 120; opacity: 0; } to { stroke-dashoffset: 0; opacity: 1; } }
 @keyframes skin-pop { from { transform: scale(.85); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes skin-changed { 0% { box-shadow: 0 0 0 0 var(--primary-glow); background-color: var(--primary-subtle); } 100% { box-shadow: 0 0 0 12px transparent; } }
 @keyframes skin-sweep { from { background-position: 100% 0; } to { background-position: -200% 0; } }
-@keyframes skin-orbit-pulse { 50% { opacity: .4; r: 8; } }

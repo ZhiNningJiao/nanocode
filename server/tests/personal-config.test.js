@@ -128,7 +128,7 @@ describe('personal-config: projectForPlugin (masked, frontend-safe)', () => {
     tmp = fakeHome(); resetPersonalConfigCache()
     writePersonal(tmp, {
       linear: { apiKey: 'lin_SUPERSECRET_value_7f3a' },
-      aigw: { base: 'https://aigw.test', key: 'aigw_SUPERSECRET_k3y9', budgetUsd: 500 },
+      aigw: { base: 'https://aigw.test', key: 'aigw_SUPERSECRET_k3y9' },
       remote: {
         machines: [
           { alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster', note: 'win' },
@@ -160,10 +160,10 @@ describe('personal-config: projectForPlugin (masked, frontend-safe)', () => {
     assert.ok(!json.includes('lin_SUPERSECRET_value_7f3a'), 'projection must not contain the full key')
   })
 
-  it('masks the aigw key + exposes base/budget (non-secret) for personal.aigw', () => {
+  it('masks the aigw key + exposes base (non-secret) for personal.aigw', () => {
     const proj = projectForPlugin(cfg, { name: 'usage', permissions: ['fs.read', 'network', 'personal.aigw'] })
     assert.equal(proj.aigw.base, 'https://aigw.test')
-    assert.equal(proj.aigw.budgetUsd, 500)
+    assert.equal('budgetUsd' in proj.aigw, false)
     assert.equal(proj.aigw.hasKey, true)
     assert.equal(proj.aigw.keyMasked, 'aigw…k3y9')
     const json = JSON.stringify(proj)
@@ -209,7 +209,7 @@ describe('personal-config: resolvePluginSecrets (server-side real values)', () =
     tmp = fakeHome(); resetPersonalConfigCache()
     writePersonal(tmp, {
       linear: { apiKey: 'lin_REAL_key_1234' },
-      aigw: { base: 'https://aigw.test', key: 'aigw_REAL_key_9999', budgetUsd: 500 },
+      aigw: { base: 'https://aigw.test', key: 'aigw_REAL_key_9999' },
       remote: {
         machines: [
           { alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', key: '~/.ssh/id_cluster' },

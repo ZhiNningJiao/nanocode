@@ -120,7 +120,7 @@ app.get('/', (_req, res) => {
 // Dev-mode: no-store for all /js/* and /style.css so browser never caches JS/CSS
 app.use((req, res, next) => {
   const url = req.path
-  if (url === '/style.css' || url.startsWith('/js/') || url === '/manifest.json') {
+  if (url === '/style.css' || url.startsWith('/js/') || url === '/manifest.json' || url === '/sw.js') {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
   }
   next()

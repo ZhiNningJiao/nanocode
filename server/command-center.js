@@ -37,6 +37,7 @@ import { safeHttpUrl } from '../public/js/command-center-url.js'
 import { str, arr, validIso } from './command-center-fields.js'
 import { mapExportWaiting, buildWaitingView, createOwnerPendingSource } from './command-center-waiting.js'
 import { DEFAULT_QUOTA_STALE_SEC, createQuotaSource } from './command-center-quota.js'
+import { createQuotaSeriesSource } from './command-center-quota-series.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
@@ -210,6 +211,8 @@ export function mapBar(b) {
     start: validIso(b?.start),
     end: validIso(b?.end),
     endOpen: b?.end_open === true || (b?.end == null && validIso(b?.start) != null),
+    // expected finish, only when the exporter knows one (never guessed here)
+    eta: validIso(b?.eta),
     traceStatus: str(b?.status),
     state,
     reason,
@@ -534,6 +537,7 @@ export function createCommandCenterRoutes({
   carsSource = createCarsSource(),
   ownerSource = createOwnerPendingSource(),
   quotaSource = createQuotaSource(),
+  quotaSeriesSource = createQuotaSeriesSource(),
 } = {}) {
   const router = express.Router()
 
@@ -591,6 +595,18 @@ export function createCommandCenterRoutes({
       })
       const { data, ...source } = q
       res.json({ configured: true, staleSec: config.quotaStaleSec, ...(data || { pools: [], tightest: [] }), source })
+    } catch (err) { next(err) }
+  })
+
+  // Six-pool available-quota curve (7 days back + the next 7 days' resets),
+  // read-only from the same usage_snap.log the per-pool block uses.
+  router.get('/api/command-center/quota/series', async (_req, res, next) => {
+    try {
+      const { config, error } = loadCommandCenterConfig(configPath)
+      if (error) return res.json({ configured: false, error })
+      const q = await quotaSeriesSource.get(config.quotaUsageSnapLogPath)
+      const { data, ...source } = q
+      res.json({ configured: true, ...(data || {}), source })
     } catch (err) { next(err) }
   })
 

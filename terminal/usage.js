@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { loadPersonalConfig, DEFAULT_AIGW_BASE, DEFAULT_AIGW_BUDGET_USD } from './personal-config.js'
+import { loadPersonalConfig, readKeyFile, DEFAULT_AIGW_BASE } from './personal-config.js'
 import { forEachLine, mapLimit, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 import { quotaSeverity } from '../public/js/quota-levels.js'
 
@@ -621,12 +621,10 @@ export function scanAllOpencodeUsage(home) {
 // Three sources, each honest (no fabricated numbers — a missing limit is null):
 //   1. Claude Team1 (~/.claude)        — OAuth API (real % + reset) + jsonl burn
 //   2. Claude Team2 (~/.claude-team2)  — same
-//   3. AIGW (LiteLLM)                  — /key/info?key=KEY (real spend) +
-//      /spend/logs/v2 (window token burn). remaining = budgetUsd - spend,
-//      where budgetUsd comes from the personal config (default 1000); the
-//      key-side max_budget is null for a virtual LLM-only key, so the budget
-//      is local and the window is labelled `estimated:true`. Verified live
-//      2026-07-07: spend≈$426.35, alias <owner email>.
+//   3. AIGW key budget                 — the dispatch key's spend + cap from
+//      two LiteLLM response headers (buildAigwBudgetSourceSummary below). The
+//      old /key/info + /spend/logs/v2 source is gone: a virtual LLM-only key
+//      gets 403 on those routes, so it could only ever show an error card.
 //
 // Unified per-window schema (the `entries[]` of /api/usage/summary):
 //   { source, label, windowType, used, limit|null, remaining|null, utilization|null,
@@ -647,11 +645,6 @@ const CLAUDE_OAUTH_TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL || 'https://pl
 const CLAUDE_OAUTH_CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID || '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const WINDOW_5H_MS = 5 * 60 * 60 * 1000
 const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000
-// /spend/logs/v2 window sample size. The full history can be 20k+ rows; we
-// fetch the most-recent bounded page and compute burn from its active span
-// (labelled estimated/sampled in the window note).
-const AIGW_SPEND_LOGS_PAGE_SIZE = 100
-const AIGW_SPEND_LOGS_WINDOW_DAYS = 7
 
 /**
  * Read Claude Code OAuth credentials from `<configDir>/.credentials.json`.
@@ -1068,194 +1061,27 @@ export async function buildClaudeSourceSummary({ configDir, source, label, home,
   }
 }
 
-// ── AIGW (LiteLLM) spend source ─────────────────────────────────────────────────
-
-/**
- * Fetch AIGW `GET /key/info?key=KEY` (Authorization: Bearer KEY) and return the
- * real spend + alias + the key-side max_budget. Verified live 2026-07-07: 200
- * with `{ info: { spend, max_budget, key_alias, budget_duration, budget_reset_at, ... } }`
- * (max_budget is null for a virtual LLM-only key, so remaining is computed
- * locally from the personal-config budgetUsd — see buildAigwSourceSummary).
- * Never throws; returns { error } so the source degrades honestly.
- */
-export async function fetchAigwKeyInfo({ key, base, fetchImpl } = {}) {
-  const apiKey = String(key ?? '').trim()
-  const b = base || getAigwBase()
-  if (!apiKey) return { error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)' }
-  const f = fetchImpl || fetch
-  try {
-    const res = await f(`${b}/key/info?key=${encodeURIComponent(apiKey)}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(10000),
-    })
-    if (!res.ok) {
-      let body = null
-      try { body = await res.json() } catch {}
-      const msg = body?.detail || body?.error || `HTTP ${res.status}`
-      return { error: `AIGW /key/info HTTP ${res.status}: ${msg}`, status: res.status }
-    }
-    const body = await res.json()
-    const info = body?.info || body  // real API nests under info; flat fallback
-    const spend = Number(info?.spend)
-    if (!Number.isFinite(spend)) return { error: 'AIGW /key/info returned no usable spend field' }
-    return {
-      spend,
-      alias: typeof info?.key_alias === 'string' ? info.key_alias : null,
-      maxBudget: (info?.max_budget == null) ? null : (Number.isFinite(Number(info.max_budget)) ? Number(info.max_budget) : null),
-      budgetDuration: typeof info?.budget_duration === 'string' ? info.budget_duration : null,
-      budgetResetAt: typeof info?.budget_reset_at === 'string' ? info.budget_reset_at : null,
-      raw: { spend: info?.spend, max_budget: info?.max_budget, key_alias: info?.key_alias },
-    }
-  } catch (err) {
-    return { error: `AIGW /key/info fetch failed: ${err?.message || err}` }
-  }
-}
-
-/**
- * Fetch AIGW `GET /spend/logs/v2?key=KEY&page=1&page_size=N&start_date=...&end_date=...`
- * (Authorization: Bearer KEY) and aggregate the window's token detail into a
- * burn rate. The page is bounded (AIGW_SPEND_LOGS_PAGE_SIZE) so a 20k+-entry
- * history does not stall the endpoint; burn is computed from the sampled rows'
- * active span (CodexBar-style, same computeBurnRate used for the jsonl
- * timeline). Each row carries total_tokens/prompt/completion/model/model_group/
- * startTime/endTime. Returns { tokensWindow, burnPerMin, rows, oldestTs,
- * newestTs, sampled, totalEntries } or { error }. Never throws.
- */
-export async function fetchAigwSpendLogs({ key, base, fetchImpl, days = AIGW_SPEND_LOGS_WINDOW_DAYS, now = Date.now() } = {}) {
-  const apiKey = String(key ?? '').trim()
-  const b = base || getAigwBase()
-  if (!apiKey) return { error: 'AIGW key not found' }
-  const f = fetchImpl || fetch
-  const fmt = (d) => new Date(d).toISOString().slice(0, 10)
-  const url = `${b}/spend/logs/v2?key=${encodeURIComponent(apiKey)}&page=1&page_size=${AIGW_SPEND_LOGS_PAGE_SIZE}&start_date=${fmt(now - days * 86400_000)}&end_date=${fmt(now)}`
-  try {
-    const res = await f(url, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(12000),
-    })
-    if (!res.ok) return { error: `AIGW /spend/logs/v2 HTTP ${res.status}` }
-    const body = await res.json()
-    const data = Array.isArray(body?.data) ? body.data : []
-    const rows = []
-    let tokensWindow = 0
-    for (const e of data) {
-      const tsStr = e?.startTime || e?.endTime
-      const ts = tsStr ? Date.parse(tsStr) : 0
-      const tok = Number(e?.total_tokens) || 0
-      if (!ts || !tok) continue
-      rows.push({ ts, tokens: tok, model: e?.model_group || e?.model || '(unknown)' })
-      tokensWindow += tok
-    }
-    rows.sort((a, b) => a.ts - b.ts)
-    const { burnRatePerMin, oldestTs, newestTs } = computeBurnRate(rows, { now })
-    return {
-      tokensWindow,
-      burnPerMin: burnRatePerMin,
-      rows: rows.length,
-      oldestTs, newestTs,
-      sampled: rows.length,
-      totalEntries: typeof body?.total === 'number' ? body.total : null,
-    }
-  } catch (err) {
-    return { error: `AIGW /spend/logs/v2 fetch failed: ${err?.message || err}` }
-  }
-}
-
-function aigwUnavailableWindow(note) {
-  return {
-    source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
-    windowType: 'monthly',
-    used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
-    resetAt: null, burnRatePerMin: null, projectedHitAt: null,
-    estimated: false, severity: null, usedTokens: null,
-    note,
-  }
-}
-
-/**
- * Build the AIGW (LiteLLM) source summary. Calls /key/info?key=KEY for the real
- * spend and /spend/logs/v2 for the window token burn. remaining = budgetUsd -
- * spend (budgetUsd from the personal config, default 1000; the key-side
- * max_budget is null for a virtual LLM-only key, so the budget is local and the
- * window is labelled `estimated:true`). `home` / `fetchImpl` are threaded
- * through so tests run hermetically against a fake home + mocked fetch. Never
- * throws; degrades to an honest unavailable window when the key / endpoints fail.
- */
-export async function buildAigwSourceSummary({ now = Date.now(), home, fetchImpl } = {}) {
-  const personal = loadPersonalConfig({ home })
-  const { base, key, budgetUsd } = personal.aigw
-  const baseFields = {
-    source: 'aigw-litellm', label: 'AIGW (LiteLLM)', kind: 'litellm',
-    configDir: null, base, alias: null, available: false, tried: [],
-  }
-  if (!key) {
-    return {
-      ...baseFields,
-      windows: [aigwUnavailableWindow('AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key).')],
-      error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)',
-    }
-  }
-  const info = await fetchAigwKeyInfo({ key, base, fetchImpl })
-  if (info.error) {
-    return {
-      ...baseFields, available: false,
-      tried: [{ endpoint: '/key/info', error: info.error }],
-      windows: [aigwUnavailableWindow(info.error)],
-      error: info.error,
-    }
-  }
-  // spend is real from the API; budget is local (key max_budget is null) → estimated.
-  const spend = info.spend
-  const limit = (info.maxBudget != null && info.maxBudget > 0) ? info.maxBudget : budgetUsd
-  const remaining = limit - spend
-  const utilization = limit > 0 ? (spend / limit) * 100 : null
-  // burn from the spend/logs/v2 window (best-effort; does not gate availability)
-  const logs = await fetchAigwSpendLogs({ key, base, fetchImpl, now })
-  const burnPerMin = logs && !logs.error ? (logs.burnPerMin || null) : null
-  const tokensWindow = logs && !logs.error ? (logs.tokensWindow || 0) : null
-  const logsNote = logs?.error
-    ? ` (spend/logs/v2 unavailable: ${logs.error})`
-    : (tokensWindow != null
-      ? ` Window burn from /spend/logs/v2 (last ${AIGW_SPEND_LOGS_WINDOW_DAYS}d, ${logs.sampled} sampled rows${logs.totalEntries != null ? ` of ${logs.totalEntries}` : ''}).`
-      : '')
-  const tried = [{ endpoint: '/key/info', status: 200 }]
-  if (logs?.error) tried.push({ endpoint: '/spend/logs/v2', error: logs.error })
-  else tried.push({ endpoint: '/spend/logs/v2', status: 200, sampled: logs?.sampled ?? null })
-  return {
-    ...baseFields,
-    available: true,
-    alias: info.alias,
-    tried,
-    raw: info.raw,
-    windows: [{
-      source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
-      windowType: 'monthly',
-      used: spend, limit, remaining, utilization, unit: 'usd',
-      resetAt: info.budgetResetAt || null,
-      burnRatePerMin: burnPerMin, projectedHitAt: null,
-      estimated: true,   // budget is local (key max_budget is null); remaining computed locally
-      severity: severityFor(utilization),
-      usedTokens: tokensWindow,
-      // AI-readable AIGW-specific fields (task unified schema):
-      used_usd: spend, budget_usd: limit, remaining_usd: remaining,
-      tokens_window: tokensWindow, burn_per_min: burnPerMin,
-      note: `AIGW LiteLLM /key/info: spend $${spend.toFixed(2)}${info.alias ? ` (alias ${info.alias})` : ''} of $${limit.toFixed(2)} budget (spend real from API, budget local from personal config → estimated). Remaining $${remaining.toFixed(2)}.${logsNote}`,
-    }],
-  }
-}
-
-// ── AIGW monthly budget (MES-13788 延续: /user/info 剩余额度 + 自适配档) ────────
+// ── AIGW key budget (response headers of the dispatch key) ─────────────────
 //
-// The 4th honest source: GET https://aigw.meshy.team/user/info → user_info.
-//   { max_budget, spend, budget_reset_at, budget_duration, user_email }
-// `remaining = max_budget - spend`, `pct_remaining = remaining / max_budget * 100`,
-// `days_left` = whole days from now to budget_reset_at (floor 0). The
-// self-adapting strategy tier is ported verbatim from ~/code/aigw_budget.sh:
+// The 4th honest source. One minimal chat call (1 output token, cheapest
+// model) with the key read from `personal.aigw.budgetKeyFile` (default
+// ~/.config/meshy-aigw.key — the dispatch key with its own budget); LiteLLM
+// answers with that key's running total and cap in two response headers:
+//   x-litellm-key-spend       USD spent by this key
+//   x-litellm-key-max-budget  USD cap of this key
+// `remaining = max_budget - spend`, `pct_remaining = remaining / max_budget * 100`.
+// The headers carry no reset time, so `days_left` is null (the BURN tier is
+// then unreachable — honest, not guessed). The old /user/info path needed a
+// personal key that the gateway no longer knows (token_not_found_in_db).
+// The self-adapting strategy tier is ported verbatim from ~/code/aigw_budget.sh:
 //   FREE_ONLY  : 剩<10%           → 只免费 GLM/Kimi
 //   BURN       : reset≤4天 且 剩>25% → 用不完就清零, 猛往付费堆
 //   SPEND_PAID : >40% 且 reset 还远 → 硬活放开上付费 gpt-5.5/opus
 //   BALANCED   : 10-40%           → 免费铺量, 付费只给硬骨头
 // No fabricated numbers — every field comes from the gateway response.
+
+export const AIGW_KEY_SPEND_HEADER = 'x-litellm-key-spend'
+export const AIGW_KEY_MAX_BUDGET_HEADER = 'x-litellm-key-max-budget'
 
 /** Tier advice strings (mirror aigw_budget.sh, zh source of truth). */
 export const AIGW_BUDGET_ADVICE = {
@@ -1301,78 +1127,76 @@ export function computeBudgetDaysLeft(resetAt, now = Date.now()) {
 }
 
 /**
- * Pure: map a successful AIGW /user/info response body into the budget object.
- * The body's `user_info` carries max_budget / spend / budget_reset_at. Returns
+ * Pure: the two key-budget response headers → the budget object.
+ * `headers` = anything with get(name) (fetch Headers). Returns
  * { available:true, ...budget } or { available:false, error } — no fabrication.
- * This is the testable core; the live fetch is in fetchAigwBudget.
  */
-export function mapAigwBudgetResponse(body, { now = Date.now() } = {}) {
-  const ui = body && typeof body === 'object' ? body.user_info : null
-  if (!ui || typeof ui !== 'object') {
-    return { available: false, error: '/user/info returned no user_info body' }
-  }
-  const maxb = Number(ui.max_budget)
-  const spend = Number(ui.spend)
+export function mapAigwKeyBudgetHeaders(headers) {
+  const get = (n) => (headers && typeof headers.get === 'function' ? headers.get(n) : null)
+  const spendRaw = get(AIGW_KEY_SPEND_HEADER)
+  const spend = spendRaw == null || spendRaw === '' ? NaN : Number(spendRaw)
   if (!Number.isFinite(spend)) {
-    return { available: false, error: '/user/info user_info.spend is not a number' }
+    return { available: false, error: `AIGW response has no ${AIGW_KEY_SPEND_HEADER} header` }
   }
+  const maxRaw = get(AIGW_KEY_MAX_BUDGET_HEADER)
+  const maxb = maxRaw == null || maxRaw === '' ? NaN : Number(maxRaw)
   const maxBudget = Number.isFinite(maxb) && maxb > 0 ? maxb : null
   const remaining = maxBudget != null ? Math.round((maxBudget - spend) * 100) / 100 : null
   const pctRemaining = maxBudget != null ? Math.round((remaining / maxBudget) * 1000) / 10 : null
   const pctUsed = maxBudget != null ? Math.round((spend / maxBudget) * 1000) / 10 : null
-  const resetAt = typeof ui.budget_reset_at === 'string' && ui.budget_reset_at ? ui.budget_reset_at : null
-  const daysLeft = computeBudgetDaysLeft(resetAt, now)
-  const tier = computeAigwBudgetTier({ pctRemaining: pctRemaining ?? -1, daysLeft })
+  const tier = computeAigwBudgetTier({ pctRemaining: pctRemaining ?? -1, daysLeft: null })
   return {
     available: true,
-    user_email: typeof ui.user_email === 'string' && ui.user_email ? ui.user_email : null,
     max_budget: maxBudget,
     spend: Math.round(spend * 100000) / 100000,
     remaining,
     pct_remaining: pctRemaining,
     pct_used: pctUsed,
-    reset_at: resetAt,
-    days_left: daysLeft,
-    budget_duration: typeof ui.budget_duration === 'string' && ui.budget_duration ? ui.budget_duration : null,
+    reset_at: null,
+    days_left: null,
+    budget_duration: null,
     tier,
     advice: AIGW_BUDGET_ADVICE[tier] || null,
   }
 }
 
 /**
- * Fetch the AIGW /user/info budget endpoint. Uses the well-known meshy-aigw.key
- * (readAigwKey). Never throws — returns { available:false, error, keyPresent }
- * on any failure so the route can 200 with a clear reason. Accepts a fetchImpl
- * injection so unit tests can stub the network without a real gateway.
+ * One minimal AIGW chat call; read the key-budget headers. The key comes from
+ * the FILE `personal.aigw.budgetKeyFile` (never a command line / log). Never
+ * throws — returns { available:false, error, keyPresent } on any failure so the
+ * route can 200 with a clear reason. `fetchImpl` lets tests stub the network.
  */
 export async function fetchAigwBudget({ key, home, fetchImpl, now = Date.now() } = {}) {
-  const base = getAigwBase({ home })
-  const apiKey = (key ?? readAigwKey({ home })).trim()
+  const personal = loadPersonalConfig({ home })
+  const base = personal.aigw.base
+  const apiKey = String(key ?? readKeyFile(personal.aigw.budgetKeyFile)).trim()
   if (!apiKey) {
-    return { available: false, keyPresent: false, base, error: 'AIGW key not found (~/.config/meshy-aigw.key)' }
+    return { available: false, keyPresent: false, base, error: 'AIGW budget key file not found (personal.json aigw.budgetKeyFile, default ~/.config/meshy-aigw.key)' }
   }
   const f = fetchImpl || fetch
   try {
-    const res = await f(`${base}/user/info`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(15000),
+    const res = await f(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: personal.aigw.budgetProbeModel, messages: [{ role: 'user', content: 'ok' }], max_tokens: 1 }),
+      signal: AbortSignal.timeout(20000),
     })
     if (!res.ok) {
       let body = null
       try { body = await res.json() } catch {}
-      const msg = body?.detail || body?.error || `HTTP ${res.status}`
-      return { available: false, keyPresent: true, base, error: `AIGW /user/info ${msg}` }
+      const msg = body?.error?.type || body?.error?.message || body?.detail || `HTTP ${res.status}`
+      return { available: false, keyPresent: true, base, error: `AIGW budget probe HTTP ${res.status}: ${msg}` }
     }
-    const data = await res.json()
-    return { ...mapAigwBudgetResponse(data, { now }), keyPresent: true, base }
+    try { await res.text?.() } catch {} // drain the 1-token body
+    return { ...mapAigwKeyBudgetHeaders(res.headers), keyPresent: true, base, checkedAt: new Date(now).toISOString() }
   } catch (err) {
-    return { available: false, keyPresent: true, base, error: `AIGW /user/info fetch failed: ${err?.message || err}` }
+    return { available: false, keyPresent: true, base, error: `AIGW budget probe failed: ${err?.message || err}` }
   }
 }
 
 /**
- * Build the AIGW monthly-budget source summary for /api/usage/summary. Probes
- * /user/info and surfaces a monthly window carrying the tier + advice + reset
+ * Build the AIGW key-budget source summary for /api/usage/summary. Probes
+ * the key-budget headers (fetchAigwBudget) and surfaces a monthly window carrying the tier + advice + reset
  * for the AI-readable surface. No fabricated numbers — unavailable is honest.
  */
 export async function buildAigwBudgetSourceSummary({ now = Date.now(), home, fetchImpl } = {}) {
@@ -1387,7 +1211,6 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), home, fet
     const sev = pctUsed == null ? null : severityFor(pctUsed)
     return {
       ...base,
-      user_email: budget.user_email,
       pct_used: pctUsed,
       max_budget: budget.max_budget,
       spend: budget.spend,
@@ -1407,7 +1230,7 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), home, fet
         estimated: false, severity: sev, usedTokens: null,
         pctRemaining: budget.pct_remaining, daysLeft: budget.days_left,
         tier: budget.tier, advice: budget.advice,
-        note: `AIGW /user/info: 预算 $${budget.max_budget} / 已花 $${budget.spend} / 剩余 $${budget.remaining} (${budget.pct_remaining}%). 重置 ${budget.reset_at || '?'}${budget.days_left != null ? ` (还剩 ~${budget.days_left} 天)` : ''}. 策略档=${budget.tier}`,
+        note: `AIGW key budget (response headers): 上限 $${budget.max_budget ?? '?'} / 已花 $${budget.spend} / 剩余 $${budget.remaining ?? '?'}${budget.pct_remaining != null ? ` (${budget.pct_remaining}%)` : ''}. 策略档=${budget.tier}`,
       }],
     }
   }
@@ -1419,7 +1242,7 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), home, fet
       used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
       resetAt: null, burnRatePerMin: null, projectedHitAt: null,
       estimated: false, severity: null, usedTokens: null,
-      note: budget.error || 'AIGW /user/info budget unavailable.',
+      note: budget.error || 'AIGW key budget unavailable.',
     }],
     error: budget.error,
   }
@@ -1454,9 +1277,7 @@ export async function buildUsageSummary({ home, store, now = Date.now(), fetchIm
     })
     sources.push(src)
   }
-  // AIGW (LiteLLM) — /key/info real spend + /spend/logs/v2 burn + local budgetUsd.
-  sources.push(await buildAigwSourceSummary({ now, home: homeDir, fetchImpl }))
-  // AIGW monthly budget — /user/info max_budget + spend + reset + tier (MES-13788 延续)
+  // AIGW key budget — response headers spend + max budget + tier
   sources.push(await buildAigwBudgetSourceSummary({ now, home: homeDir, fetchImpl }))
   // flat entries for AI consumption
   const entries = []

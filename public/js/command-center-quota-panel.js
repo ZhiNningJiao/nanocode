@@ -16,8 +16,7 @@ const POLL_MS = 60_000
 const CHIP = 'quota'
 const TAB_ID = 'cc-quota'
 
-const views = new Set() // right-panel tab + cockpit block
-const stripSubs = new Set() // cockpit top-strip callbacks: cb(last, lastError)
+const views = new Set() // right-panel tab + the cockpit 额度 page's per-pool detail
 let chipOn = false
 let timer = null
 let inFlight = false
@@ -42,7 +41,6 @@ async function poll() {
   }
   renderChip()
   for (const el of views) renderView(el)
-  for (const cb of stripSubs) cb(last, lastError)
 }
 
 function pollIfStale() {
@@ -50,27 +48,9 @@ function pollIfStale() {
 }
 
 function syncTimer() {
-  const want = chipOn || views.size > 0 || stripSubs.size > 0
+  const want = chipOn || views.size > 0
   if (want && !timer) timer = setInterval(poll, POLL_MS)
   if (!want && timer) { clearInterval(timer); timer = null }
-}
-
-/**
- * Cockpit top quota strip (not a tab/chip — a compact all-pools row). Shares
- * this module's single poll/cache so subscribing never adds a network
- * request beyond what the chip/tab already cause (no second poller for the
- * same `/api/command-center/quota` data).
- */
-export function subscribeQuotaStrip(cb) {
-  stripSubs.add(cb)
-  syncTimer()
-  cb(last, lastError)
-  pollIfStale()
-}
-
-export function unsubscribeQuotaStrip(cb) {
-  stripSubs.delete(cb)
-  syncTimer()
 }
 
 function level(pct) {

@@ -15,6 +15,8 @@ demo-toolblocks/
 research/arch-refactor/screenshots/
 *.log
 *.png
+# PWA app icons (manifest) are the only committed PNGs
+!public/icons/*.png
 run.log
 nanocode-*.log
 server-*.log

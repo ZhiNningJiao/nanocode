@@ -467,7 +467,7 @@ export async function renderUsagePane(pane) {
   })
 }
 
-// ── AIGW monthly budget card (MES-13788 延续: /user/info 剩余额度 + 自适配档) ──
+// ── AIGW key budget card (key-budget response headers + 自适配档) ──
 // Headline card: remaining $ + progress bar (spent/max) + tier badge (colored
 // by strategy) + reset date / days-left + advice. Mobile 390×844 + touch ≥44px
 // handled by the .rp-budget-* CSS. Falls back to an honest unavailable state.
@@ -570,12 +570,6 @@ function renderAigwBudgetSection(budget) {
     advice.textContent = budget.advice
     section.appendChild(advice)
   }
-  if (budget.user_email) {
-    const who = document.createElement('div')
-    who.className = 'rp-hint rp-budget-user'
-    who.textContent = budget.user_email
-    section.appendChild(who)
-  }
   return section
 }
 
@@ -655,10 +649,10 @@ function renderUsageSourceCard(src) {
   // status badge: unavailable / oauth-down / estimated
   const badge = document.createElement('span')
   badge.className = 'rp-usage-badge'
-  if (src.source === 'aigw-litellm' && !src.available) {
+  if (!src.available && src.error) {
     badge.classList.add('rp-usage-badge-down')
     badge.textContent = t('usage.summary.unavailable')
-    badge.title = src.error || t('usage.summary.aigwDown')
+    badge.title = src.error
   } else if (src.kind === 'claude-oauth' && src.oauthAvailable === false) {
     badge.classList.add('rp-usage-badge-est')
     badge.textContent = t('usage.summary.estimated')

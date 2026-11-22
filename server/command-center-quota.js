@@ -55,7 +55,9 @@ const DISPATCH_LOG_MAX_FILES_PER_DIR = 15
 // polling every few seconds should not re-tail-read every log file each time.
 const LOG_SCAN_CACHE_MS = 20_000
 
-const USAGE_SNAP_LINE_RE = /^(\d{2})-(\d{2}) (\d{2}):(\d{2}) \.claude-team(\w+): 5h=([\d.]+)% 7d=([\d.]+)%.*?reset5h=(\S*) reset7d=(\S*) .*?src=(\S+)\s*$/
+// The trailing ` src=` tag is optional: some snapshot lines (e.g. ones the
+// usage-API path wrote) end right after `extra=`; their numbers are just as real.
+const USAGE_SNAP_LINE_RE = /^(\d{2})-(\d{2}) (\d{2}):(\d{2}) \.claude-team(\w+): 5h=([\d.]+)% 7d=([\d.]+)%.*?reset5h=(\S*) reset7d=(\S*)/
 const USAGE_SNAP_RESET_RE = /^(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
 const QUOTA_HDR_LINE_RE = /QUOTA_HDR stage=\w+ pool=(T\w+) (\{.*\})\s*$/
 

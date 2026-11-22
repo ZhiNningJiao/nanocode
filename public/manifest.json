@@ -1,16 +1,17 @@
 {
-  "name": "Nanocode",
+  "name": "Nanocode 指挥舱",
   "short_name": "Nanocode",
-  "description": "Terminal workspace for AI coding assistants",
+  "description": "指挥舱：按大事记追进度的甘特、等你批、机器和额度；工作区：终端与 AI 会话",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#08090a",
-  "theme_color": "#8cc63f",
+  "background_color": "#0b0c0a",
+  "theme_color": "#0b0c0a",
   "icons": [
-    {
-      "src": "/favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml"
-    }
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
   ]
 }

@@ -6,7 +6,10 @@
     <title>Nanocode</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#8cc63f" />
+    <meta name="theme-color" content="#0b0c0a" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
 
     <script>
       // Apply theme BEFORE the stylesheet paints — avoids flash.
@@ -610,5 +613,9 @@
     <script type="module" src="/js/app.js"></script>
     <script type="module" src="/js/tts.js"></script>
     <script type="module" src="/js/ntfy-hook.js"></script>
+    <script>
+      // installable desktop / home-screen app (PWA): network-first shell worker
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {})
+    </script>
   </body>
 </html>

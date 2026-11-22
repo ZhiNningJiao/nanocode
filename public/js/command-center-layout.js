@@ -25,8 +25,8 @@ function ms(iso) {
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)) }
 
 /**
- * Smallest time window covering the given rows (start → latest end / now),
- * padded 2% each side; falls back to the last hour when nothing is datable.
+ * Smallest time window covering the given rows (start → latest end / now /
+ * expected finish of a running row), padded 2% each side; falls back to the last hour when nothing is datable.
  */
 export function ganttWindow(rows, now) {
   const nowMs = ms(now)
@@ -36,8 +36,9 @@ export function ganttWindow(rows, now) {
     const s = ms(r.start)
     if (!Number.isFinite(s)) continue
     const e = r.endOpen ? nowMs : ms(r.end)
+    const eta = r.endOpen ? ms(r.eta) : NaN
     lo = Math.min(lo, s)
-    hi = Math.max(hi, Number.isFinite(e) ? e : s)
+    hi = Math.max(hi, Number.isFinite(e) ? e : s, Number.isFinite(eta) ? eta : -Infinity)
   }
   if (!Number.isFinite(lo)) return { from: nowMs - 3600_000, to: nowMs }
   if (hi - lo < 60_000) hi = lo + 60_000
@@ -46,9 +47,9 @@ export function ganttWindow(rows, now) {
 }
 
 /**
- * rows: [{ id, start, end, endOpen, points: [{ t, kind }] }]
+ * rows: [{ id, start, end, endOpen, eta?, points: [{ t, kind, label?, pid? }] }]
  * opts: { width (px, required), from, to (ms or ISO), now (ms or ISO) }
- * → { width, from, to, nowX, ticks: [{ x, t }], rows: [{ id, invalid, offscreen, x, w, open, points: [{ x, t, kind, label }] }] }
+ * → { width, from, to, nowX, ticks: [{ x, t }], rows: [{ id, invalid, offscreen, x, w, open, etaX, eta, points: [{ x, t, kind, label, pid }] }] }
  */
 export function layoutGantt(rows, { width, from, to, now } = {}) {
   if (!Number.isFinite(width) || width <= 0) throw new Error('layoutGantt: width must be a positive number')
@@ -74,10 +75,14 @@ export function layoutGantt(rows, { width, from, to, now } = {}) {
     const x = Math.min(x0, width - w < 0 ? 0 : width - w)
     if (x + w > width) w = Math.max(0, width - x)
     const points = (r.points || [])
-      .map((p) => ({ t: p.t, kind: p.kind, label: p.label, raw: ms(p.t) }))
+      .map((p) => ({ t: p.t, kind: p.kind, label: p.label, pid: p.pid, raw: ms(p.t) }))
       .filter((p) => Number.isFinite(p.raw) && p.raw >= f && p.raw <= tt)
-      .map((p) => ({ x: clamp(xOf(p.raw), 0, width), t: p.t, kind: p.kind, label: p.label }))
-    return { id: r.id, invalid: false, offscreen, x, w, open: !!r.endOpen, points }
+      .map((p) => ({ x: clamp(xOf(p.raw), 0, width), t: p.t, kind: p.kind, label: p.label, pid: p.pid }))
+    // expected finish (export field `eta`) of a still-running row: drawn as a
+    // dashed tail from the bar's end; only when it lies ahead of the bar.
+    const etaMs = r.endOpen ? ms(r.eta) : NaN
+    const etaX = Number.isFinite(etaMs) && etaMs > e && etaMs >= f ? clamp(xOf(etaMs), 0, width) : null
+    return { id: r.id, invalid: false, offscreen, x, w, open: !!r.endOpen, points, etaX, eta: etaX != null ? r.eta : null }
   })
 
   const maxTicks = Math.max(1, Math.floor(width / MIN_TICK_GAP_PX))

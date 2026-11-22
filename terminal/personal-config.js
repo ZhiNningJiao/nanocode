@@ -11,7 +11,10 @@
  *
  *   aigw.key       -> personal.aigw.key            -> ~/.config/meshy-aigw.key
  *   aigw.base      -> personal.aigw.base           -> $MESHY_AIGW_BASE -> https://aigw.meshy.team
- *   aigw.budgetUsd -> personal.aigw.budgetUsd      -> 1000 (default; key-side max_budget is null)
+ *   aigw.budgetKeyFile -> personal.aigw.budgetKeyFile -> ~/.config/meshy-aigw.key
+ *                     (FILE whose key the usage-panel budget card probes; the key
+ *                      itself is never written into personal.json for this)
+ *   aigw.budgetProbeModel -> personal.aigw.budgetProbeModel -> sglang-glm-5.3-flash
  *   linear.apiKey  -> personal.linear.apiKey       -> ~/.config/linear-api.key
  *   remote.machines -> personal.remote.machines[]  -> null (no dev machines declared)
  *   claude.teams   -> personal.claude.teams[]       -> null (auto-discover ~/.claude + ~/.claude-team*)
@@ -45,7 +48,8 @@ export const PERSONAL_CONFIG_DIR = join(homedir(), '.config', 'nanocode')
 export const PERSONAL_CONFIG_PATH = join(PERSONAL_CONFIG_DIR, 'personal.json')
 
 export const DEFAULT_AIGW_BASE = 'https://aigw.meshy.team'
-export const DEFAULT_AIGW_BUDGET_USD = 1000
+/** Cheapest gateway model for the one-token budget probe (usage panel). */
+export const DEFAULT_AIGW_BUDGET_PROBE_MODEL = 'sglang-glm-5.3-flash'
 
 // MES-14049 — akari 检察插件 defaults. The akari server URL is NOT a secret (it's
 // an internal dispatch server), so it is projected to the frontend in full for
@@ -63,7 +67,7 @@ const _cache = new Map()
  * Read a secret file (chmod 600 expected) and return its trimmed contents, or
  * '' if absent / unreadable. Never throws.
  */
-function readKeyFile(filePath) {
+export function readKeyFile(filePath) {
   if (!filePath) return ''
   try {
     return readFileSync(filePath, 'utf8').trim()
@@ -105,7 +109,7 @@ export function personalConfigPath({ home, configPath } = {}) {
  * Load the unified personal config. Reads `~/.config/nanocode/personal.json`
  * first, then falls back to the scattered sources. Returns a frozen object:
  *   {
- *     aigw:   { base, key, budgetUsd },
+ *     aigw:   { base, key, budgetKeyFile, budgetProbeModel },
  *     linear: { apiKey },
  *     remote: { machines: [...] | null },             // null = no dev machines
  *     claude: { teams: [{name,configDir}] | null },   // null => auto-discover
@@ -138,10 +142,13 @@ export function loadPersonalConfig({ home, configPath } = {}) {
   const aigwKey =
     (typeof file?.aigw?.key === 'string' && file.aigw.key.trim()) ||
     readKeyFile(join(homeDir, '.config', 'meshy-aigw.key'))
-  const aigwBudgetUsdRaw = file?.aigw?.budgetUsd
-  const aigwBudgetUsd = Number.isFinite(Number(aigwBudgetUsdRaw))
-    ? Number(aigwBudgetUsdRaw)
-    : DEFAULT_AIGW_BUDGET_USD
+  const budgetKeyFileRaw = typeof file?.aigw?.budgetKeyFile === 'string' ? file.aigw.budgetKeyFile.trim() : ''
+  const aigwBudgetKeyFile = budgetKeyFileRaw
+    ? (budgetKeyFileRaw.startsWith('~/') ? join(homeDir, budgetKeyFileRaw.slice(2)) : budgetKeyFileRaw)
+    : join(homeDir, '.config', 'meshy-aigw.key')
+  const aigwBudgetProbeModel =
+    (typeof file?.aigw?.budgetProbeModel === 'string' && file.aigw.budgetProbeModel.trim()) ||
+    DEFAULT_AIGW_BUDGET_PROBE_MODEL
 
   // linear -------------------------------------------------------------
   const linearApiKey =
@@ -219,7 +226,7 @@ export function loadPersonalConfig({ home, configPath } = {}) {
     DEFAULT_AKARI_LENS_URL
 
   const cfg = Object.freeze({
-    aigw: Object.freeze({ base: aigwBase, key: aigwKey, budgetUsd: aigwBudgetUsd }),
+    aigw: Object.freeze({ base: aigwBase, key: aigwKey, budgetKeyFile: aigwBudgetKeyFile, budgetProbeModel: aigwBudgetProbeModel }),
     linear: Object.freeze({ apiKey: linearApiKey }),
     remote: Object.freeze({ machines: remoteMachines }),
     claude: Object.freeze({ teams: claudeTeams, autoDiscoverTeams: claudeAutoDiscoverTeams }),
@@ -290,7 +297,6 @@ export function projectForPlugin(config, manifest) {
   if (perms.has('personal.aigw')) {
     out.aigw = {
       base: config.aigw.base,
-      budgetUsd: config.aigw.budgetUsd,
       hasKey: !!config.aigw.key,
       keyMasked: maskSecret(config.aigw.key),
     }
