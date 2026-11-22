@@ -13,6 +13,7 @@ import { t } from './i18n.js'
 import { esc, fmtTime } from './command-center-format.js'
 
 const DAY_MS = 86400_000
+const SPIKE_LABEL_PX = 70 // width of a "T3 周重置" label at the big chart's font size
 /** Remaining share of all pools (Σ 7-day remaining / pool count) below which the card turns warn / crit. */
 export const QUOTA_WARN_SHARE = 0.25
 export const QUOTA_CRIT_SHARE = 0.1
@@ -103,7 +104,15 @@ function md(iso) {
 export function quotaCurveSvg(lay, { big = false } = {}) {
   const { width: w, height: h } = lay
   const ticks = lay.ticks.map((tk) => `<line class="ck-qc-grid" x1="${tk.x.toFixed(1)}" x2="${tk.x.toFixed(1)}" y1="0" y2="${h}"/>${big ? `<text class="ck-qc-day" x="${(tk.x + 3).toFixed(1)}" y="${h - 3}">${esc(md(tk.t))}</text>` : ''}`).join('')
-  const spikes = lay.spikes.map((s) => `<g class="ck-qc-spike"><circle cx="${s.x.toFixed(1)}" cy="${s.y.toFixed(1)}" r="${big ? 4 : 3}"><title>${esc(`${fmtTime(s.t)} ${t('cockpit.q.reset', s.pool)}`)}</title></circle>${big ? `<text x="${s.x.toFixed(1)}" y="${Math.max(10, s.y - 6).toFixed(1)}">${esc(t('cockpit.q.reset', s.pool))}</text>` : ''}</g>`).join('')
+  // big chart: a label closer than SPIKE_LABEL_PX to the previous one goes one row lower (no overlap)
+  let lastX = -Infinity
+  let row = 0
+  const spikes = lay.spikes.map((s) => {
+    row = s.x - lastX < SPIKE_LABEL_PX ? (row + 1) % 3 : 0
+    lastX = s.x
+    const ly = Math.max(10, s.y - 6) - row * 13
+    return `<g class="ck-qc-spike"><circle cx="${s.x.toFixed(1)}" cy="${s.y.toFixed(1)}" r="${big ? 4 : 3}"><title>${esc(`${fmtTime(s.t)} ${t('cockpit.q.reset', s.pool)}`)}</title></circle>${big ? `<text x="${s.x.toFixed(1)}" y="${Math.max(10, ly).toFixed(1)}">${esc(t('cockpit.q.reset', s.pool))}</text>` : ''}</g>`
+  }).join('')
   const marks = lay.future.marks.filter((m) => big || m.kind === '7d').map((m) => m.kind === '7d'
     ? `<g class="ck-qc-next"><circle cx="${m.x.toFixed(1)}" cy="${m.y.toFixed(1)}" r="${big ? 3.5 : 2.5}"><title>${esc(`${fmtTime(m.at)} ${t('cockpit.q.nextReset', m.pool, m.gainPct)}`)}</title></circle>${big ? `<text x="${m.x.toFixed(1)}" y="${Math.max(10, m.y - 6).toFixed(1)}">${esc(m.pool)}</text>` : ''}</g>`
     : `<line class="ck-qc-5h" x1="${m.x.toFixed(1)}" x2="${m.x.toFixed(1)}" y1="${h - 9}" y2="${h}"><title>${esc(`${fmtTime(m.at)} ${m.pool} ${t('cockpit.q.reset5h')}`)}</title></line>`).join('')
