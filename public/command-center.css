@@ -99,6 +99,8 @@ a.cc-key:hover { color: var(--primary); }
 .cc-sub { font-weight: 400; font-size: 11px; color: var(--text-secondary); margin-top: 3px; }
 .cc-err { font-family: var(--font-mono); word-break: break-all; }
 .cc-note { padding: 6px 12px; font-size: 11px; color: var(--warning); background: var(--warning-bg); }
+.cc-degrade-line { display: flex; align-items: center; gap: 6px; padding: 3px 2px; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-degrade-line .service-dot { width: 7px; height: 7px; flex-shrink: 0; }
 
 .cc-ms { list-style: none; margin: 0; padding: 0 0 0 10px; border-left: 2px solid var(--border); }
 .cc-ms li { position: relative; display: flex; flex-wrap: wrap; gap: 2px 8px; padding: 3px 0 7px 10px; font-size: 11.5px; }
@@ -302,6 +304,23 @@ body.cockpit-active #sidebar-toggle, body.cockpit-active #back-to-menu, body.coc
 .ck-view-btn.active { background: var(--primary); color: #fff; font-weight: 700; }
 .ck-main-body { padding: 10px 12px; min-height: 160px; }
 .ck-main-body > .cc-block-down, .ck-main-body > .cc-note { margin-bottom: 8px; }
+
+/* top quota strip (B2 direction: every pool's 5h/7d usage at a glance,
+   above the events list — not buried in the side column / a settings tab) */
+.ck-quota-strip { display: flex; gap: 14px; align-items: center; padding: 6px 12px; overflow-x: auto; border-bottom: 1px solid var(--border); background: var(--bg-secondary); flex-shrink: 0; scrollbar-width: thin; }
+.ck-quota-strip:empty { display: none; padding: 0; border-bottom: none; }
+.ck-qs-pool { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: 11px; }
+.ck-qs-name { font-weight: 800; color: var(--text-secondary); min-width: 1.4em; }
+.ck-qs-win { display: inline-flex; align-items: center; gap: 4px; }
+.ck-qs-wlabel { color: var(--text-tertiary); }
+.ck-qs-bar { width: 46px; height: 4px; border-radius: 2px; background: var(--bg-tertiary); overflow: hidden; }
+.ck-qs-fill { display: block; height: 100%; background: var(--success); }
+.ck-qs-fill.ck-qs-warn { background: var(--warning); }
+.ck-qs-fill.ck-qs-hot { background: var(--error); }
+.ck-qs-pct { color: var(--text-tertiary); min-width: 2.4em; }
+.ck-qs-t-warn { color: var(--warning); }
+.ck-qs-t-hot { color: var(--error); font-weight: 700; }
+.ck-qs-dash { color: var(--text-muted); }
 .ck-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .ck-block { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; max-height: 44vh; display: flex; flex-direction: column; background: var(--bg); }
 .ck-block > .cc-mod, .ck-block-body { overflow: auto; min-height: 0; }
@@ -314,14 +333,34 @@ body.cockpit-active #sidebar-toggle, body.cockpit-active #back-to-menu, body.coc
 .ck-quote { font-size: 11px; }
 
 /* list view: one card per big event, cars folded under it */
-.ck-list { display: flex; flex-direction: column; gap: 8px; }
-.ck-ev { border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; background: var(--bg-secondary); }
+.ck-list { display: flex; flex-direction: column; gap: 10px; }
+.ck-ev { border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px; background: var(--bg-secondary); }
 .ck-ev.open { border-color: var(--primary); }
 .ck-ev-none { border-style: dashed; }
 .ck-ev-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .ck-ev-title { font-weight: 700; font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-ev-actions { display: inline-flex; gap: 4px; }
 .ck-ev-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11.5px; color: var(--text-secondary); margin: 4px 0 0 29px; }
+/* right-aligned "what's blocking it + how many cars" cluster, so the head row
+   reads left→right as title | urgent reason | counters, like a dashboard row
+   instead of a wall of inline text (owner: "按照meshy产品特征的那几张"). */
+.ck-ev-right { display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0; font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+.ck-ev-updated { white-space: nowrap; }
+.ck-ev-count { white-space: nowrap; }
+.ck-ev-urgent {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 320px;
+  padding: 1px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning);
+  /* opacity-only pulse (no vendored animation library — Animate.css was
+     considered and rejected, see REPORT_nanoviz_1005.md: its current
+     release is Hippocratic-licensed, not MIT/Apache-2.0/BSD) so
+     prefers-reduced-motion (global rule in style.css) can zero it out
+     without a transform-origin to unwind. */
+  animation: ck-urgent-pulse 2.2s cubic-bezier(.4, 0, .6, 1) infinite;
+}
+.ck-ev-urgent.cc-st-blocked { background: var(--error-bg); color: var(--error); border-color: var(--error); }
+@keyframes ck-urgent-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 .ck-ev > .cc-prog, .ck-ev > .cc-ei-last { margin-left: 29px; }
 .ck-cars { margin: 8px 0 0 29px; border-top: 1px dashed var(--border); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
 .ck-car { display: grid; grid-template-columns: 10px 150px 76px 196px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
@@ -396,6 +435,9 @@ body.cockpit-active #sidebar-toggle, body.cockpit-active #back-to-menu, body.coc
   .ck-car-time, .ck-car-last { grid-column: 2 / -1; }
   .ck-ev-meta, .ck-ev > .cc-prog, .ck-ev > .cc-ei-last, .ck-cars { margin-left: 0; }
   .ck-cars .cc-car, .ck-lane-detail .cc-car, .ck-graph-detail .cc-car { margin-left: 0; }
+  .ck-ev-updated { display: none; } /* phone width: keep the urgent chip + car count, drop the timestamp */
+  .ck-ev-urgent { max-width: 40vw; }
+  .ck-quota-strip { padding: 6px 8px; gap: 10px; }
   .ck-set-row { grid-template-columns: minmax(0, 1fr) auto; }
   .ck-set-desc { grid-column: 1 / -1; grid-row: 2; }
 }

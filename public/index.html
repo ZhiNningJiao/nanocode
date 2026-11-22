@@ -27,8 +27,8 @@
         try {
           if (localStorage.getItem('cockpit:mainView') !== 'workspace') document.documentElement.classList.add('cockpit-boot')
           var sk = localStorage.getItem('nanocodeSkin')
-          var skinTheme = { classic: '', glass: '', motion: '', daylight: 'light', neon: 'dark' } // = skin.js SKIN_THEME
-          if (!(sk in skinTheme)) sk = 'classic'
+          var skinTheme = { meshy: 'dark', 'meshy-glass': 'dark', 'meshy-motion': 'dark' } // = skin.js SKIN_THEME
+          if (!(sk in skinTheme)) sk = 'meshy'
           document.documentElement.setAttribute('data-skin', sk)
           if (skinTheme[sk]) document.documentElement.setAttribute('data-theme', skinTheme[sk])
         } catch (_) {

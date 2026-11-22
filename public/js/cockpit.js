@@ -20,7 +20,7 @@
  */
 import { t } from './i18n.js'
 import { updateSetting } from './api.js'
-import { ensureCss, esc, fmtTime, fmtAgo } from './command-center-format.js'
+import { ensureCss, esc, fmtTime, degradeLineHtml } from './command-center-format.js'
 import { initPluginState, isPluginEnabled, setPluginEnabled } from './right-panel.js'
 import {
   COCKPIT_MODULES, COCKPIT_SETTING_KEY, COCKPIT_VIEWS, normalizeLayout, serializeLayout, isModuleOn,
@@ -29,6 +29,7 @@ import {
 } from './cockpit-model.js'
 import { sourcesHtml, listViewHtml, ganttViewHtml, graphViewHtml, findCar } from './cockpit-views.js'
 import { stateLabel } from './command-center-render.js'
+import { quotaStripHtml } from './command-center-quota-strip.js'
 
 const POLL_MS = 60_000
 const MAIN_VIEW_KEY = 'cockpit:mainView'
@@ -61,6 +62,8 @@ let onEnterWorkspace = null
 let resizeObs = null
 let sideMounted = [] // [{ id, el, reset }]
 let sideGen = 0 // bumps on every side re-render; a stale async render stops
+let quotaStripMod = null // lazy-loaded command-center-quota-panel.js (shared with the side 'quota' block)
+let quotaStripCb = null // this page's subscribeQuotaStrip callback, or null when unsubscribed
 let saveState = { at: null, error: null }
 let enterNext = true // next main render is an "entry" (page / view just shown), not a poll
 let prevSig = new Map() // event key → signature at the previous render (data-change hook)
@@ -117,12 +120,14 @@ async function setMainView(v, { initial = false } = {}) {
     root.hidden = false
     renderSide()
     renderMain()
+    syncQuotaStrip()
     startPolling()
     await pollOnce()
   } else {
     if (root) root.hidden = true
     stopPolling()
     unmountSide()
+    unsubscribeQuotaStrip()
     if (onEnterWorkspace) await onEnterWorkspace({ initial })
   }
 }
@@ -176,8 +181,26 @@ function onPluginToggled(ev) {
     layout = setModuleOn(layout, m.id, on)
     saveLayout()
   }
-  if (mainView === 'cockpit' && root) { renderSide(); renderMain() }
+  if (mainView === 'cockpit' && root) { renderSide(); renderMain(); syncQuotaStrip() }
   renderSettingsList()
+}
+
+// ─── quota strip (cockpit main, above the events list) ─────────────────────
+
+async function syncQuotaStrip() {
+  const slot = root?.querySelector('.ck-quota-strip-slot')
+  if (!slot) return
+  if (!isModuleOn(layout, 'quota')) { unsubscribeQuotaStrip(); slot.innerHTML = ''; return }
+  if (!quotaStripMod) quotaStripMod = await SIDE_LOADERS.quota()
+  if (mainView !== 'cockpit' || !root) return // switched away while the module was loading
+  if (quotaStripCb) return // already subscribed
+  quotaStripCb = (last) => { slot.innerHTML = quotaStripHtml(last) }
+  quotaStripMod.subscribeQuotaStrip(quotaStripCb)
+}
+
+function unsubscribeQuotaStrip() {
+  if (quotaStripMod && quotaStripCb) quotaStripMod.unsubscribeQuotaStrip(quotaStripCb)
+  quotaStripCb = null
 }
 
 // ─── DOM ────────────────────────────────────────────────────────────────────
@@ -193,6 +216,7 @@ function ensureRoot() {
   }
   root.className = 'cockpit'
   root.innerHTML = `
+    <div class="ck-quota-strip-slot"></div>
     <div class="ck-grid">
       <section class="ck-main" data-module="events">
         <div class="ck-main-head">
@@ -285,8 +309,7 @@ function renderMain() {
   if (dataError) {
     // the whole endpoint is down: say so with the last success; keep any old view visibly marked
     summary.innerHTML = ''
-    const last = lastOkAt ? `${fmtTime(lastOkAt)}（${fmtAgo(lastOkAt)}）` : t('plugin.cc.never')
-    body.innerHTML = `<div class="cc-block-down"><span class="service-dot down"></span> ${esc(t('cockpit.eventsDown'))}<div class="cc-sub">${esc(t('plugin.cc.lastSuccess'))}: ${esc(last)}</div><div class="cc-sub cc-err">${esc(dataError)}</div></div>`
+    body.innerHTML = degradeLineHtml(t('cockpit.eventsDown'), { lastOkAt, error: dataError })
     return
   }
   if (!data) { body.innerHTML = `<div class="rp-empty">…</div>`; return }

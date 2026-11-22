@@ -99,7 +99,11 @@ export function normalizeMainView(v) { return MAIN_VIEWS.includes(v) ? v : 'cock
 
 // ─── big events ─────────────────────────────────────────────────────────────
 
-const ATTENTION_STATES = new Set(['running', 'waiting_human', 'blocked', 'failed', 'timeout'])
+// 'running' is the expected steady state of a healthy event, not an attention
+// state — including it here used to auto-expand almost every event (most big
+// events have a car running most of the time), turning the main view into a
+// wall of car rows. Only states that actually need a human's eyes start open.
+const ATTENTION_STATES = new Set(['waiting_human', 'blocked', 'failed', 'timeout'])
 
 /** PRD §6.1: an event that is all green and nobody waits on starts folded. */
 export function startsExpanded(e) {

@@ -10,7 +10,7 @@
  * Coordinates come from command-center-layout.js / cockpit-model.js only.
  */
 import { t } from './i18n.js'
-import { esc, fmtTime, fmtAgo, downBlock, linkHtml } from './command-center-format.js'
+import { esc, fmtTime, fmtAgo, degradeLineHtml, linkHtml } from './command-center-format.js'
 import { stateLabel, eventTitle, trackerBadge, progressText, progressHtml, carDetailHtml, ganttAxisHtml, ganttBarHtml } from './command-center-render.js'
 import { layoutGantt, ganttWindow } from './command-center-layout.js'
 import { eventGroups, buildSwimlanes, swimlaneRows, layoutGraph, spanWindow, GANTT_SPANS } from './cockpit-model.js'
@@ -22,9 +22,9 @@ const GRAPH_CELL_PX = 230
 export function sourcesHtml(d) {
   const parts = []
   const lin = d.sources?.linear
-  if (!lin?.ok) parts.push(downBlock(t('plugin.cc.linearDown'), lin))
+  if (!lin?.ok) parts.push(degradeLineHtml(t('plugin.cc.linearDown'), lin))
   else if (lin.truncated) parts.push(`<div class="cc-note">${esc(t('plugin.cc.truncated'))}</div>`)
-  if (!d.sources?.cars?.ok) parts.push(downBlock(t('plugin.cc.carsDown'), d.sources?.cars))
+  if (!d.sources?.cars?.ok) parts.push(degradeLineHtml(t('plugin.cc.carsDown'), d.sources?.cars))
   return parts.join('')
 }
 
@@ -38,6 +38,20 @@ function waitBadge(n) {
 
 function carsText(e) {
   return e.carsAvailable ? `${t('plugin.cc.cars')} ${e.carCount}` : t('plugin.cc.carsNoData')
+}
+
+// A car state that means a human needs to look at this event right now —
+// shown as one chip in the card head instead of making it findable only by
+// opening the card and reading every car's last milestone.
+const URGENT_CAR_STATES = new Set(['waiting_human', 'blocked'])
+
+function urgentChipHtml(e) {
+  if (!e.carsAvailable || !e.cars?.length) return ''
+  const car = e.cars.find((c) => URGENT_CAR_STATES.has(c.state))
+  if (!car) return ''
+  const point = car.points?.[car.points.length - 1]
+  const label = point?.label || car.title || car.car
+  return `<span class="ck-ev-urgent cc-st-${esc(car.state)}" title="${esc(`${car.car} · ${stateLabel(car.state)}`)}">${esc(label)}</span>`
 }
 
 // ─── list ───────────────────────────────────────────────────────────────────
@@ -59,10 +73,12 @@ function eventCardHtml(e, ui) {
         <span class="ck-chev">${open ? '▾' : '▸'}</span>
         <span class="cc-dot cc-st-${esc(st)}" title="${esc(stateLabel(st))}"></span>
         <span class="ck-ev-title">${esc(eventTitle(e, e.unassigned))}</span>
+        ${urgentChipHtml(e)}
         ${waitBadge(e.waitingCount)}
+        <span class="ck-ev-right">${e.updatedAt ? `<span class="ck-ev-updated">${esc(t('plugin.cc.updated'))} ${esc(fmtAgo(e.updatedAt))}</span>` : ''}<span class="ck-ev-count">${esc(carsText(e))}</span></span>
         <span class="ck-ev-actions">${quoteBtn('event', e.key)}</span>
       </div>
-      <div class="ck-ev-meta">${key}${e.unassigned ? '' : trackerBadge(e)}<span>${esc(carsText(e))}</span>${e.state ? `<span>${esc(stateLabel(e.state))}</span>` : ''}${e.updatedAt ? `<span>${esc(t('plugin.cc.updated'))} ${esc(fmtAgo(e.updatedAt))}</span>` : ''}</div>
+      <div class="ck-ev-meta">${key}${e.unassigned ? '' : trackerBadge(e)}${e.state ? `<span>${esc(stateLabel(e.state))}</span>` : ''}</div>
       ${progressHtml(e.progress)}
       ${last ? `<div class="cc-ei-last" title="${esc(`${fmtTime(last.t)} ${last.label}`)}">${esc(fmtAgo(last.t))} · ${esc(last.car)}：${esc(last.label)}</div>` : ''}
       ${open ? carsListHtml(e, ui) : ''}
