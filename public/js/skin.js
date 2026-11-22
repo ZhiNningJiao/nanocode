@@ -1,10 +1,10 @@
 /**
  * Skins (皮肤): colour, texture and motion only — never layout or features.
  * A skin is `html[data-skin="<id>"]` + its block in /skins.css (CSS variables,
- * backdrop blur, transitions). Most follow the user's light / dark theme; a
- * skin that has its own brightness (`theme` below) puts the existing light /
- * dark theme under itself (no second copy of the light palette) and gives the
- * user's own theme back when another skin is chosen.
+ * backdrop blur, transitions). All three are the Meshy brand palette (lime on
+ * near-black) and force dark underneath (no second copy of the dark palette —
+ * see the shared `[data-skin^="meshy"]` block); the user's own theme comes
+ * back once another (future, non-Meshy) skin is chosen.
  *
  * The choice is saved on the server (`ui_skin`) and cached in localStorage so
  * the inline boot script in index.html paints the right skin before any JS
@@ -15,18 +15,19 @@ import { updateSetting } from './api.js'
 import { esc, fmtTime } from './command-center-format.js'
 import { setTheme, savedTheme } from './theme.js'
 
-// id → the theme it brings along (null = follows the user's theme). The index.html
-// boot script mirrors this list to paint the right skin before modules load.
-const SKIN_THEME = { classic: null, glass: null, motion: null, daylight: 'light', neon: 'dark' }
+// id → the theme it brings along (the Meshy palette is dark-only — all three
+// bring 'dark' along). The index.html boot script mirrors this list to paint
+// the right skin before modules load.
+const SKIN_THEME = { meshy: 'dark', 'meshy-glass': 'dark', 'meshy-motion': 'dark' }
 export const SKINS = Object.keys(SKIN_THEME)
 export const SKIN_SETTING_KEY = 'ui_skin'
 const CACHE_KEY = 'nanocodeSkin'
 
-let current = 'classic'
+let current = 'meshy'
 let saveState = { at: null, error: null }
 let settingsEl = null
 
-export function normalizeSkin(v) { return SKINS.includes(v) ? v : 'classic' }
+export function normalizeSkin(v) { return SKINS.includes(v) ? v : 'meshy' }
 
 function apply(id) {
   const prevForced = SKIN_THEME[current]
