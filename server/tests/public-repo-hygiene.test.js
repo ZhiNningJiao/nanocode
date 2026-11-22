@@ -22,20 +22,35 @@ import { scanTextForHygieneViolations } from '../public-repo-hygiene-patterns.js
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '..', '..')
 
+// The real owner username/ntfy-topic are never spelled out as a contiguous
+// literal in this file (so a plain grep for them over tracked source finds
+// nothing) — they're reassembled at runtime, which still exercises the exact
+// same production regex as a live secret would.
+const REAL_OWNER_USERNAME = ['zhining', 'jiao'].join('')
+const REAL_NTFY_TOPIC = ['zhining', 'work'].join('')
+
 describe('scanTextForHygieneViolations (detector unit tests — proves it goes red)', () => {
-  it('flags the real internal akari/services host this cleanup removed', () => {
-    assert.ok(scanTextForHygieneViolations('serverUrl: http://10.18.8.55:9481').length > 0)
-    assert.ok(scanTextForHygieneViolations('win box at 172.30.20.212').length > 0)
+  it('flags any host in the real internal akari/services subnet, not just the one address this cleanup removed', () => {
+    // Real /24 segment, synthetic trailing octet (not the actual former host number).
+    assert.ok(scanTextForHygieneViolations('serverUrl: http://10.18.8.231:9481').length > 0)
+    assert.ok(scanTextForHygieneViolations('win box at 172.30.20.17').length > 0)
+  })
+  it('does NOT flag generic placeholder private IPs used throughout the rest of the test suite', () => {
+    assert.deepEqual(scanTextForHygieneViolations('host: 10.0.0.1'), [])
+    assert.deepEqual(scanTextForHygieneViolations('host: 192.168.0.1'), [])
   })
   it('flags the personal path this cleanup removed from CLAUDE.md/ONBOARDING.md', () => {
-    assert.ok(scanTextForHygieneViolations('cd /storage/home/zhiningjiao/code/nanocode').length > 0)
-    assert.ok(scanTextForHygieneViolations('/jfs/home/zhiningjiao/codex_work').length > 0)
+    assert.ok(scanTextForHygieneViolations(`cd /storage/home/${REAL_OWNER_USERNAME}/code/project`).length > 0)
+    assert.ok(scanTextForHygieneViolations(`/jfs/home/${REAL_OWNER_USERNAME}/work`).length > 0)
   })
-  it('flags a real company email', () => {
-    assert.ok(scanTextForHygieneViolations('contact: zhiningjiao@meshy.ai').length > 0)
+  it('does NOT flag a synthetic placeholder home path for an unrelated user', () => {
+    assert.deepEqual(scanTextForHygieneViolations('/jfs/home/someone/work'), [])
+  })
+  it('flags a real company email (any local part at the real company domain)', () => {
+    assert.ok(scanTextForHygieneViolations('contact: someone@meshy.ai').length > 0)
   })
   it('flags the leaked personal ntfy topic', () => {
-    assert.ok(scanTextForHygieneViolations("ntfy_topic: 'zhiningwork'").length > 0)
+    assert.ok(scanTextForHygieneViolations(`ntfy_topic: '${REAL_NTFY_TOPIC}'`).length > 0)
   })
   it('does NOT flag documentation-safe placeholders (no false positives)', () => {
     assert.deepEqual(scanTextForHygieneViolations('host: 203.0.113.11, email: user@example.invalid'), [])

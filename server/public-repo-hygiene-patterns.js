@@ -11,11 +11,13 @@
  *     style placeholder hosts.
  */
 
-// Explicit known-real addresses (this project's own former defaults), not a
-// blanket "every non-TEST-NET IP is bad" rule — test fixtures routinely use
-// arbitrary made-up IPs (1.2.3.4, etc.) that are not sensitive and should not
+// Explicit known-real subnets (this project's own former deployment segment),
+// matched at the /24 level rather than one exact host — any address in that
+// real segment is equally sensitive. This is deliberately NOT a blanket
+// "every non-TEST-NET IP is bad" rule — test fixtures routinely use arbitrary
+// made-up IPs (1.2.3.4, 10.0.0.1, etc.) that are not sensitive and should not
 // have to dodge a magic allowlist.
-const REAL_INTERNAL_IP = /\b10\.18\.8\.55\b|\b172\.30\.20\.212\b/
+const REAL_INTERNAL_IP = /\b10\.18\.8\.\d{1,3}\b|\b172\.30\.20\.\d{1,3}\b/
 
 // Narrow to the actual real username, not any path under a generic sandbox
 // prefix — '/storage/home/<anything>' is a legitimate convention this repo
