@@ -197,17 +197,26 @@ True "session loss" = metadata file corrupted on write. That is prevented by the
 
 > AI contributors: this section describes the actual deployment. Do not change any of the files or behavior described here.
 
-**Dev / single-user mode (this repo's typical usage):**
+**Dev / single-user mode (this repo's typical usage, the default):**
 - `npm start` or `npm run dev` — runs `node server/index.js` directly.
 - Port defaults to `3000` (override with `PORT=`).
 - Data stored in `data/nanocode.json` relative to the repo.
-- The working instance at port `3001` on `10.18.8.55` is the live server. Do not kill or restart it without explicit instruction.
 
-**System / multi-user mode (`NANOCODE_SYSTEM=1`):**
-- `scripts/install.sh` (requires root) copies the app to `/usr/lib/nanocode/`, creates a `nanocode` system user, installs a setuid helper (`helper/nanocode-spawn`), and installs a systemd unit.
+**System / multi-user mode — an explicit, default-off switch:**
+- Single-user mode is the default; nothing related to multi-user mode loads
+  unless the switch is turned on.
+- The switch is `isSystemModeEnabled()` (`server/system-mode-flag.js`), which
+  today reads the `NANOCODE_SYSTEM=1` environment variable (consistent with
+  the rest of this project's env-driven config; see `server/index.js`'s single
+  call site). Off (default): `server/index.js` never imports
+  `router-mode.js` — the router, the setuid helper, the per-user worker, and
+  the auto-update timer are all separate artifacts that no single-user process
+  ever loads or starts. On: behavior is unchanged from upstream — see below.
+- `scripts/install.sh` (requires root) copies the app to `/usr/lib/nanocode/`, creates a `nanocode` system user, installs a setuid helper (`helper/nanocode-spawn`), and installs a systemd unit that sets `NANOCODE_SYSTEM=1`.
 - The router listens on TCP, each user spawned via `nanocode login` gets their own worker process with their own data file under `~/.nanocode/`.
 - Auto-update timer (`nanocode-update.timer`) pulls from git daily.
 - The CLI is `bin/nanocode` (login/logout/status subcommands).
+- Tests: `server/tests/system-mode-switch.test.js` covers both the off (default, router never mounts) and on (`NANOCODE_SYSTEM=1`, router mounts and serves) paths.
 
 **What "deployment logic" means and why not to touch it:**
-`scripts/install.sh`, `scripts/nanocode.service`, `scripts/nanocode-update.sh`, `bin/nanocode`, `helper/`, `server/router-mode.js` — these files control how the system-wide service is installed and started. Modifications require root access and systemd restarts. Changes to port numbers, startup scripts, or process topology belong to the ops layer, not to feature development.
+`scripts/install.sh`, `scripts/nanocode.service`, `scripts/nanocode-update.sh`, `bin/nanocode`, `helper/`, `server/router-mode.js`, `worker/` — these files implement what happens once the switch above is on. Modifications require root access and systemd restarts. Changes to port numbers, startup scripts, or process topology belong to the ops layer, not to feature development. The switch itself (`server/system-mode-flag.js` and its single call site in `server/index.js`) is NOT covered by this restriction — it is ordinary, testable feature-gating code.

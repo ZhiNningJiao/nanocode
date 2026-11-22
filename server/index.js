@@ -24,6 +24,7 @@ import { startWaker, stopWaker, restartWaker, getWakerControlState, setInterval 
 import { loadMachinesConfig, collectAllMachines, recommendHeavyWorkloadTarget } from './machines.js'
 import { PLUGINS_SETTING_KEY, isPluginEnabled } from './plugins-state.js'
 import { createCommandCenterRoutes } from './command-center.js'
+import { isSystemModeEnabled } from './system-mode-flag.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // TTS failures (fetch timeout, connection refused, bad response, stream errors)
@@ -68,7 +69,10 @@ const HOST = process.env.HOST || '0.0.0.0'
 // System mode: this process becomes the router. Workers are spawned
 // per-user by `nanocode login` (via the setuid helper) and reach us via
 // the control socket. See docs/system-mode-design.md.
-if (process.env.NANOCODE_SYSTEM === '1') {
+// isSystemModeEnabled() is the one explicit, default-off switch (README
+// "Deployment"): off, router-mode.js is never imported — nothing below this
+// branch exists for a single-user install.
+if (isSystemModeEnabled()) {
   const { startRouterMode } = await import('./router-mode.js')
   startRouterMode({ host: HOST, port: Number(PORT) })
   // Skip single-user setup below — the import above defines its own server.
