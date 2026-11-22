@@ -393,8 +393,12 @@ function renderPluginManager(pane) {
 
     // Plugins that mount a tab — or UI outside the panel (`global`, e.g. the
     // chat drawer's floating button) — get an enable toggle. Settings-only
-    // plugins (no tab) have nothing to toggle — their settings panel always shows.
-    if (plugin.tab || LAZY_PLUGINS[plugin.name]?.global) {
+    // plugins (no tab) normally have nothing to toggle — their settings panel
+    // always shows. The exception is a settings-only plugin that explicitly
+    // declares `togglable: true` because its background work must have a
+    // real on/off switch (e.g. 'linear-mobile-push' — owner 2026-11-22 point
+    // 4: default off, and background polling must only run when switched on).
+    if (plugin.tab || plugin.togglable || LAZY_PLUGINS[plugin.name]?.global) {
       const toggle = document.createElement('label')
       toggle.className = 'pm-toggle'
       const cb = document.createElement('input')

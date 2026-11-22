@@ -27,6 +27,7 @@ import {
   stopLinearNotifier,
   runLinearPoll,
   pushNtfyTest,
+  isDesignatedLinearPushInstance,
 } from '../linear-notif.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -105,6 +106,22 @@ describe('ntfy push', () => {
     assert.equal(isRecentImportantPush('MES-3', 'This needs owner approval ASAP'), true)
     assert.equal(isRecentImportantPush('MES-3', 'unrelated follow-up'), false)
     assert.equal(isRecentImportantPush('MES-99', 'needs owner approval'), false)
+  })
+})
+
+describe('isDesignatedLinearPushInstance (owner 2026-11-22 point 4: single pusher when 9475/9476 share a data dir)', () => {
+  it('defaults to port 9475 as the designated pusher', () => {
+    assert.equal(isDesignatedLinearPushInstance(9475, {}), true)
+    assert.equal(isDesignatedLinearPushInstance(9476, {}), false)
+  })
+
+  it('honors NANOCODE_LINEAR_PUSH_PORT override', () => {
+    assert.equal(isDesignatedLinearPushInstance(9476, { NANOCODE_LINEAR_PUSH_PORT: '9476' }), true)
+    assert.equal(isDesignatedLinearPushInstance(9475, { NANOCODE_LINEAR_PUSH_PORT: '9476' }), false)
+  })
+
+  it('compares as strings so numeric vs string port args both work', () => {
+    assert.equal(isDesignatedLinearPushInstance('9475', {}), true)
   })
 })
 

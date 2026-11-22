@@ -217,6 +217,9 @@ export const BUILTIN_PLUGINS = [
     // the plugin manager. Storage keys are unchanged from the old Settings UI
     // (ntfy_url/ntfy_topic server-side; notifySoundPrefs / nanocodeTurnNotify
     // in localStorage) so existing configs carry over with no migration step.
+    // Linear notifications are NOT part of this plugin — see
+    // 'linear-mobile-push' below (owner 2026-11-22 point 4: split out, own
+    // default-off switch; Feishu/another channel remains the main one).
     name: 'notify',
     version: '1.0.0',
     apiVersion: '1.0',
@@ -224,6 +227,26 @@ export const BUILTIN_PLUGINS = [
     permissions: ['network'],
     labelKey: 'plugin.notify.label',
     descriptionKey: 'plugin.notify.desc',
+    builtin: true,
+  },
+  {
+    // owner 2026-11-22 point 4 — Linear → mobile push, split out of 'notify'
+    // into its own plugin so it has its own default-off switch (most owners
+    // already watch Linear through another channel; this is an opt-in extra).
+    // Settings-only plugin (no tab). Gates server/linear-notif.js's poller —
+    // see server/index.js syncPluginBackgroundWork(). Only ONE nanocode
+    // instance pushes when multiple share a data dir (NANOCODE_LINEAR_PUSH_PORT,
+    // default the lowest/primary port) so turning this on doesn't double-push.
+    name: 'linear-mobile-push',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    permissions: ['network', 'personal.linear'],
+    labelKey: 'plugin.linearMobilePush.label',
+    descriptionKey: 'plugin.linearMobilePush.desc',
+    // Settings-only (no tab) but still needs a real enable/disable toggle in
+    // the plugin manager — see right-panel.js's togglable exception.
+    togglable: true,
     builtin: true,
   },
   {

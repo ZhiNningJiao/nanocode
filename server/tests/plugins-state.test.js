@@ -18,7 +18,7 @@ describe('plugin switch', () => {
     // every other builtin is optional and starts off
     const optional = BUILTIN_PLUGINS.filter((p) => !p.defaultOn).map((p) => p.name).sort()
     assert.deepEqual(optional, [
-      'akari', 'compare', 'historian', 'machines', 'memory', 'notify', 'persona',
+      'akari', 'compare', 'historian', 'linear-mobile-push', 'machines', 'memory', 'notify', 'persona',
       'remote', 'rewind', 'services', 'tasks', 'tts',
     ])
   })

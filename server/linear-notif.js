@@ -239,6 +239,20 @@ export async function pushNtfyTest() {
   return { pushed: result.ok, error: result.ok ? undefined : result.error }
 }
 
+/**
+ * 9475/9476 share one data dir (data/linear-notif-state.json) and one plugin
+ * switch, so if both start the poller they'd each push every new comment —
+ * the owner would get it twice. Pick ONE designated instance (by port) to
+ * actually run it; the other stays silent. Simple + explicit beats a
+ * distributed lock here: no timer, no network call, just a port comparison.
+ * Default designated port is 9475 (the primary instance); override with
+ * NANOCODE_LINEAR_PUSH_PORT if a deployment's primary runs elsewhere.
+ */
+export function isDesignatedLinearPushInstance(port, env = process.env) {
+  const designated = env.NANOCODE_LINEAR_PUSH_PORT || '9475'
+  return String(port) === String(designated)
+}
+
 export function startLinearNotifier({ store }) {
   if (_running) return
   _store = store

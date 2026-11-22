@@ -15,7 +15,7 @@ import { createTerminalRoutes } from '../terminal/routes.js'
 import { createFileRoutes } from '../terminal/files.js'
 import { seedRemoteDefaults } from '../terminal/remote.js'
 import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete, pushNtfyMessage, isNtfyConfigured, pushNtfyLinearImportant } from './qa-watcher.js'
-import { startLinearNotifier, stopLinearNotifier, pushNtfyTest, runLinearPoll } from './linear-notif.js'
+import { startLinearNotifier, stopLinearNotifier, pushNtfyTest, runLinearPoll, isDesignatedLinearPushInstance } from './linear-notif.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 import { loadPersonalConfig } from '../terminal/personal-config.js'
 import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntry } from './akari-proxy.js'
@@ -1058,12 +1058,18 @@ startQaWatcher(broadcastNotify)
 // Reads poll interval and API key from the store; gracefully degrades if
 // Linear key or lanes.json is unavailable.
 // Background work of optional plugins follows the one plugin switch: machine
-// board SSH poll ('machines'), Linear → ntfy notifier ('notify'; also needs a
-// Linear key). Re-synced whenever the browser saves plugins_enabled.
+// board SSH poll ('machines'), Linear → ntfy notifier ('linear-mobile-push';
+// also needs a Linear key, and only the designated instance runs it so two
+// nanocode processes sharing a data dir don't each push the same event —
+// see isDesignatedLinearPushInstance). Re-synced whenever the browser saves
+// plugins_enabled.
 function syncPluginBackgroundWork() {
   syncMachinesPoll()
-  if (isPluginEnabled(store, 'notify')) startLinearNotifier({ store, broadcastNotify })
-  else stopLinearNotifier()
+  if (isPluginEnabled(store, 'linear-mobile-push') && isDesignatedLinearPushInstance(PORT)) {
+    startLinearNotifier({ store, broadcastNotify })
+  } else {
+    stopLinearNotifier()
+  }
 }
 syncPluginBackgroundWork()
 
