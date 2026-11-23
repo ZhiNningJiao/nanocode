@@ -38,7 +38,7 @@ import { CARS_EXPORT_SCHEMA, GANTT_SCHEMA } from '../tools/command-center/export
 import { safeHttpUrl } from '../public/js/command-center-url.js'
 import { str, arr, validIso } from './command-center-fields.js'
 import { mapExportWaiting, buildWaitingView, createOwnerPendingSource } from './command-center-waiting.js'
-import { DEFAULT_QUOTA_STALE_SEC, createQuotaSource } from './command-center-quota.js'
+import { DEFAULT_QUOTA_STALE_SEC, createQuotaSource, createQuotaSnapshotSource, QUOTA_SNAPSHOT_POLL_MS } from './command-center-quota.js'
 import { createQuotaSeriesSource } from './command-center-quota-series.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -543,9 +543,26 @@ export function createCommandCenterRoutes({
   carsSource = createCarsSource(),
   ownerSource = createOwnerPendingSource(),
   quotaSource = createQuotaSource(),
+  quotaSnapshotSource = createQuotaSnapshotSource({ quotaSource }),
   quotaSeriesSource = createQuotaSeriesSource(),
 } = {}) {
   const router = express.Router()
+
+  // P0-5 quota background refresh (nanoquota_1340): independent of request
+  // traffic, so the dashboard never pays for a cold scan after a quiet
+  // stretch. Config is re-read each tick (it can be hand-edited on a live
+  // host); a missing/broken config just skips this tick, same as the route.
+  const refreshQuotaSnapshot = () => {
+    const { config, error } = loadCommandCenterConfig(configPath)
+    if (error) return
+    quotaSnapshotSource.get(config.quotaDir, config.quotaStaleSec, {
+      usageSnapLogPath: config.quotaUsageSnapLogPath,
+      dispatchLogDirs: config.quotaDispatchLogDirs,
+    }).catch(() => {})
+  }
+  refreshQuotaSnapshot()
+  const quotaRefreshTimer = setInterval(refreshQuotaSnapshot, QUOTA_SNAPSHOT_POLL_MS)
+  quotaRefreshTimer.unref?.()
 
   router.get('/api/command-center', async (_req, res, next) => {
     try {
@@ -590,12 +607,14 @@ export function createCommandCenterRoutes({
 
   // P0-5 quota per pool — freshest of three readings per pool (on-disk
   // header-reading cache / usage_snap.log / dispatch-log QUOTA_HDR lines),
-  // still no model API calls from nanocode itself.
+  // still no model API calls from nanocode itself. Served from the snapshot
+  // cache above (quotaSnapshotSource) — never scans the shared disk inline,
+  // so a stalled mount cannot make this request slow (REPORT_nanoquota_1340.md).
   router.get('/api/command-center/quota', async (_req, res, next) => {
     try {
       const { config, error } = loadCommandCenterConfig(configPath)
       if (error) return res.json({ configured: false, error })
-      const q = await quotaSource.get(config.quotaDir, config.quotaStaleSec, {
+      const q = await quotaSnapshotSource.get(config.quotaDir, config.quotaStaleSec, {
         usageSnapLogPath: config.quotaUsageSnapLogPath,
         dispatchLogDirs: config.quotaDispatchLogDirs,
       })

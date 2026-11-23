@@ -424,8 +424,23 @@ describe('phase 2 routes', () => {
     assert.deepEqual(d.counts, { total: 3, owner: 2, cars: 1 })
     assert.ok(!JSON.stringify(d).includes(dir))
   })
+  // nanoquota_1340: the quota route now serves a background-refreshed
+  // snapshot (never scans the disk inline — REPORT_nanoquota_1340.md), so the
+  // very first request after the router is wired up may still say "reading
+  // in progress" for one tick before the background scan lands. Poll instead
+  // of asserting on a single fetch.
+  async function pollQuota(url, ready, timeoutMs = 2000) {
+    const until = Date.now() + timeoutMs
+    let last
+    while (Date.now() < until) {
+      last = await (await fetch(url)).json()
+      if (ready(last)) return last
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    return last
+  }
   it('GET /api/command-center/quota returns pools + tightest + source', async () => {
-    const d = await (await fetch(`${base}/api/command-center/quota`)).json()
+    const d = await pollQuota(`${base}/api/command-center/quota`, (r) => r.source?.ok)
     assert.equal(d.configured, true)
     assert.equal(d.source.ok, true)
     assert.equal(d.pools[0].pool, 'T3')
@@ -437,7 +452,7 @@ describe('phase 2 routes', () => {
     const w = await (await fetch(`${base}/p1/api/command-center/waiting`)).json()
     assert.equal(w.sources.owner.notConnected, true)
     assert.equal(w.counts.cars, 1)
-    const q = await (await fetch(`${base}/p1/api/command-center/quota`)).json()
+    const q = await pollQuota(`${base}/p1/api/command-center/quota`, (r) => r.source?.notConnected)
     assert.equal(q.source.notConnected, true)
     assert.deepEqual(q.pools, [])
   })
