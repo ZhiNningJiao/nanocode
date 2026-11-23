@@ -9,16 +9,23 @@
  * OS process survives nanocode reloads / crashes / idle reconnects.
  */
 
-import { spawnSync } from 'node:child_process'
+import { spawnSync, execFile } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { resolveClaudeConfigDir } from './claude-env.js'
+import { pathExists, timedFs } from './bounded-scan.js'
 
 const TMUX_BIN = process.env.NANOCODE_TMUX_BIN || '/usr/bin/tmux'
 const SOCKET_DIR = `${process.env.HOME}/.nanocode/tmux-sessions`
 const BRIDGE_SCRIPT = new URL('./claude-tmux-bridge.mjs', import.meta.url).pathname
+// SOCKET_DIR (socket + sessionId sidecar) sits under HOME, which on the
+// production hosts is the shared /jfs mount, and every tmux client call waits
+// on the tmux server. All of it runs on the event loop of a turn, so file IO is
+// async (bounded-scan.js timedFs) and tmux calls are async execFile with a
+// deadline — a stalled mount or a wedged tmux server must not freeze the
+// whole nanocode process (REPORT_nanolock_0730.md).
+const TMUX_CALL_TIMEOUT_MS = 15_000
 
 // Idle-watchdog backstop for an in-flight turn. The deadline resets on every
 // live event from the bridge, so a long but healthy turn is never killed — it
@@ -49,16 +56,22 @@ function getSessionIdPath(sessionKey) {
 }
 
 function ensureSocketDir() {
-  mkdirSync(SOCKET_DIR, { recursive: true, mode: 0o700 })
+  return timedFs.mkdir(SOCKET_DIR, { recursive: true, mode: 0o700 })
 }
 
-function tmuxSessionExists(name) {
-  try {
-    const r = spawnSync(TMUX_BIN, ['has-session', '-t', name], { stdio: 'ignore' })
-    return r.status === 0
-  } catch {
-    return false
-  }
+/** Run a tmux client command. Resolves { status, stdout, stderr }; never rejects. */
+function tmuxCall(args) {
+  return new Promise((resolve) => {
+    execFile(TMUX_BIN, args, { encoding: 'utf8', timeout: TMUX_CALL_TIMEOUT_MS }, (err, stdout, stderr) => {
+      if (err && err.killed) console.warn(`[claude:tmux] tmux ${args[0]} timed out after ${TMUX_CALL_TIMEOUT_MS}ms`)
+      const status = err ? (typeof err.code === 'number' ? err.code : 1) : 0
+      resolve({ status, stdout: stdout || '', stderr: stderr || (err && !err.code ? String(err.message) : '') })
+    })
+  })
+}
+
+async function tmuxSessionExists(name) {
+  return (await tmuxCall(['has-session', '-t', name])).status === 0
 }
 
 function isTmuxAvailable() {
@@ -70,15 +83,20 @@ function isTmuxAvailable() {
   }
 }
 
+// Writes for one sessionKey are chained so a fire-and-forget write (init
+// event) can never land after a later one and leave a stale id on disk.
+const _sessionIdWrites = new Map()
 function writeSessionIdFile(sessionKey, sessionId) {
-  try {
-    writeFileSync(getSessionIdPath(sessionKey), sessionId, { mode: 0o600 })
-  } catch {}
+  const prev = _sessionIdWrites.get(sessionKey) || Promise.resolve()
+  const next = prev.then(() => timedFs.writeFile(getSessionIdPath(sessionKey), sessionId, { mode: 0o600 }).catch(() => {}))
+  _sessionIdWrites.set(sessionKey, next)
+  next.then(() => { if (_sessionIdWrites.get(sessionKey) === next) _sessionIdWrites.delete(sessionKey) })
+  return next
 }
 
-function readSessionIdFile(sessionKey) {
+async function readSessionIdFile(sessionKey) {
   try {
-    return readFileSync(getSessionIdPath(sessionKey), 'utf8').trim()
+    return (await timedFs.readFile(getSessionIdPath(sessionKey), 'utf8')).trim() || null
   } catch {
     return null
   }
@@ -103,10 +121,10 @@ function resolvePermissionMode(store) {
   return 'bypassPermissions'
 }
 
-function launchBridge(sessionKey, opts) {
+async function launchBridge(sessionKey, opts) {
   const name = getTmuxName(sessionKey)
   const socketPath = getSocketPath(sessionKey)
-  ensureSocketDir()
+  await ensureSocketDir()
 
   const args = [
     'new-session',
@@ -161,7 +179,7 @@ function launchBridge(sessionKey, opts) {
   if (opts.executableOverride) args.push(...formatArg('--executable', opts.executableOverride))
   if (opts.tabLabel) args.push(...formatArg('--tab-label', opts.tabLabel))
 
-  const res = spawnSync(TMUX_BIN, args, { stdio: 'pipe', encoding: 'utf8' })
+  const res = await tmuxCall(args)
   if (res.status !== 0) {
     throw new Error(`tmux new-session failed: ${res.stderr || res.stdout || res.status}`)
   }
@@ -171,7 +189,7 @@ function launchBridge(sessionKey, opts) {
 async function waitForSocket(socketPath, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (existsSync(socketPath)) return
+    if (await pathExists(socketPath)) return
     await sleep(50)
   }
   throw new Error(`bridge socket did not appear: ${socketPath}`)
@@ -242,9 +260,9 @@ class TmuxBridgeClient {
     if (this.connected && this.socket && !this.socket.destroyed) return
 
     const name = getTmuxName(this.sessionKey)
-    let existed = tmuxSessionExists(name)
+    let existed = await tmuxSessionExists(name)
     if (!existed) {
-      launchBridge(this.sessionKey, this.opts)
+      await launchBridge(this.sessionKey, this.opts)
       await waitForSocket(this.socketPath)
       await sleep(100)
     } else {
@@ -254,7 +272,7 @@ class TmuxBridgeClient {
     // If reconnecting to an existing bridge, sync cs.claudeSessionId from the
     // bridge's recorded sessionId so nanocode resumes the same conversation.
     if (existed) {
-      const bridgeSessionId = readSessionIdFile(this.sessionKey)
+      const bridgeSessionId = await readSessionIdFile(this.sessionKey)
       if (bridgeSessionId && this.opts.onSessionId) {
         this.opts.onSessionId(bridgeSessionId)
       }
@@ -268,8 +286,8 @@ class TmuxBridgeClient {
       // once after launching a fresh bridge.
       if (existed) {
         console.warn(`[claude:tmux] ${this.sessionKey}: existing bridge unreachable (${err?.message}), recreating session`)
-        try { spawnSync(TMUX_BIN, ['kill-session', '-t', name], { stdio: 'ignore' }) } catch {}
-        launchBridge(this.sessionKey, this.opts)
+        await tmuxCall(['kill-session', '-t', name])
+        await launchBridge(this.sessionKey, this.opts)
         await waitForSocket(this.socketPath)
         await sleep(100)
         await this._connectSocket()
@@ -424,8 +442,8 @@ export function createClaudeTmuxDriver({ store, home, claudeBroadcast, broadcast
     await client.ensureConnected()
 
     // Sync the recorded sessionId back after a fresh launch.
-    if (opts.onSessionId && existsSync(getSessionIdPath(sessionKey))) {
-      const bridgeSessionId = readSessionIdFile(sessionKey)
+    if (opts.onSessionId) {
+      const bridgeSessionId = await readSessionIdFile(sessionKey)
       if (bridgeSessionId) opts.onSessionId(bridgeSessionId)
     }
 
@@ -615,7 +633,7 @@ export function createClaudeTmuxDriver({ store, home, claudeBroadcast, broadcast
       }
       cs.claudeSessionId = newSessionId
       cs.turnCount = 0
-      writeSessionIdFile(cs.sessionKey, newSessionId)
+      await writeSessionIdFile(cs.sessionKey, newSessionId)
     },
 
     async destroy(cs) {

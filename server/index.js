@@ -5,7 +5,7 @@ import { createConnection } from 'net'
 import { fileURLToPath } from 'url'
 import path from 'path'
 import os from 'os'
-import { readFileSync, statSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync } from 'fs'
 import { execFile, execSync } from 'child_process'
 import { promisify } from 'util'
 const execFileAsync = promisify(execFile)
@@ -18,6 +18,7 @@ import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete, pushNtfyMessage, is
 import { startLinearNotifier, stopLinearNotifier, pushNtfyTest, runLinearPoll, isDesignatedLinearPushInstance } from './linear-notif.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 import { loadPersonalConfig } from '../terminal/personal-config.js'
+import { timedFs } from '../terminal/bounded-scan.js'
 import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntry } from './akari-proxy.js'
 import { readArmyStatus, readWakerLogTail, getWakerHealth, collectBriefing } from './historian.js'
 import { startWaker, stopWaker, restartWaker, getWakerControlState, setInterval as setWakerInterval } from './waker-control.js'
@@ -126,7 +127,11 @@ app.use((req, res, next) => {
   next()
 })
 
-app.use(express.static(path.join(root, 'public')))
+// /api/* never goes through express.static: serve-static fs.stat()s every
+// request it sees on a libuv pool worker, so while a stalled /jfs held the pool
+// even /api/health and /api/sessions queued behind it (REPORT_nanolock_0730.md).
+const servePublic = express.static(path.join(root, 'public'))
+app.use((req, res, next) => (req.path.startsWith('/api/') ? next() : servePublic(req, res, next)))
 
 const vendorOpts = { maxAge: '365d', immutable: true }
 const vendorMap = {
@@ -144,6 +149,11 @@ for (const [route, dir] of Object.entries(vendorMap)) {
 const store = getStore()
 store.migrateProjectsJson(path.join(root, 'terminal', 'projects.json'))
 store.ensureStarterProject()
+// Prime the personal-config cache before listen(): loadPersonalConfig() reads
+// ~/.config/nanocode/personal.json + key files synchronously, once per path,
+// then serves from memory. Primed here, no request ever pays that sync read on
+// the shared /jfs home (REPORT_nanolock_0730.md).
+loadPersonalConfig()
 // 需求16: seed the master's resident secretary favorites + life assistant
 // into the home project (cwd === os.homedir()). Idempotent one-time reconcile
 // gated by `secretary_favorites_seeded_v1` — see store.seedSecretaryFavorites.
@@ -820,11 +830,11 @@ app.get('/api/historian/waker/control', asyncWrap(async (_req, res) => {
 
 const DUTY_STATUS_PATH = path.join(os.homedir(), 'code', 'duty-status.json')
 
-app.get('/api/duty', (_req, res) => {
+app.get('/api/duty', async (_req, res) => {
   let raw, mtimeMs
   try {
-    mtimeMs = statSync(DUTY_STATUS_PATH).mtimeMs
-    raw = readFileSync(DUTY_STATUS_PATH, 'utf8')
+    mtimeMs = (await timedFs.stat(DUTY_STATUS_PATH)).mtimeMs
+    raw = await timedFs.readFile(DUTY_STATUS_PATH, 'utf8')
   } catch (err) {
     return res.status(503).json({ ok: false, error: `duty status file unreadable (${DUTY_STATUS_PATH}): ${err.message}` })
   }

@@ -15,7 +15,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { readTextSafe } from './bounded-scan.js'
 import { join } from 'node:path'
 import { relTimeFromMtime } from './session-naming.js'
 
@@ -56,19 +56,28 @@ export function normalizeOpencodeSessions(stdout, nowMs = Date.now()) {
 }
 
 /**
- * Wrap `opencode session list --format json -n <limit>` in the project cwd.
- * Carries the AIGW key + colour-suppression env so the CLI bootstraps cleanly
- * (same env recipe as handleOpencodeHistory's `opencode export`).
+ * Env for an `opencode` CLI child: the AIGW key (so the kimi provider in the
+ * global opencode.json resolves) + colour suppression. One recipe for every
+ * opencode CLI call (session list here, `opencode export` in routes.js). The
+ * key file sits under the shared home, so it is read async.
  */
-export function listOpencodeSessions(home, cwd, limit, cb) {
+export async function opencodeCliEnv(home) {
   const env = { ...process.env }
   delete env.FORCE_COLOR
   env.NO_COLOR = '1'
   env.TERM = 'dumb'
-  try {
-    const keyFile = join(home, '.config', 'meshy-aigw.key')
-    if (existsSync(keyFile)) env.MESHY_AIGW_KEY = readFileSync(keyFile, 'utf8').trim()
-  } catch { /* best-effort */ }
+  const aigwKey = await readTextSafe(join(home, '.config', 'meshy-aigw.key'))
+  if (aigwKey !== null) env.MESHY_AIGW_KEY = aigwKey.trim()
+  return env
+}
+
+/**
+ * Wrap `opencode session list --format json -n <limit>` in the project cwd.
+ * Carries the AIGW key + colour-suppression env so the CLI bootstraps cleanly
+ * (same env recipe as handleOpencodeHistory's `opencode export`).
+ */
+export async function listOpencodeSessions(home, cwd, limit, cb) {
+  const env = await opencodeCliEnv(home)
   const n = Math.max(1, Math.min(50, parseInt(limit, 10) || 5))
   execFile(
     'opencode',

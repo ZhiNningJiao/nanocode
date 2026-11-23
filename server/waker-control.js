@@ -10,7 +10,8 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { readFile, writeFile } from 'fs/promises'
+import { timedFs } from '../terminal/bounded-scan.js'
+const { readFile, writeFile } = timedFs // home fs: slot budget + slow-call log
 import path from 'path'
 import os from 'os'
 

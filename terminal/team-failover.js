@@ -15,10 +15,10 @@
  * Workers never fail over: the flag defaults OFF; only sessions the user opts in
  * (secretary) carry it, and child tabs inherit it.
  */
-import { existsSync, copyFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { listTeams, fetchClaudeOAuthUsage } from './usage.js'
+import { listTeamsAsync, fetchClaudeOAuthUsage } from './usage.js'
+import { pathExists, timedFs } from './bounded-scan.js'
 
 // claude project-dir slug: cwd with '/' and '.' → '-'
 export function cwdSlug(cwd) {
@@ -42,9 +42,9 @@ export function isRateLimitError(text) {
 
 // The other existing team's configDir (the one that is not `currentConfigDir`).
 // Returns null when there is no distinct second team to fail over to.
-export function pickFallbackTeam(currentConfigDir, { home = homedir(), store } = {}) {
+export async function pickFallbackTeam(currentConfigDir, { home = homedir(), store } = {}) {
   const cur = currentConfigDir || join(home, '.claude')
-  const { teams } = listTeams(home, store)
+  const { teams } = await listTeamsAsync(home, store)
   const other = (teams || []).find((t) => t.exists && t.path !== cur)
   return other ? other.path : null
 }
@@ -61,16 +61,17 @@ export function teamModelDefaults(configDir, { home = homedir(), personalTeams =
 
 // Copy a session transcript into a target team's projects dir (same slug) so
 // `claude --resume <sid>` finds it under CLAUDE_CONFIG_DIR=targetDir.
-// Returns true on success. Never throws.
-export function copyTranscriptToTeam(sid, cwd, fromConfigDir, toConfigDir) {
+// Resolves true on success. Never rejects. Async: both team dirs sit under the
+// shared home and the transcript can be tens of MB.
+export async function copyTranscriptToTeam(sid, cwd, fromConfigDir, toConfigDir) {
   try {
     if (!sid || !fromConfigDir || !toConfigDir) return false
     const slug = cwdSlug(cwd)
     const src = join(fromConfigDir, 'projects', slug, `${sid}.jsonl`)
-    if (!existsSync(src)) return false
+    if (!(await pathExists(src))) return false
     const dstDir = join(toConfigDir, 'projects', slug)
-    mkdirSync(dstDir, { recursive: true })
-    copyFileSync(src, join(dstDir, `${sid}.jsonl`))
+    await timedFs.mkdir(dstDir, { recursive: true })
+    await timedFs.copyFile(src, join(dstDir, `${sid}.jsonl`))
     return true
   } catch { return false }
 }

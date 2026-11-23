@@ -18,9 +18,77 @@
  *                       request gets the full result.
  */
 
-import { open, readdir, stat } from 'node:fs/promises'
+import * as fsp from 'node:fs/promises'
 
 export const DEFAULT_SCAN_CONCURRENCY = 2
+
+// ── Home-filesystem budget: a stalled mount never takes the whole pool ──
+// Every async fs call holds one libuv thread-pool worker until its syscall
+// returns — on a stalled /jfs that is seconds to minutes. The pool is small
+// (UV_THREADPOOL_SIZE, default 4) and also serves zlib (HTTP gzip, WS deflate)
+// and express.static. Async-izing the sync calls moved the stall from the
+// event loop into this pool: once 4 calls hang, every request that needs a
+// worker hangs too (REPORT_nanolock_0730.md). So all home fs IO made through
+// this module holds one of HOME_FS_CONCURRENCY slots; extra calls wait in JS,
+// where waiting costs nothing, and the rest of the pool stays free.
+export const HOME_FS_CONCURRENCY = 2
+let _fsActive = 0
+const _fsWaiters = []
+
+/** Run `fn` (a multi-step fs sequence) while holding one home-fs slot. */
+export function withFsSlot(fn) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      _fsActive++
+      Promise.resolve().then(fn).then(resolve, reject).finally(() => {
+        _fsActive--
+        const next = _fsWaiters.shift()
+        if (next) next()
+      })
+    }
+    if (_fsActive < HOME_FS_CONCURRENCY) run()
+    else _fsWaiters.push(run)
+  })
+}
+
+// ── Slow calls are never silent ──────────────────────────────────────────
+// A call still running after SLOW_FS_MS logs one "still pending" line; when it
+// finally settles it logs one more line with the total time, so a /jfs stall
+// shows up in the journal with the op and path that hit it.
+export const SLOW_FS_MS = 2000
+let _slowFsMs = SLOW_FS_MS
+let _slowFsLog = (line) => console.warn(line)
+
+/** Tests only: lower the threshold and/or capture the log lines. */
+export function _setSlowFsForTesting({ slowMs, log } = {}) {
+  _slowFsMs = slowMs ?? SLOW_FS_MS
+  _slowFsLog = log ?? ((line) => console.warn(line))
+}
+
+async function slowWatch(op, target, fn) {
+  const t0 = Date.now()
+  const what = typeof target === 'string' ? target : String(target?.path ?? target)
+  let warned = false
+  const timer = setTimeout(() => {
+    warned = true
+    _slowFsLog(`[fs-slow] ${op} ${what} still pending after ${_slowFsMs}ms`)
+  }, _slowFsMs)
+  timer.unref?.()
+  try {
+    return await fn()
+  } finally {
+    clearTimeout(timer)
+    if (warned) _slowFsLog(`[fs-slow] ${op} ${what} settled after ${Date.now() - t0}ms`)
+  }
+}
+
+// timedFs = node:fs/promises with the slot budget + slow-call log. Every async
+// fs call server code makes against the home filesystem goes through here.
+const FS_OPS = ['access', 'copyFile', 'mkdir', 'open', 'readdir', 'readFile', 'readlink',
+  'realpath', 'rename', 'stat', 'lstat', 'unlink', 'writeFile', 'appendFile']
+export const timedFs = Object.fromEntries(FS_OPS.map((op) => [op,
+  (...args) => withFsSlot(() => slowWatch(op, args[0], () => fsp[op](...args)))]))
+const { readdir, stat } = timedFs
 
 export async function mapLimit(items, limit, fn, shouldStop = () => false) {
   let next = 0
@@ -37,10 +105,14 @@ export async function mapLimit(items, limit, fn, shouldStop = () => false) {
   await Promise.all(workers)
 }
 
-async function readRange(filePath, maxBytes, fromEnd) {
+function readRange(filePath, maxBytes, fromEnd) {
+  return withFsSlot(() => slowWatch('read', filePath, () => _readRange(filePath, maxBytes, fromEnd)))
+}
+
+async function _readRange(filePath, maxBytes, fromEnd) {
   let fh
   try {
-    fh = await open(filePath, 'r')
+    fh = await fsp.open(filePath, 'r')
     let position = 0
     let length = maxBytes
     if (fromEnd) {
@@ -56,6 +128,23 @@ async function readRange(filePath, maxBytes, fromEnd) {
   } finally {
     if (fh) await fh.close().catch(() => {})
   }
+}
+
+/** `length` bytes of a file starting at byte `start` as a Buffer, or null when unreadable. */
+export function readByteRange(filePath, start, length) {
+  return withFsSlot(() => slowWatch('read', filePath, async () => {
+    let fh
+    try {
+      fh = await fsp.open(filePath, 'r')
+      const buf = Buffer.allocUnsafe(length)
+      const { bytesRead } = await fh.read(buf, 0, length, start)
+      return buf.subarray(0, bytesRead)
+    } catch {
+      return null
+    } finally {
+      if (fh) await fh.close().catch(() => {})
+    }
+  }))
 }
 
 /** First `maxBytes` of a file as utf8 ('' when unreadable). */
@@ -84,10 +173,14 @@ export async function readTailLines(filePath, maxBytes) {
  * when the cap/end is reached. Returns { size, truncated } or null when the
  * file is missing, unreadable or empty.
  */
-export async function forEachLine(filePath, capBytes, onLine) {
+export function forEachLine(filePath, capBytes, onLine) {
+  return withFsSlot(() => slowWatch('read', filePath, () => _forEachLine(filePath, capBytes, onLine)))
+}
+
+async function _forEachLine(filePath, capBytes, onLine) {
   let fh
   try {
-    fh = await open(filePath, 'r')
+    fh = await fsp.open(filePath, 'r')
     const { size } = await fh.stat()
     if (size === 0) return null
     const readCap = Math.min(size, capBytes)
@@ -132,6 +225,16 @@ export async function readdirSafe(dir, opts) {
 /** stat that returns null instead of throwing. */
 export async function statSafe(p) {
   try { return await stat(p) } catch { return null }
+}
+
+/** Async existsSync. */
+export async function pathExists(p) {
+  return (await statSafe(p)) !== null
+}
+
+/** Whole file as utf8, or null when missing/unreadable. */
+export async function readTextSafe(p) {
+  try { return await timedFs.readFile(p, 'utf8') } catch { return null }
 }
 
 /**

@@ -29,32 +29,32 @@ import {
 import { createStore } from '../store.js'
 
 describe('persona: parsePersonaMarkdown', () => {
-  it('extracts the first H1 as name and the rest as instruction', () => {
+  it('extracts the first H1 as name and the rest as instruction', async () => {
     const r = parsePersonaMarkdown('# 猫娘\n你是一只猫娘。\n句尾加喵。', 'stem')
     assert.equal(r.name, '猫娘')
     assert.equal(r.instruction, '你是一只猫娘。\n句尾加喵。')
   })
 
-  it('falls back to the filename stem when there is no H1', () => {
+  it('falls back to the filename stem when there is no H1', async () => {
     const r = parsePersonaMarkdown('just a body\nno heading', 'myid')
     assert.equal(r.name, 'myid')
     assert.equal(r.instruction, 'just a body\nno heading')
   })
 
-  it('treats only the FIRST H1 as the name (later H1s stay in the body)', () => {
+  it('treats only the FIRST H1 as the name (later H1s stay in the body)', async () => {
     const r = parsePersonaMarkdown('# A\nbody1\n# B\nbody2', 'stem')
     assert.equal(r.name, 'A')
     assert.ok(r.instruction.startsWith('body1'))
     assert.ok(r.instruction.includes('# B'))
   })
 
-  it('returns empty instruction for a heading-only file', () => {
+  it('returns empty instruction for a heading-only file', async () => {
     const r = parsePersonaMarkdown('# Only', 'stem')
     assert.equal(r.name, 'Only')
     assert.equal(r.instruction, '')
   })
 
-  it('coerces non-string input to an empty parse', () => {
+  it('coerces non-string input to an empty parse', async () => {
     const r = parsePersonaMarkdown(null, 'stem')
     assert.equal(r.name, 'stem')
     assert.equal(r.instruction, '')
@@ -66,8 +66,8 @@ describe('persona: listPersonas (bundled + user merge)', () => {
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-persona-')) })
   afterEach(() => rmSync(tmp, { recursive: true, force: true }))
 
-  it('always includes the bundled catgirl + concise personas', () => {
-    const { personas } = listPersonas(tmp)
+  it('always includes the bundled catgirl + concise personas', async () => {
+    const { personas } = await listPersonas(tmp)
     const ids = personas.map((p) => p.id)
     assert.ok(ids.includes('catgirl'), 'bundled catgirl must be listed')
     assert.ok(ids.includes('concise'), 'bundled concise must be listed')
@@ -76,22 +76,22 @@ describe('persona: listPersonas (bundled + user merge)', () => {
     }
   })
 
-  it('merges a user persona alongside the bundled ones', () => {
+  it('merges a user persona alongside the bundled ones', async () => {
     const userDir = join(tmp, '.config', 'nanocode', 'personas')
     mkdirSync(userDir, { recursive: true })
     writeFileSync(join(userDir, 'robot.md'), '# Robot\nBeep boop.\n', 'utf8')
-    const { personas } = listPersonas(tmp)
+    const { personas } = await listPersonas(tmp)
     const robot = personas.find((p) => p.id === 'robot')
     assert.ok(robot, 'user persona robot must be listed')
     assert.equal(robot.source, 'user')
     assert.equal(robot.name, 'Robot')
   })
 
-  it('user overrides bundled on id collision (user wins)', () => {
+  it('user overrides bundled on id collision (user wins)', async () => {
     const userDir = join(tmp, '.config', 'nanocode', 'personas')
     mkdirSync(userDir, { recursive: true })
     writeFileSync(join(userDir, 'catgirl.md'), '# My Catgirl\nCustom.\n', 'utf8')
-    const { personas } = listPersonas(tmp)
+    const { personas } = await listPersonas(tmp)
     const cg = personas.find((p) => p.id === 'catgirl')
     assert.ok(cg, 'catgirl still present')
     assert.equal(cg.source, 'user', 'user catgirl must override the bundled one')
@@ -104,48 +104,48 @@ describe('persona: readPersona + resolvePersonaPrompt', () => {
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-persona-')) })
   afterEach(() => rmSync(tmp, { recursive: true, force: true }))
 
-  it('reads a bundled persona and returns its instruction', () => {
-    const p = readPersona(tmp, 'catgirl')
+  it('reads a bundled persona and returns its instruction', async () => {
+    const p = await readPersona(tmp, 'catgirl')
     assert.ok(p, 'catgirl must resolve')
     assert.equal(p.source, 'builtin')
     assert.ok(p.instruction.length > 0, 'instruction must be non-empty')
   })
 
-  it('user persona wins over the bundled one with the same id', () => {
+  it('user persona wins over the bundled one with the same id', async () => {
     const userDir = join(tmp, '.config', 'nanocode', 'personas')
     mkdirSync(userDir, { recursive: true })
     writeFileSync(join(userDir, 'catgirl.md'), '# Override\nCustom body.\n', 'utf8')
-    const p = readPersona(tmp, 'catgirl')
+    const p = await readPersona(tmp, 'catgirl')
     assert.equal(p.source, 'user')
     assert.equal(p.name, 'Override')
     assert.equal(p.instruction, 'Custom body.')
   })
 
-  it('rejects path-traversal ids', () => {
-    assert.equal(readPersona(tmp, '../../etc/passwd'), null)
-    assert.equal(readPersona(tmp, '..'), null)
-    assert.equal(readPersona(tmp, 'a/b'), null)
-    assert.equal(readPersona(tmp, ''), null)
+  it('rejects path-traversal ids', async () => {
+    assert.equal(await readPersona(tmp, '../../etc/passwd'), null)
+    assert.equal(await readPersona(tmp, '..'), null)
+    assert.equal(await readPersona(tmp, 'a/b'), null)
+    assert.equal(await readPersona(tmp, ''), null)
   })
 
-  it('returns null for a missing persona', () => {
-    assert.equal(readPersona(tmp, 'does-not-exist'), null)
+  it('returns null for a missing persona', async () => {
+    assert.equal(await readPersona(tmp, 'does-not-exist'), null)
   })
 
-  it('resolvePersonaPrompt returns the instruction text (the driver input)', () => {
-    const prompt = resolvePersonaPrompt(tmp, 'catgirl')
+  it('resolvePersonaPrompt returns the instruction text (the driver input)', async () => {
+    const prompt = await resolvePersonaPrompt(tmp, 'catgirl')
     assert.ok(prompt.length > 0)
-    assert.equal(prompt, readPersona(tmp, 'catgirl').instruction)
+    assert.equal(prompt, (await readPersona(tmp, 'catgirl')).instruction)
   })
 
-  it('resolvePersonaPrompt returns empty string for a missing persona', () => {
-    assert.equal(resolvePersonaPrompt(tmp, 'nope'), '')
-    assert.equal(resolvePersonaPrompt(tmp, '../../x'), '')
+  it('resolvePersonaPrompt returns empty string for a missing persona', async () => {
+    assert.equal(await resolvePersonaPrompt(tmp, 'nope'), '')
+    assert.equal(await resolvePersonaPrompt(tmp, '../../x'), '')
   })
 })
 
 describe('persona: framePersonaPrompt (override framing)', () => {
-  it('wraps the instruction in override framing so it can win vs CLAUDE.md', () => {
+  it('wraps the instruction in override framing so it can win vs CLAUDE.md', async () => {
     const raw = 'Be terse. No role-play.'
     const framed = framePersonaPrompt(raw)
     assert.ok(framed.includes(raw), 'must contain the raw instruction verbatim')
@@ -154,16 +154,16 @@ describe('persona: framePersonaPrompt (override framing)', () => {
     assert.ok(framed.startsWith('## ACTIVE PERSONA'), 'must start with the active-persona heading')
   })
 
-  it('returns empty string for empty input (no framing spam)', () => {
+  it('returns empty string for empty input (no framing spam)', async () => {
     assert.equal(framePersonaPrompt(''), '')
     assert.equal(framePersonaPrompt(undefined), '')
     assert.equal(framePersonaPrompt(null), '')
   })
 
-  it('keeps the catgirl instruction readable through framing (catgirl persona still works)', () => {
+  it('keeps the catgirl instruction readable through framing (catgirl persona still works)', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'nano-frame-'))
     try {
-      const raw = resolvePersonaPrompt(tmp, 'catgirl')
+      const raw = await resolvePersonaPrompt(tmp, 'catgirl')
       assert.ok(/猫娘|主人/.test(raw), 'sanity: catgirl raw instruction has catgirl markers')
       const framed = framePersonaPrompt(raw)
       assert.ok(/猫娘|主人/.test(framed), 'framed catgirl still carries catgirl markers')
@@ -184,14 +184,14 @@ describe('persona: listSkills (read-only team browser)', () => {
   })
   afterEach(() => rmSync(tmp, { recursive: true, force: true }))
 
-  it('lists skills grouped by team and flags the active team', () => {
+  it('lists skills grouped by team and flags the active team', async () => {
     mkdirSync(join(claudeDir, 'skills', 'browse'), { recursive: true })
     writeFileSync(join(claudeDir, 'skills', 'browse', 'SKILL.md'), '# Browse\nOpen pages and verify.\n', 'utf8')
     mkdirSync(join(team2Dir, 'skills', 'qa'), { recursive: true })
     writeFileSync(join(team2Dir, 'skills', 'qa', 'SKILL.md'), '# QA\nTest things.\n', 'utf8')
 
     const store = createStore(':memory:')
-    const { teams, activePath } = listSkills(tmp, store)
+    const { teams, activePath } = await listSkills(tmp, store)
     const ids = teams.map((t) => t.id).sort()
     assert.deepEqual(ids, ['team1', 'team2'])
     const t1 = teams.find((t) => t.id === 'team1')
@@ -203,20 +203,20 @@ describe('persona: listSkills (read-only team browser)', () => {
     assert.equal(activePath, claudeDir)
   })
 
-  it('skips teams with no skills dir (read-only, never creates)', () => {
+  it('skips teams with no skills dir (read-only, never creates)', async () => {
     mkdirSync(join(claudeDir, 'skills', 'only'), { recursive: true })
     writeFileSync(join(claudeDir, 'skills', 'only', 'SKILL.md'), '# Only\nx\n', 'utf8')
     const store = createStore(':memory:')
-    const { teams } = listSkills(tmp, store)
+    const { teams } = await listSkills(tmp, store)
     const t2 = teams.find((t) => t.id === 'team2')
     assert.ok(t2)
     assert.equal(t2.skills.length, 0)
   })
 
-  it('ignores skill dirs without a SKILL.md', () => {
+  it('ignores skill dirs without a SKILL.md', async () => {
     mkdirSync(join(claudeDir, 'skills', 'no-md'), { recursive: true })
     const store = createStore(':memory:')
-    const { teams } = listSkills(tmp, store)
+    const { teams } = await listSkills(tmp, store)
     const t1 = teams.find((t) => t.id === 'team1')
     assert.ok(!t1.skills.some((s) => s.name === 'no-md'))
   })

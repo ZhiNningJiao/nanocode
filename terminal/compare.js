@@ -28,9 +28,13 @@ const FILE_RE = /^[A-Za-z0-9._/+@~-][A-Za-z0-9._/+@~\s-]*$/
 // Reject any path containing a `..` segment (path traversal / parent ref).
 const DOTDOT_RE = /(^|\/)\.\.(\/|$)/
 
-/** Run git in cwd; resolves to { stdout } or throws (caught by callers). */
+/**
+ * Run git in cwd; resolves to { stdout } or throws (caught by callers). `-C`
+ * instead of a spawn cwd: git chdirs in the child, so a project dir on a
+ * stalled /jfs cannot block uv_spawn in this process (see spawn-in-dir.js).
+ */
 async function git(cwd, args) {
-  const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 16 * 1024 * 1024, timeout: GIT_TIMEOUT })
+  const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], { maxBuffer: 16 * 1024 * 1024, timeout: GIT_TIMEOUT })
   return stdout
 }
 

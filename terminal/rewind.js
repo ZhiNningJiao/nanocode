@@ -39,7 +39,7 @@
  *     rows do not create false turn boundaries.
  */
 
-import { readFileSync, writeFileSync, existsSync, copyFileSync, renameSync, statSync, unlinkSync } from 'node:fs'
+import { pathExists, timedFs } from './bounded-scan.js'
 import { join, basename } from 'node:path'
 import { extractReplayUserText } from './claude-history.js'
 
@@ -64,10 +64,10 @@ function userPreview(row) {
  * (truncation must cut at the exact file line, not at the parsed-row index).
  * Returns null when the file is absent / unreadable (never throws).
  */
-function readRows(jsonlPath) {
+async function readRows(jsonlPath) {
   let content
   try {
-    content = readFileSync(jsonlPath, 'utf-8')
+    content = await timedFs.readFile(jsonlPath, 'utf-8')
   } catch {
     return null
   }
@@ -138,11 +138,11 @@ function groupTurns(rows) {
  * Returns { checkpoints, totalLines, totalTurns, sessionId, error? }.
  * Never throws.
  */
-export function buildCheckpoints(jsonlPath) {
-  if (!jsonlPath || !existsSync(jsonlPath)) {
+export async function buildCheckpoints(jsonlPath) {
+  if (!jsonlPath || !(await pathExists(jsonlPath))) {
     return { checkpoints: [], totalLines: 0, totalTurns: 0, sessionId: '', error: 'session file not found' }
   }
-  const read = readRows(jsonlPath)
+  const read = await readRows(jsonlPath)
   if (!read) return { checkpoints: [], totalLines: 0, totalTurns: 0, sessionId: '', error: 'session file unreadable' }
   const turns = groupTurns(read.rows)
   const sessionId = basename(jsonlPath).replace(/\.jsonl$/, '')
@@ -172,11 +172,11 @@ export function buildCheckpoints(jsonlPath) {
  * Returns { ok, backupPath, keptLines, droppedLines, toIndex, error? }.
  * Never throws.
  */
-export function rewindConversation({ jsonlPath, toIndex, dryRun = false }) {
-  if (!jsonlPath || !existsSync(jsonlPath)) {
+export async function rewindConversation({ jsonlPath, toIndex, dryRun = false }) {
+  if (!jsonlPath || !(await pathExists(jsonlPath))) {
     return { ok: false, error: 'session file not found' }
   }
-  const cp = buildCheckpoints(jsonlPath)
+  const cp = await buildCheckpoints(jsonlPath)
   if (cp.error) return { ok: false, error: cp.error }
   if (!cp.totalTurns) return { ok: false, error: 'no user turns in this session' }
   if (!Number.isInteger(toIndex) || toIndex < 0 || toIndex >= cp.totalTurns) {
@@ -201,7 +201,7 @@ export function rewindConversation({ jsonlPath, toIndex, dryRun = false }) {
   // cut, and a no-op rewind of the kept prefix is byte-identical to original).
   let content
   try {
-    content = readFileSync(jsonlPath, 'utf-8')
+    content = await timedFs.readFile(jsonlPath, 'utf-8')
   } catch (e) {
     return { ok: false, error: `read failed: ${e?.message || e}` }
   }
@@ -213,25 +213,20 @@ export function rewindConversation({ jsonlPath, toIndex, dryRun = false }) {
 
   // Backup the ORIGINAL (before any write) — never destroy data.
   try {
-    copyFileSync(jsonlPath, backupPath)
+    await timedFs.copyFile(jsonlPath, backupPath)
   } catch (e) {
     return { ok: false, error: `backup failed: ${e?.message || e}` }
   }
   // Atomic write: tmp + rename (a crash leaves the original intact).
   const tmp = `${jsonlPath}.rewind-tmp.${Date.now()}`
   try {
-    writeFileSync(tmp, newContent)
-    renameSync(tmp, jsonlPath)
+    await timedFs.writeFile(tmp, newContent)
+    await timedFs.rename(tmp, jsonlPath)
   } catch (e) {
     // Best-effort cleanup of the tmp file on failure; the backup + original
     // are still intact (rename had not completed).
-    try { if (existsSync(tmp)) unlinkSync(tmp) } catch {}
+    await timedFs.unlink(tmp).catch(() => {})
     return { ok: false, error: `write failed: ${e?.message || e}` }
   }
   return { ok: true, backupPath, keptLines, droppedLines, toIndex }
-}
-
-/** Stat helper for the route: mtime ms of a jsonl, or null. */
-export function jsonlMtimeMs(jsonlPath) {
-  try { return statSync(jsonlPath).mtimeMs } catch { return null }
 }

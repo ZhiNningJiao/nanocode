@@ -1,10 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, unlinkSync } from 'node:fs'
 import { platform } from 'node:os'
 import { join } from 'node:path'
 import * as sessions from './sessions.js'
-import { buildReplaySeed, buildUserReplayId, resolveSessionJsonl, parseJsonlHistoryTail } from './claude-history.js'
+import { buildReplaySeed, buildUserReplayId, resolveSessionJsonlAsync, parseJsonlHistoryTailAsync } from './claude-history.js'
 import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
@@ -14,6 +12,8 @@ import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
 import { copyTranscriptToTeam, teamModelDefaults } from './team-failover.js'
 import { loadPersonalConfig } from './personal-config.js'
+import { pathExists, readdirSafe, timedFs } from './bounded-scan.js'
+import { spawnInDir } from './spawn-in-dir.js'
 import { acquireSessionLock, releaseSessionLock, stealSessionLock, getLockHolder, isOwnLock, touchSessionLock, boundLockOp, LOCK_OP_TIMEOUT_MS } from './session-lock.js'
 
 // cli driver binary. Unset → plain `claude` resolved by the login shell's PATH
@@ -115,9 +115,9 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       const keyFile = join(home || process.env.HOME, '.config', 'meshy-aigw.key')
       const aigwModel = store.getSetting('aigw_model')
       const parts = []
-      if (existsSync(keyFile)) {
-        parts.push(`export MESHY_AIGW_KEY=$(cat ${keyFile})`)
-      }
+      // Key presence is tested by the child shell, not here: the key file sits
+      // under the shared home and this runs in the request path.
+      parts.push(`[ -r ${keyFile} ] && export MESHY_AIGW_KEY=$(cat ${keyFile})`)
       if (aigwModel && typeof aigwModel === 'string' && aigwModel.trim()) {
         const m = aigwModel.trim()
         const cfg = JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { kimi: { models: { [m]: { name: m } } } } })
@@ -144,10 +144,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         : 'litellm/claude-fable-5'
       const cfg = JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { kimi: { models: { [model]: { name: model } } } } })
       const launch = `export OPENCODE_CONFIG_CONTENT='${cfg}'; opencode -m kimi/${model} .; exec bash -l`
-      if (existsSync(keyFile)) {
-        return `export MESHY_AIGW_KEY=$(cat ${keyFile}); ${launch}`
-      }
-      return launch
+      return `[ -r ${keyFile} ] && export MESHY_AIGW_KEY=$(cat ${keyFile}); ${launch}`
     },
   }
 
@@ -291,17 +288,17 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // (Team1→fable/high, other→opus/high). The next turn resumes on the target
   // org's quota. Reuses the failover machinery; also clears any auto-failover
   // state so the manual choice sticks.
-  function switchTeam(projectId, tabId, targetConfigDir) {
+  async function switchTeam(projectId, tabId, targetConfigDir) {
     const tab = store.getTab ? store.getTab(projectId, tabId) : null
     if (!tab || tab.type !== 'claude') return { ok: false, error: 'not a claude tab' }
-    if (!targetConfigDir || !existsSync(targetConfigDir)) return { ok: false, error: 'target team not found' }
+    if (!targetConfigDir || !(await pathExists(targetConfigDir))) return { ok: false, error: 'target team not found' }
     const cs = claudeSessions.get(sessionKeyFor(projectId, tabId))
     const project = store.getProject ? store.getProject(projectId) : null
     const fromDir = cs ? resolveClaudeConfigDir({ cs, store, home }) : (tab.claudeConfigDir || join(home, '.claude'))
     if (fromDir === targetConfigDir) return { ok: false, error: 'already on that team' }
     const cwd = (cs && cs.cwd) || tab.claudeSessionCwd || project?.cwd || home
     const sid = (cs && cs.claudeSessionId) || tab.claudeSessionId
-    const copied = copyTranscriptToTeam(sid, cwd, fromDir, targetConfigDir)
+    const copied = await copyTranscriptToTeam(sid, cwd, fromDir, targetConfigDir)
     const md = teamModelDefaults(targetConfigDir, { home, personalTeams: loadPersonalConfig({ home })?.claude?.teams || [] })
     store.updateTabMetadata(projectId, tabId, { claudeConfigDir: targetConfigDir })
     if (cs) {
@@ -468,11 +465,22 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     // from this tick landing after a release from elsewhere) — see
     // REPORT_nanolock_1735.md race analysis. _lockWatchBusy makes ticks skip
     // instead of overlap; _lockWatchSkips is a counter tests/ops can read.
+    // A skipped tick is logged (first skip of a streak, then once more when the
+    // slow tick finally lands) so a stalled lock dir is never silent.
     cs._lockWatchSkips = cs._lockWatchSkips || 0
+    let streak = 0
+    let tickStartedAt = 0
     const timer = setInterval(async () => {
       if (!cs._lockHeld) { _stopLockWatch(cs); return }
-      if (cs._lockWatchBusy) { cs._lockWatchSkips++; return }
+      if (cs._lockWatchBusy) {
+        cs._lockWatchSkips++
+        if (++streak === 1) {
+          console.warn(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch tick still running after ${Date.now() - tickStartedAt}ms (lock dir slow?) — skipping this beat`)
+        }
+        return
+      }
       cs._lockWatchBusy = true
+      tickStartedAt = Date.now()
       try {
         // Use the stable lock session ID (captured at acquire/steal time) instead
         // of cs.claudeSessionId, which is mutable — the SDK driver updates it from
@@ -516,6 +524,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         console.error(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch tick failed: ${err?.message || err}`)
       } finally {
         cs._lockWatchBusy = false
+        if (streak > 0) {
+          console.warn(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch tick took ${Date.now() - tickStartedAt}ms; skipped ${streak} beat(s)`)
+          streak = 0
+        }
       }
     }, LOCK_WATCH_INTERVAL_MS)
     if (timer.unref) timer.unref()
@@ -735,28 +747,23 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     rerunTurn: (...args) => dispatchOpencodeBlockTurn(...args),
   })
 
+  // Housekeeping only (claude's ~/.claude/sessions/<pid>.json of dead pids):
+  // async and fire-and-forget — the dir sits under the shared home.
   let _lastGcMs = 0
-  function gcClaudeSessions() {
+  async function gcClaudeSessions() {
     const now = Date.now()
     if (now - _lastGcMs < 60_000) return
     _lastGcMs = now
-    try {
-      const sessDir = join(home, '.claude', 'sessions')
-      if (!existsSync(sessDir)) return
-      const files = readdirSync(sessDir)
-      for (const f of files) {
-        if (!/^\d+\.json$/.test(f)) continue
-        const pid = parseInt(f, 10)
-        try {
-          process.kill(pid, 0)
-        } catch {
-          try {
-            unlinkSync(join(sessDir, f))
-            console.log(`[gc:sessions] removed stale lock for PID ${pid}`)
-          } catch {}
-        }
-      }
-    } catch {}
+    const sessDir = join(home, '.claude', 'sessions')
+    for (const f of await readdirSafe(sessDir)) {
+      if (!/^\d+\.json$/.test(f)) continue
+      const pid = parseInt(f, 10)
+      try { process.kill(pid, 0); continue } catch {}
+      try {
+        await timedFs.unlink(join(sessDir, f))
+        console.log(`[gc:sessions] removed stale lock for PID ${pid}`)
+      } catch {}
+    }
   }
 
   function buildClaudeChildEnv(cs) {
@@ -815,7 +822,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     const launchCmd = `exec ${claudeCliBin()} ${escapedArgs.join(' ')}`
 
     console.log(`[claude:continue-fallback:spawn] sessionKey=${sessionKey}`)
-    const proc = spawn('bash', ['-lc', launchCmd], {
+    const proc = spawnInDir('bash', ['-lc', launchCmd], { // cwd on /jfs: chdir in the child
       cwd,
       env: buildClaudeChildEnv(cs),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -945,7 +952,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     cs.currentProc = null
 
     const isFirstTurn = cs.turnCount === 0
-    if (isFirstTurn) gcClaudeSessions()
+    if (isFirstTurn) gcClaudeSessions().catch(() => {})
     // ── Three-layer session fallback ─────────────────────────────────────────
     // Layer 1: has history or was resumed before → --resume <sid>
     // Layer 2: first-turn with explicit stored sessionId → also --resume <sid>
@@ -1004,7 +1011,9 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
     const _spawnEnv = buildClaudeChildEnv(cs)
     console.log(`[claude:spawn] sessionKey=${sessionKey} turn=${cs.turnCount} len=${userText.length} cfgDir=${cs.claudeConfigDir || '(default)'} env.CLAUDE_CONFIG_DIR=${_spawnEnv.CLAUDE_CONFIG_DIR || '(unset)'} persona=${cs.persona || '(none)'} personaPromptLen=${(cs.personaPrompt || '').length} cmd=${launchCmd.slice(0, 200)}`)
-    const proc = spawn('bash', ['-lc', launchCmd], {
+    // spawnInDir: the turn's cwd is usually on the shared /jfs home; the chdir
+    // must happen in the child, not inside uv_spawn on this event loop.
+    const proc = spawnInDir('bash', ['-lc', launchCmd], {
       cwd,
       env: _spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1355,7 +1364,27 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // purpose: two callers for the same tab (a WS attach and a headless
   // ensureClaudeSession) can never both create a cs. Shared by attachClaudeSession
   // and ensureClaudeSession — one implementation of "start a claude session".
-  function _createClaudeSessionState(projectId, tabId, project) {
+  //
+  // The disk recovery below (jsonl resolve + tail read + persona file) is async:
+  // the jsonl lives under the shared /jfs home and a synchronous read here froze
+  // the whole server on every WS attach while /jfs stalled (REPORT_nanolock_0730.md).
+  // _creatingClaudeSessions keeps the "only one cs per tab" guarantee across
+  // that await: a second caller for the same tab awaits the first one's cs.
+  const _creatingClaudeSessions = new Map() // sessionKey -> Promise<cs>
+  function _getOrCreateClaudeSessionState(projectId, tabId, project) {
+    const sessionKey = sessionKeyFor(projectId, tabId)
+    const live = claudeSessions.get(sessionKey)
+    if (live) return Promise.resolve(live)
+    let pending = _creatingClaudeSessions.get(sessionKey)
+    if (!pending) {
+      pending = _createClaudeSessionState(projectId, tabId, project)
+        .finally(() => _creatingClaudeSessions.delete(sessionKey))
+      _creatingClaudeSessions.set(sessionKey, pending)
+    }
+    return pending
+  }
+
+  async function _createClaudeSessionState(projectId, tabId, project) {
     const sessionKey = sessionKeyFor(projectId, tabId)
     let cs
     const tab = store.getTab ? store.getTab(projectId, tabId) : null
@@ -1412,10 +1441,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     let recoveredSkipped = false
     if (!_activeSessionOverride && tab) {
       try {
-        const resolution = resolveSessionJsonl({ store, home, project, tab })
+        const resolution = await resolveSessionJsonlAsync({ store, home, project, tab })
         if (resolution.resolvedPath) {
           claudeSessionId = resolution.resolvedSessionId
-          recoveredEvents = parseJsonlHistoryTail(resolution.resolvedPath)
+          recoveredEvents = await parseJsonlHistoryTailAsync(resolution.resolvedPath)
           recoveredFallback = resolution.fallback
           if (resolution.fallback && resolution.resolvedSessionId !== storedSessionId) {
             if (store.updateTabMetadata) {
@@ -1441,6 +1470,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
     }
 
+    const personaPrompt = tab?.persona ? framePersonaPrompt(await resolvePersonaPrompt(home, tab.persona)) : ''
     const seed = replaySeeds.get(sessionKey)
     // Prefer the seed built from recovered disk events over the stale
     // in-memory replaySeeds, so cross-instance recovery sets turnCount=1.
@@ -1507,7 +1537,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       // injects it via --append-system-prompt / appendSystemPrompt each turn
       // (keeps the persona active across reconnects/resumes).
       persona: tab?.persona || null,
-      personaPrompt: tab?.persona ? framePersonaPrompt(resolvePersonaPrompt(home, tab.persona)) : '',
+      personaPrompt,
       queue: [],
       pendingUserDialogs: new Map(),
       _replayUserTextCounts: liveSeed?.userTextCounts || seed?.userTextCounts || new Map(),
@@ -1578,7 +1608,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     const sessionKey = sessionKeyFor(projectId, tabId)
     let cs = claudeSessions.get(sessionKey)
     const created = !cs
-    if (!cs) cs = _createClaudeSessionState(projectId, tabId, project)
+    if (!cs) cs = await _getOrCreateClaudeSessionState(projectId, tabId, project)
     await _acquireHostLock(cs)
     console.log(`[claude:ensure] ${sessionKey}: ${created ? "created" : "already live"} session=${cs.claudeSessionId} readOnly=${!!cs.readOnly}`)
     return {
@@ -1641,7 +1671,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     ws.on('message', _onMsgEarly)
     ws.on('close', _onCloseEarly)
 
-    if (!cs) cs = _createClaudeSessionState(projectId, tabId, project)
+    if (!cs) cs = await _getOrCreateClaudeSessionState(projectId, tabId, project)
 
     // ── Session singleton lock ──────────────────────────────────────────────
     // Prevent two nanocode servers from simultaneously owning the same Claude
@@ -2089,9 +2119,15 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // framed instruction to the user prompt every turn — keeping the persona
         // active across reconnects/resumes (mirrors claude's per-turn re-inject).
         persona: tab?.persona || null,
-        personaPrompt: tab?.persona ? framePersonaPrompt(resolvePersonaPrompt(home, tab.persona)) : '',
+        personaPrompt: '',
       }
       opencodeBlockSessions.set(sessionKey, cs)
+      // The persona file sits under the shared home: read it async (this attach
+      // is synchronous) and fill it in when it lands.
+      if (cs.persona) {
+        const created = cs
+        resolvePersonaPrompt(home, created.persona).then((text) => { created.personaPrompt = framePersonaPrompt(text) })
+      }
     }
 
     // Replay history to the newly-attached client (claude-event WS msgs).

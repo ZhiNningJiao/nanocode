@@ -739,7 +739,7 @@ export function createClaudeSdkDriver({
       try {
         if (await teamHasHeadroom(cs._originalConfigDir)) {
           const back = cs._originalConfigDir
-          if (copyTranscriptToTeam(cs.claudeSessionId, cwd, cs.claudeConfigDir, back)) {
+          if (await copyTranscriptToTeam(cs.claudeSessionId, cwd, cs.claudeConfigDir, back)) {
             const md = teamModelDefaults(back, { home, personalTeams: loadPersonalConfig({ home })?.claude?.teams || [] })
             cs.claudeConfigDir = back
             cs.claudeModelOverride = md.model
@@ -813,8 +813,8 @@ export function createClaudeSdkDriver({
       if (!wasInterrupted && cs.allowTeamFailover && !cs._failedOver && isRateLimitError(text)) {
         try {
           const fromDir = resolveClaudeConfigDir({ cs, store, home })
-          const toDir = pickFallbackTeam(fromDir, { home, store })
-          if (toDir && copyTranscriptToTeam(cs.claudeSessionId, cwd, fromDir, toDir)) {
+          const toDir = await pickFallbackTeam(fromDir, { home, store })
+          if (toDir && await copyTranscriptToTeam(cs.claudeSessionId, cwd, fromDir, toDir)) {
             const md = teamModelDefaults(toDir, { home, personalTeams: loadPersonalConfig({ home })?.claude?.teams || [] })
             cs._originalConfigDir = fromDir
             cs.claudeConfigDir = toDir

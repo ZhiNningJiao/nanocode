@@ -2,9 +2,11 @@
  * Claude memory viewer backend (the memory plugin). Lived inside usage.js
  * until slim/core — usage was the wrong address for it (荣耻篇 一、内聚).
  */
-import { copyFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+// Sync fs: only listMemoryProjects/listMemoryTree (no production caller since
+// nanolock_0730 — the route uses the *Async twins; kept for the parity tests).
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { mapLimit, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
+import { mapLimit, readdirSafe, statSafe, pathExists, readTextSafe, timedFs, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 import { claudeProjectSlugToCwd } from './session-naming.js'
 import { listTeams, listTeamsAsync } from './usage.js'
 
@@ -115,33 +117,29 @@ export async function listMemoryTreeAsync(home, store) {
 }
 
 /** List .md files in a team/project memory dir (name, size, mtime), newest-first. */
-export function listMemoryFiles(configDir, projectSlug) {
+export async function listMemoryFiles(configDir, projectSlug) {
   if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
   const memDir = join(configDir, 'projects', projectSlug, 'memory')
-  if (!existsSync(memDir)) return { files: [], path: memDir }
-  let entries = []
-  try { entries = readdirSync(memDir, { withFileTypes: true }) } catch { return { files: [], path: memDir } }
+  const entries = await readdirSafe(memDir, { withFileTypes: true })
   const files = []
-  for (const f of entries) {
-    if (!f.isFile() || !f.name.endsWith('.md')) continue
-    try {
-      const st = statSync(join(memDir, f.name))
-      files.push({ name: f.name, size: st.size, mtime: st.mtimeMs })
-    } catch {}
-  }
+  await mapLimit(entries, DEFAULT_SCAN_CONCURRENCY, async (f) => {
+    if (!f.isFile() || !f.name.endsWith('.md')) return
+    const st = await statSafe(join(memDir, f.name))
+    if (st) files.push({ name: f.name, size: st.size, mtime: st.mtimeMs })
+  })
   files.sort((a, b) => b.mtime - a.mtime)
   return { files, path: memDir }
 }
 
 /** Read a single memory md file. Returns { name, content, size, mtime, path }. */
-export function readMemoryFile(configDir, projectSlug, fileName) {
+export async function readMemoryFile(configDir, projectSlug, fileName) {
   if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
   if (!isValidMemFile(fileName)) return { error: 'invalid file name' }
   const filePath = join(configDir, 'projects', projectSlug, 'memory', fileName)
-  if (!existsSync(filePath)) return { error: 'file not found' }
+  if (!(await pathExists(filePath))) return { error: 'file not found' }
   try {
-    const content = readFileSync(filePath, 'utf8')
-    const st = statSync(filePath)
+    const content = await timedFs.readFile(filePath, 'utf8')
+    const st = await timedFs.stat(filePath)
     return { name: fileName, content, size: st.size, mtime: st.mtimeMs, path: filePath }
   } catch (err) {
     return { error: err.message }
@@ -152,20 +150,18 @@ export function readMemoryFile(configDir, projectSlug, fileName) {
  * Search a keyword across .md files in a memory dir (case-insensitive).
  * Returns { query, matches: [{ file, line, snippet }] }, capped at 200 hits.
  */
-export function searchMemory(configDir, projectSlug, query) {
+export async function searchMemory(configDir, projectSlug, query) {
   if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
   const q = String(query || '').trim()
   if (!q) return { query: '', matches: [] }
   const memDir = join(configDir, 'projects', projectSlug, 'memory')
-  if (!existsSync(memDir)) return { query: q, matches: [] }
-  let entries = []
-  try { entries = readdirSync(memDir, { withFileTypes: true }) } catch { return { query: q, matches: [] } }
+  const entries = await readdirSafe(memDir, { withFileTypes: true })
   const lower = q.toLowerCase()
   const matches = []
   for (const f of entries) {
     if (!f.isFile() || !f.name.endsWith('.md')) continue
-    let content = ''
-    try { content = readFileSync(join(memDir, f.name), 'utf8') } catch { continue }
+    const content = await readTextSafe(join(memDir, f.name))
+    if (content === null) continue
     const lines = content.split('\n')
     for (let i = 0; i < lines.length; i++) {
       const idx = lines[i].toLowerCase().indexOf(lower)
@@ -186,21 +182,21 @@ export function searchMemory(configDir, projectSlug, query) {
  * backup in the same memory dir before writing. If the file is new (not present),
  * no backup is made. Returns { name, size, mtime, backupPath, path } or { error }.
  */
-export function saveMemoryFile(configDir, projectSlug, fileName, content) {
+export async function saveMemoryFile(configDir, projectSlug, fileName, content) {
   if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
   if (!isValidMemFile(fileName)) return { error: 'invalid file name' }
   const memDir = join(configDir, 'projects', projectSlug, 'memory')
   const filePath = join(memDir, fileName)
-  if (!existsSync(memDir)) return { error: 'memory dir not found' }
+  if (!(await pathExists(memDir))) return { error: 'memory dir not found' }
   let backupPath = null
-  if (existsSync(filePath)) {
+  if (await pathExists(filePath)) {
     const ts = new Date().toISOString().replace(/[:.]/g, '-')
     backupPath = join(memDir, `.${fileName}.bak.${ts}`)
-    try { copyFileSync(filePath, backupPath) } catch { backupPath = null }
+    try { await timedFs.copyFile(filePath, backupPath) } catch { backupPath = null }
   }
   try {
-    writeFileSync(filePath, String(content ?? ''), 'utf8')
-    const st = statSync(filePath)
+    await timedFs.writeFile(filePath, String(content ?? ''), 'utf8')
+    const st = await timedFs.stat(filePath)
     return { name: fileName, size: st.size, mtime: st.mtimeMs, backupPath, path: filePath }
   } catch (err) {
     return { error: err.message }

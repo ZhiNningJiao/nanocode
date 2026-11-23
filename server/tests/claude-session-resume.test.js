@@ -58,6 +58,16 @@ function makeMockWs(attachMsg) {
   return ws
 }
 
+async function waitForCs(get, timeoutMs = 3000) {
+  const end = Date.now() + timeoutMs
+  while (Date.now() < end) {
+    const cs = get()
+    if (cs) return cs
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  return get()
+}
+
 function writeJsonlEvents(projectDir, sessionId, events) {
   const sessionsDir = projectDir
   mkdirSync(sessionsDir, { recursive: true })
@@ -141,8 +151,9 @@ function makeController({ tabClaudeSessionId, mainSessionId, hasSeedHistory = fa
     return new Promise((resolve) => {
       const ws = makeMockWs({ type: 'attach', projectId, tabId, sessionType: 'bash' })
       controller.handleTerminalWs(ws)
-      // Wait for attach to process (setImmediate fires the 'message' event)
-      setImmediate(() => resolve(getCs()))
+      // The attach creates the cs after an async jsonl read (disk recovery is
+      // async so a slow home cannot freeze the server): wait until it exists.
+      resolve(waitForCs(getCs))
     })
   }
 
@@ -448,7 +459,7 @@ describe('claude session auto-recovery — cross-instance', () => {
       return new Promise((resolve) => {
         const ws = makeMockWs({ type: 'attach', projectId, tabId, sessionType: 'bash' })
         controller.handleTerminalWs(ws)
-        setImmediate(() => resolve(controller.claudeSessions.get(`${projectId}:claude:${tabId}`)))
+        resolve(waitForCs(() => controller.claudeSessions.get(`${projectId}:claude:${tabId}`)))
       })
     }
 

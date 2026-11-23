@@ -17,22 +17,19 @@
  * Team discovery: `~/.claude` (team1 / default) and any `~/.claude-team*` dirs.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, copyFileSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
-import { loadPersonalConfig, readKeyFile, DEFAULT_AIGW_BASE } from './personal-config.js'
-import { forEachLine, mapLimit, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
+import { loadPersonalConfig, DEFAULT_AIGW_BASE } from './personal-config.js'
+import { forEachLine, mapLimit, readdirSafe, statSafe, readTextSafe, timedFs, DEFAULT_SCAN_CONCURRENCY, SLOW_FS_MS } from './bounded-scan.js'
+import { Worker } from 'node:worker_threads'
 import { quotaSeverity } from '../public/js/quota-levels.js'
 
-// node:sqlite is experimental (Node 22+). Guarded require so an unavailable /
-// older runtime degrades to an honest "source unavailable" instead of crashing
-// the server at boot. The opencode session-table usage reader (需求15 item6) is
-// the only consumer; if it is null the route returns an honest error shape.
-const _require = createRequire(import.meta.url)
-let _DatabaseSync = null
-try { ({ DatabaseSync: _DatabaseSync } = _require('node:sqlite')) } catch { /* node:sqlite unavailable */ }
+// The opencode session-table reader (需求15 item6) runs node:sqlite (sync-only
+// API) in a worker thread — see opencode-db-worker.js.
+const OPENCODE_DB_WORKER = new URL('./opencode-db-worker.js', import.meta.url)
+const OPENCODE_DB_TIMEOUT_MS = 30_000
 
 // AIGW base + key come from the unified personal config (personal-config.js),
 // which reads ~/.config/nanocode/personal.json first then falls back to the
@@ -539,7 +536,7 @@ export function aggregateOpencodeSessions(rows) {
  *
  * Returns string[] of EXISTING non-empty files (de-duplicated, order preserved).
  */
-export function resolveOpencodeDbPaths(home) {
+export async function resolveOpencodeDbPaths(home) {
   const homeDir = home || homedir()
   const candidates = []
   if (process.env.OPENCODE_DB_PATH) candidates.push(process.env.OPENCODE_DB_PATH)
@@ -551,31 +548,44 @@ export function resolveOpencodeDbPaths(home) {
   for (const c of candidates) {
     if (!c || seen.has(c)) continue
     seen.add(c)
-    try { if (existsSync(c) && statSync(c).size > 0) out.push(c) } catch {}
+    if ((await statSafe(c))?.size > 0) out.push(c)
   }
   return out
 }
 
 /**
- * Query raw session rows from ONE opencode SQLite DB (read-only). Returns
- * { rows, dbPath } on success or { error, dbPath, rows: [] } on failure — never
- * throws so the route can 200 with a clear reason.
+ * Query raw session rows from ONE opencode SQLite DB (read-only) in a worker
+ * thread. Resolves { rows, dbPath } or { error, dbPath, rows: [] } — never
+ * rejects so the route can 200 with a clear reason. A read that outlives
+ * OPENCODE_DB_TIMEOUT_MS resolves as an error (the worker is terminated).
  */
 function queryOpencodeSessionRows(dbPath) {
-  if (!_DatabaseSync) return { error: 'node:sqlite unavailable (Node 22+ required)', dbPath, rows: [] }
-  if (!dbPath || !existsSync(dbPath)) return { error: 'opencode DB not found', dbPath, rows: [] }
-  let db
-  try {
-    db = new _DatabaseSync(dbPath, { readOnly: true })
-    const rows = db.prepare(
-      'SELECT model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, time_updated, directory FROM session'
-    ).all()
-    return { rows, dbPath }
-  } catch (err) {
-    return { error: String(err.message || err), dbPath, rows: [] }
-  } finally {
-    try { db && db.close() } catch {}
-  }
+  return new Promise((resolve) => {
+    const t0 = Date.now()
+    let settled = false
+    let worker = null
+    const done = (r) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const ms = Date.now() - t0
+      if (ms > SLOW_FS_MS) console.warn(`[fs-slow] opencode DB read ${dbPath} took ${ms}ms`)
+      resolve(r)
+    }
+    const timer = setTimeout(() => {
+      done({ error: `opencode DB read exceeded ${OPENCODE_DB_TIMEOUT_MS}ms`, dbPath, rows: [] })
+      worker?.terminate()
+    }, OPENCODE_DB_TIMEOUT_MS)
+    try {
+      worker = new Worker(OPENCODE_DB_WORKER, { workerData: { dbPath } })
+    } catch (err) {
+      done({ error: String(err?.message || err), dbPath, rows: [] })
+      return
+    }
+    worker.once('message', done)
+    worker.once('error', (err) => done({ error: String(err?.message || err), dbPath, rows: [] }))
+    worker.once('exit', (code) => done({ error: `opencode DB worker exited (${code})`, dbPath, rows: [] }))
+  })
 }
 
 /**
@@ -583,8 +593,8 @@ function queryOpencodeSessionRows(dbPath) {
  * aggregate shape plus `dbPath` and `source`; on failure returns the empty
  * shape plus `error` + `dbPath` (never throws).
  */
-export function scanOpencodeUsage(dbPath) {
-  const { rows, error } = queryOpencodeSessionRows(dbPath)
+export async function scanOpencodeUsage(dbPath) {
+  const { rows, error } = await queryOpencodeSessionRows(dbPath)
   if (error) return { ...opencodeUsageEmpty(), dbPath, error }
   return { ...aggregateOpencodeSessions(rows), dbPath, source: 'opencode SQLite session table' }
 }
@@ -596,10 +606,10 @@ export function scanOpencodeUsage(dbPath) {
  * candidate that existed) and `errors` (per-DB failures, if any). When every
  * DB is unreadable, returns the empty shape + the first error.
  */
-export function scanAllOpencodeUsage(home) {
-  const dbPaths = resolveOpencodeDbPaths(home)
+export async function scanAllOpencodeUsage(home) {
+  const dbPaths = await resolveOpencodeDbPaths(home)
   if (!dbPaths.length) return { ...opencodeUsageEmpty(), dbPaths: [], error: 'opencode DB not found (no $XDG_DATA_HOME/opencode/opencode.db)' }
-  const perDb = dbPaths.map(queryOpencodeSessionRows)
+  const perDb = await Promise.all(dbPaths.map(queryOpencodeSessionRows))
   const errors = perDb.filter((r) => r.error).map((r) => ({ dbPath: r.dbPath, error: r.error }))
   const allRows = perDb.filter((r) => !r.error).flatMap((r) => r.rows)
   if (!allRows.length) return { ...opencodeUsageEmpty(), dbPaths, errors, error: errors[0]?.error || 'no readable opencode DB' }
@@ -652,11 +662,11 @@ const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000
  * or null if the file / key is absent. Never throws. The token is never logged.
  * CodexBar reads the same file (docs/claude.md "File fallback: ~/.claude/.credentials.json").
  */
-export function readClaudeOAuthCredentials(configDir) {
+export async function readClaudeOAuthCredentials(configDir) {
   if (!configDir) return null
   const credPath = join(configDir, '.credentials.json')
   try {
-    const raw = readFileSync(credPath, 'utf8')
+    const raw = await timedFs.readFile(credPath, 'utf8')
     const obj = JSON.parse(raw)
     const o = obj?.claudeAiOauth
     if (!o || typeof o !== 'object') return null
@@ -694,8 +704,9 @@ export function readClaudeOAuthCredentials(configDir) {
 export async function refreshClaudeOAuthToken(configDir, { fetchImpl } = {}) {
   try {
     const credPath = join(configDir, '.credentials.json')
-    if (!existsSync(credPath)) return null
-    const raw = JSON.parse(readFileSync(credPath, 'utf8'))
+    const text = await readTextSafe(credPath)
+    if (text === null) return null
+    const raw = JSON.parse(text)
     const o = raw?.claudeAiOauth
     if (!o?.refreshToken) return null
     const f = fetchImpl || fetch
@@ -711,8 +722,8 @@ export async function refreshClaudeOAuthToken(configDir, { fetchImpl } = {}) {
     o.accessToken = body.access_token
     if (body.refresh_token) o.refreshToken = body.refresh_token
     if (typeof body.expires_in === 'number') o.expiresAt = Date.now() + body.expires_in * 1000
-    try { copyFileSync(credPath, credPath + '.bak-refresh') } catch {}
-    writeFileSync(credPath, JSON.stringify(raw))
+    try { await timedFs.copyFile(credPath, credPath + '.bak-refresh') } catch {}
+    await timedFs.writeFile(credPath, JSON.stringify(raw))
     return {
       accessToken: o.accessToken,
       expiresAt: Number(o.expiresAt) || null,
@@ -724,7 +735,7 @@ export async function refreshClaudeOAuthToken(configDir, { fetchImpl } = {}) {
 }
 
 export async function fetchClaudeOAuthUsage(configDir, { fetchImpl } = {}) {
-  let cred = readClaudeOAuthCredentials(configDir)
+  let cred = await readClaudeOAuthCredentials(configDir)
   if (!cred) return { error: 'no Claude OAuth credentials at <configDir>/.credentials.json' }
   // Token past expiry: refresh it (public PKCE client) rather than giving up.
   // Only if refresh fails (dead refresh token) do we degrade to jsonl estimation.
@@ -1018,7 +1029,7 @@ export function estimateClaudeWindowsFromTimeline(timeline, { source, label, now
 export async function buildClaudeSourceSummary({ configDir, source, label, home, now = Date.now() }) {
   const dir = configDir || effectiveClaudeConfigDir(null, home)
   const base = { source, label, kind: 'claude-oauth', configDir: dir, available: true }
-  const cred = readClaudeOAuthCredentials(dir)
+  const cred = await readClaudeOAuthCredentials(dir)
   if (cred) {
     base.subscriptionType = cred.subscriptionType
     base.rateLimitTier = cred.rateLimitTier
@@ -1169,7 +1180,7 @@ export function mapAigwKeyBudgetHeaders(headers) {
 export async function fetchAigwBudget({ key, home, fetchImpl, now = Date.now() } = {}) {
   const personal = loadPersonalConfig({ home })
   const base = personal.aigw.base
-  const apiKey = String(key ?? readKeyFile(personal.aigw.budgetKeyFile)).trim()
+  const apiKey = String(key ?? (await readTextSafe(personal.aigw.budgetKeyFile)) ?? '').trim()
   if (!apiKey) {
     return { available: false, keyPresent: false, base, error: 'AIGW budget key file not found (personal.json aigw.budgetKeyFile, default ~/.config/meshy-aigw.key)' }
   }
@@ -1264,7 +1275,7 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), home, fet
  */
 export async function buildUsageSummary({ home, store, now = Date.now(), fetchImpl } = {}) {
   const homeDir = home || homedir()
-  const { teams } = listTeams(homeDir, store)
+  const { teams } = await listTeamsAsync(homeDir, store)
   const sources = []
   // Claude teams: ~/.claude (team1) + ~/.claude-team* + personal.claude.teams.
   for (const team of teams) {

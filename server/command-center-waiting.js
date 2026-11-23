@@ -21,7 +21,8 @@
  * mapXxx / buildWaitingView are pure; createOwnerPendingSource does the IO.
  */
 
-import { readFile, stat } from 'node:fs/promises'
+import { timedFs } from '../terminal/bounded-scan.js'
+const { readFile, stat } = timedFs // home fs: slot budget + slow-call log
 import { str, arr, validIso, clip } from './command-center-fields.js'
 import { safeHttpUrl } from '../public/js/command-center-url.js'
 import { WAITING_SCHEMA } from '../tools/command-center/export-cars.mjs'

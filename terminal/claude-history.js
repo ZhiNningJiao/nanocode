@@ -1,11 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto'
+// Sync fs is only used by the sync twins (parseJsonlHistory, parseJsonlHistoryTail,
+// findNewestJsonl, countUserMessages, scanRecentConversationsMulti,
+// resolveSessionJsonl). Since nanolock_0730 none of them has a production
+// caller — every request/attach path uses the *Async twin — they are kept only
+// for the async-parity tests (nanofix2-async-scan.test.js and friends) and go
+// away together with those tests (follow-up in REPORT_nanolock_0730.md).
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { timedFs } from './bounded-scan.js'
+const { readFile } = timedFs // home fs: slot budget + slow-call log
 import { join } from 'node:path'
 import { extractSummary, extractSummaryAsync, cwdFromJsonl, cwdFromJsonlAsync } from './recent-agents.js'
 import { relTimeFromMtime } from './session-naming.js'
 import { effectiveClaudeConfigDir, claudeProjectsDir, resolveClaudeConfigDirForTab, resolveClaudeCwdForTab, listTeams, listTeamsAsync } from './usage.js'
-import { mapLimit, readdirSafe, statSafe, readTailLines, forEachLine, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
+import { mapLimit, readdirSafe, statSafe, readTailLines, readByteRange, forEachLine, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 
 export function cwdToClaudeProjectDir(home, cwd) {
   // Backward-compatible: defaults to ~/.claude. Kept for existing tests/callers
@@ -172,20 +179,28 @@ function _readChunkBefore(jsonlPath, endOffset) {
     return null
   }
 
-  // First line may be partial if we jumped mid-line; drop it.
+  return _chunkToRawRows(chunk, readStart)
+}
+
+/** Parse a chunk read from byte `readStart`; a partial first line (readStart > 0) is dropped. */
+function _chunkToRawRows(chunk, readStart) {
   if (readStart > 0) {
     const firstNewline = chunk.indexOf('\n')
     chunk = firstNewline >= 0 ? chunk.slice(firstNewline + 1) : ''
   }
+  return _linesToRawRows(chunk.split('\n'))
+}
 
-  const rawRows = []
-  for (const line of chunk.split('\n')) {
-    if (!line.trim()) continue
-    let row
-    try { row = JSON.parse(line) } catch { continue }
-    rawRows.push(row)
-  }
-  return rawRows
+/** Async twin of _readChunkBefore (request path: history pagination). */
+async function _readChunkBeforeAsync(jsonlPath, endOffset) {
+  const st = await statSafe(jsonlPath)
+  if (!st) return null
+  const safeEnd = Math.min(endOffset ?? st.size, st.size)
+  if (safeEnd <= 0) return []
+  const readStart = Math.max(0, safeEnd - TAIL_BYTES)
+  const buf = await readByteRange(jsonlPath, readStart, safeEnd - readStart)
+  if (!buf) return null
+  return _chunkToRawRows(buf.toString('utf-8'), readStart)
 }
 
 /**
@@ -257,9 +272,7 @@ export function parseJsonlHistoryTail(jsonlPath) {
 /**
  * Async twin of parseJsonlHistoryTail — same TAIL_BYTES window, non-blocking
  * stat + tail read (bounded-scan.js readTailLines) instead of statSync/readSync.
- * Used by the request-time history endpoint; parseJsonlHistoryBefore (the
- * "load older page" pagination path, user-initiated and not a page-load
- * stampede) is left on the sync reverse-chunk-scan implementation below.
+ * Used by the request-time history endpoint and the WS-attach recovery.
  */
 export async function parseJsonlHistoryTailAsync(jsonlPath) {
   const st = await statSafe(jsonlPath)
@@ -280,9 +293,10 @@ export async function parseJsonlHistoryTailAsync(jsonlPath) {
  * Returns { events, hasMore, firstUuid } where firstUuid is the uuid of the oldest
  * returned event (for the next pagination request).
  */
-export function parseJsonlHistoryBefore(jsonlPath, beforeUuid) {
-  let fileSize = 0
-  try { fileSize = statSync(jsonlPath).size } catch { return { events: [], hasMore: false } }
+export async function parseJsonlHistoryBefore(jsonlPath, beforeUuid) {
+  const st = await statSafe(jsonlPath)
+  if (!st) return { events: [], hasMore: false }
+  const fileSize = st.size
 
   // We need to find the byte offset of the line with beforeUuid.
   // For a 73MB file, scanning line by line with node's fs is too slow.
@@ -298,14 +312,9 @@ export function parseJsonlHistoryBefore(jsonlPath, beforeUuid) {
   const MAX_SCAN_CHUNKS = 20  // scan at most 80 MB backward — enough for any session
   for (let attempt = 0; attempt < MAX_SCAN_CHUNKS && !found; attempt++) {
     const scanStart = Math.max(0, scanEnd - TAIL_BYTES)
-    let chunkBuf
-    try {
-      const fd = openSync(jsonlPath, 'r')
-      const buf = Buffer.allocUnsafe(scanEnd - scanStart)
-      let br = 0
-      try { br = readSync(fd, buf, 0, buf.length, scanStart) } finally { closeSync(fd) }
-      chunkBuf = buf.slice(0, br).toString('utf-8')
-    } catch { break }
+    const buf = await readByteRange(jsonlPath, scanStart, scanEnd - scanStart)
+    if (!buf) break
+    let chunkBuf = buf.toString('utf-8')
 
     // Drop partial first line if we didn't start at position 0
     let chunkLines
@@ -359,7 +368,7 @@ export function parseJsonlHistoryBefore(jsonlPath, beforeUuid) {
   }
 
   const hasMore = targetEndOffset > TAIL_BYTES
-  const rawRows = _readChunkBefore(jsonlPath, targetEndOffset)
+  const rawRows = await _readChunkBeforeAsync(jsonlPath, targetEndOffset)
   if (!rawRows) return { events: [], hasMore: false }
 
   const events = _rawRowsToEvents(rawRows)
@@ -749,11 +758,10 @@ export function resolveSessionJsonl({ store, home, project, tab }) {
 }
 
 /**
- * Async twin of resolveSessionJsonl for the request-time history endpoint —
- * same CASE A/B decision tree, but the existsSync/findNewestJsonl/statSync
- * disk touches go through bounded-scan.js. The rewind-checkpoints routes and
- * the session-attach/recovery path (claude-session-controller.js) keep using
- * the sync version above — they are not the page-load-storm path this fixes.
+ * Async twin of resolveSessionJsonl — same CASE A/B decision tree, but the
+ * existsSync/findNewestJsonl/statSync disk touches go through bounded-scan.js.
+ * Every production caller (history endpoint, WS-attach recovery, rewind
+ * routes) uses this one.
  */
 export async function resolveSessionJsonlAsync({ store, home, project, tab }) {
   const configDir = resolveClaudeConfigDirForTab(tab, store, home)
@@ -809,7 +817,7 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
       .catch((err) => console.error(`[history] ${tabId}: setClaudeSessionId failed: ${err?.message || err}`))
   }
 
-  function findMostRecentClaudeTab(project) {
+  async function findMostRecentClaudeTab(project) {
     const tabs = store.listTabs(project.id).filter((t) => t.type === 'claude')
     if (!tabs.length) return null
 
@@ -821,7 +829,7 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     // Recent-Agents resume flow, or a tab may have been re-pointed. Selecting a
     // tab that OWNS the newest jsonl makes CASE A (history endpoint) read that
     // newest conversation directly, satisfying "点进目录自动回放该目录最近一次对话".
-    const newest = findNewestJsonl(projectDir)
+    const newest = await findNewestJsonlAsync(projectDir)
     if (newest) {
       for (const tab of tabs) {
         if (tab.claudeSessionId && tab.claudeSessionId === newest.sessionId) {
@@ -837,7 +845,7 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     for (const tab of tabs) {
       if (!tab.claudeSessionId) return tab.id
       const jsonlPath = join(projectDir, `${tab.claudeSessionId}.jsonl`)
-      if (!existsSync(jsonlPath)) return tab.id
+      if (!(await statSafe(jsonlPath))) return tab.id
     }
 
     // All tabs have their own valid jsonl but none matches the newest. Fall
@@ -853,16 +861,11 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
       const configDir = resolveClaudeConfigDirForTab(tab, store, home)
       const sessionCwd = resolveClaudeCwdForTab(tab, project)
       const projectDir = claudeProjectsDir(configDir, sessionCwd)
-      const jsonlPath = join(projectDir, `${tab.claudeSessionId}.jsonl`)
-      try {
-        if (existsSync(jsonlPath)) {
-          const st = statSync(jsonlPath)
-          if (st.mtimeMs > bestMtime) {
-            bestMtime = st.mtimeMs
-            bestTabId = tab.id
-          }
-        }
-      } catch {}
+      const st = await statSafe(join(projectDir, `${tab.claudeSessionId}.jsonl`))
+      if (st && st.mtimeMs > bestMtime) {
+        bestMtime = st.mtimeMs
+        bestTabId = tab.id
+      }
     }
 
     if (!bestTabId && tabs.length > 0) bestTabId = tabs[0].id
@@ -924,7 +927,7 @@ export function createClaudeHistoryService({ store, home, recentAgents, sessionC
     const beforeUuid = typeof req.query.before === 'string' ? req.query.before.trim() : null
     if (beforeUuid) {
       // Load earlier page — do NOT update primeReplayHistory (that's for initial load only)
-      const { events, hasMore, firstUuid } = parseJsonlHistoryBefore(resolvedPath, beforeUuid)
+      const { events, hasMore, firstUuid } = await parseJsonlHistoryBefore(resolvedPath, beforeUuid)
       console.log(`[history:before] tab=${req.params.tabId} before=${beforeUuid} events=${events.length} hasMore=${hasMore}`)
       return res.json({ events, hasMore, firstUuid, sessionId: resolvedSessionId })
     }

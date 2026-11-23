@@ -16,12 +16,15 @@
  * loading a native skill is Claude's own mechanism, we never inject it.
  *
  * Security: id is validated by a strict char class (no dotdot or slash traversal).
+ *
+ * All file IO is async (bounded-scan.js): the user dir and the team skill trees
+ * sit under the shared home, and the persona is read on every claude attach.
  */
-import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { listTeams } from './usage.js'
+import { listTeamsAsync } from './usage.js'
+import { readdirSafe, readTextSafe, statSafe } from './bounded-scan.js'
 
 const PERSONA_FILE_RE = /^[A-Za-z0-9._-]+\.md$/i
 const PERSONA_ID_RE = /^[A-Za-z0-9._-]+$/
@@ -55,13 +58,12 @@ export function parsePersonaMarkdown(text, fallbackId = '') {
   return { name: name || fallbackId, instruction }
 }
 
-function readPersonaFile(filePath, id) {
-  let text = ''
-  try { text = readFileSync(filePath, 'utf8') } catch { return null }
+async function readPersonaFile(filePath, id) {
+  const text = await readTextSafe(filePath)
+  if (text === null) return null
   const { name, instruction } = parsePersonaMarkdown(text, id)
   const preview = instruction.slice(0, 160).replace(/\s+/g, ' ').trim()
-  let mtime = 0
-  try { mtime = statSync(filePath).mtimeMs() } catch {}
+  const mtime = (await statSafe(filePath))?.mtimeMs || 0
   return { name, instruction, preview, mtime }
 }
 
@@ -69,29 +71,17 @@ function readPersonaFile(filePath, id) {
  * List all personas (bundled + user), user overriding bundled by id.
  * Returns { personas: [{ id, name, source, preview, mtime }], userDir, bundledDir }
  */
-export function listPersonas(home) {
+export async function listPersonas(home) {
   const userDir = personasUserDir(home)
   const out = new Map()
-  try {
-    if (existsSync(BUNDLED_PERSONAS_DIR)) {
-      for (const f of readdirSync(BUNDLED_PERSONAS_DIR)) {
-        if (!PERSONA_FILE_RE.test(f)) continue
-        const id = f.replace(/\.md$/i, '')
-        const p = readPersonaFile(join(BUNDLED_PERSONAS_DIR, f), id)
-        if (p) out.set(id, { id, name: p.name, source: 'builtin', preview: p.preview, mtime: p.mtime })
-      }
+  for (const [dir, source] of [[BUNDLED_PERSONAS_DIR, 'builtin'], [userDir, 'user']]) {
+    for (const f of await readdirSafe(dir)) {
+      if (!PERSONA_FILE_RE.test(f)) continue
+      const id = f.replace(/\.md$/i, '')
+      const p = await readPersonaFile(join(dir, f), id)
+      if (p) out.set(id, { id, name: p.name, source, preview: p.preview, mtime: p.mtime })
     }
-  } catch {}
-  try {
-    if (existsSync(userDir)) {
-      for (const f of readdirSync(userDir)) {
-        if (!PERSONA_FILE_RE.test(f)) continue
-        const id = f.replace(/\.md$/i, '')
-        const p = readPersonaFile(join(userDir, f), id)
-        if (p) out.set(id, { id, name: p.name, source: 'user', preview: p.preview, mtime: p.mtime })
-      }
-    }
-  } catch {}
+  }
   const personas = [...out.values()].sort((a, b) => {
     if (b.mtime !== a.mtime) return b.mtime - a.mtime
     return a.name.localeCompare(b.name)
@@ -102,18 +92,12 @@ export function listPersonas(home) {
 /**
  * Read one persona by id. User dir wins. Returns { id, name, instruction, source } or null.
  */
-export function readPersona(home, id) {
+export async function readPersona(home, id) {
   if (!id || !PERSONA_ID_RE.test(id)) return null
-  const userFile = join(personasUserDir(home), `${id}.md`)
-  if (existsSync(userFile)) {
-    const p = readPersonaFile(userFile, id)
-    if (p) return { id, name: p.name, instruction: p.instruction, source: 'user' }
-  }
-  const bundledFile = join(BUNDLED_PERSONAS_DIR, `${id}.md`)
-  if (existsSync(bundledFile)) {
-    const p = readPersonaFile(bundledFile, id)
-    if (p) return { id, name: p.name, instruction: p.instruction, source: 'builtin' }
-  }
+  const user = await readPersonaFile(join(personasUserDir(home), `${id}.md`), id)
+  if (user) return { id, name: user.name, instruction: user.instruction, source: 'user' }
+  const bundled = await readPersonaFile(join(BUNDLED_PERSONAS_DIR, `${id}.md`), id)
+  if (bundled) return { id, name: bundled.name, instruction: bundled.instruction, source: 'builtin' }
   return null
 }
 
@@ -123,8 +107,8 @@ export function readPersona(home, id) {
  * Drivers consume the FRAMED version via framePersonaPrompt(resolvePersonaPrompt(...))
  * — see claude-session-controller attach.
  */
-export function resolvePersonaPrompt(home, id) {
-  const p = readPersona(home, id)
+export async function resolvePersonaPrompt(home, id) {
+  const p = await readPersona(home, id)
   return p ? p.instruction : ''
 }
 
@@ -152,9 +136,9 @@ export function framePersonaPrompt(instruction) {
 
 // ── Skills (read-only browser) ──────────────────────────────────────────────
 
-function parseSkillMd(filePath, fallbackName) {
-  let text = ''
-  try { text = readFileSync(filePath, 'utf8') } catch { return null }
+async function parseSkillMd(filePath, fallbackName) {
+  const text = await readTextSafe(filePath)
+  if (text === null) return null
   const lines = text.split('\n')
   let name = ''
   let bodyStart = 0
@@ -177,16 +161,13 @@ function parseSkillMd(filePath, fallbackName) {
   return { name, description: desc }
 }
 
-function listSkillsInDir(skillsDir) {
+async function listSkillsInDir(skillsDir) {
   const skills = []
-  let entries = []
-  try { entries = readdirSync(skillsDir, { withFileTypes: true }) } catch { return skills }
-  for (const d of entries) {
+  for (const d of await readdirSafe(skillsDir, { withFileTypes: true })) {
     if (!d.isDirectory()) continue
     if (!SKILL_NAME_RE.test(d.name)) continue
-    const skillMd = join(skillsDir, d.name, 'SKILL.md')
-    if (!existsSync(skillMd)) continue
-    const meta = parseSkillMd(skillMd, d.name) || { name: d.name, description: '' }
+    const meta = await parseSkillMd(join(skillsDir, d.name, 'SKILL.md'), d.name)
+    if (!meta) continue // no readable SKILL.md
     skills.push({ name: d.name, label: meta.name, description: meta.description })
   }
   skills.sort((a, b) => a.name.localeCompare(b.name))
@@ -197,12 +178,12 @@ function listSkillsInDir(skillsDir) {
  * List Claude-native skills across all team config dirs (read-only).
  * Returns { teams: [{ id, name, path, skills: [] }], activePath }
  */
-export function listSkills(home, store) {
-  const { teams, activePath } = listTeams(home, store)
+export async function listSkills(home, store) {
+  const { teams, activePath } = await listTeamsAsync(home, store)
   const out = []
   for (const t of teams) {
     if (!t.path || !t.exists) continue
-    out.push({ id: t.id, name: t.name, path: t.path, skills: listSkillsInDir(join(t.path, 'skills')) })
+    out.push({ id: t.id, name: t.name, path: t.path, skills: await listSkillsInDir(join(t.path, 'skills')) })
   }
   return { teams: out, activePath }
 }

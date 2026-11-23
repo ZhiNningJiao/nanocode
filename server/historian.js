@@ -9,7 +9,8 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { readdir, readFile, stat } from 'fs/promises'
+import { timedFs } from '../terminal/bounded-scan.js'
+const { readdir, readFile, stat } = timedFs // home fs: slot budget + slow-call log
 import path from 'path'
 import os from 'os'
 import { classifySignalName } from '../tools/command-center/export-cars.mjs'

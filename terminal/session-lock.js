@@ -42,9 +42,9 @@
  * O_EXCL / rename atomicity, same as before.
  */
 
-import { mkdir, readFile, writeFile, unlink, open, rename, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { hostname } from 'node:os'
+import { timedFs } from './bounded-scan.js'
 
 const LOCK_SUBDIR = 'session-locks'
 // A foreign lock is stale once its heartbeat is older than this. The holder
@@ -62,6 +62,8 @@ const HOST = hostname()
 // Tests use this to simulate a slow/stuck filesystem (e.g. a FIFO with no
 // writer) without touching any real disk. Nothing in production code calls
 // _setFsImplForTesting — the default below is what always runs outside tests.
+// timedFs = node:fs/promises + a log line for any call slower than SLOW_FS_MS.
+const { mkdir, readFile, writeFile, unlink, open, rename, stat } = timedFs
 const _realFs = { mkdir, readFile, writeFile, unlink, open, rename, stat }
 let _rawFs = _realFs
 export function _setFsImplForTesting(impl) {

@@ -16,7 +16,8 @@
  *     enough; we deliberately do NOT special-case Windows file attributes).
  */
 
-import { readdirSync, existsSync } from 'node:fs'
+import { existsSync } from 'node:fs'
+import { timedFs } from './bounded-scan.js'
 import path from 'node:path'
 
 /** Return the path module for the given platform string. */
@@ -126,11 +127,12 @@ export function isHidden(name) {
  *
  * Returns `{path, parent, entries}` where `entries` is a sorted list of
  * `{name, isDir:true}` non-hidden directories. `readdir` is injectable for
- * unit tests; defaults to the real `readdirSync` with Dirent objects.
+ * unit tests; defaults to an async readdir (bounded-scan.js timedFs) with
+ * Dirent objects — the picker browses the shared home.
  */
-export function listDirectory(base, platform, { readdir } = {}) {
-  const read = readdir || ((dir) => readdirSync(dir, { withFileTypes: true }))
-  const entries = read(base)
+export async function listDirectory(base, platform, { readdir } = {}) {
+  const read = readdir || ((dir) => timedFs.readdir(dir, { withFileTypes: true }))
+  const entries = (await read(base))
     .filter((dirent) => dirent.isDirectory() && !isHidden(dirent.name))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
     .map((dirent) => ({ name: dirent.name, isDir: true }))

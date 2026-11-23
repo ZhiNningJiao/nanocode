@@ -20,7 +20,8 @@
  * mapQuotaReading / buildQuotaView are pure; createQuotaSource does the IO.
  */
 
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { timedFs } from '../terminal/bounded-scan.js'
+const { readdir, readFile, stat } = timedFs // home fs: slot budget + slow-call log
 import { join } from 'node:path'
 import { str } from './command-center-fields.js'
 import { readdirSafe, statSafe, readTailLines, mapLimit, DEFAULT_SCAN_CONCURRENCY } from '../terminal/bounded-scan.js'

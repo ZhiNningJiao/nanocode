@@ -1,31 +1,31 @@
 /** Terminal routes — Express Router + WebSocket handler. */
 
 import { Router } from 'express'
-import { execFile, spawn } from 'node:child_process'
-import { readFileSync, existsSync, unlinkSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import path, { resolve, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { currentPlatform, listDirectory, listDrives } from './fsbrowse.js'
 import * as sessions from './sessions.js'
-import { createClaudeHistoryService, resolveSessionJsonl } from './claude-history.js'
+import { createClaudeHistoryService, resolveSessionJsonlAsync } from './claude-history.js'
 import { createClaudeSessionController } from './claude-session-controller.js'
 import { createRecentAgentsService } from './recent-agents.js'
-import { scanClaudeUsage, scanAllOpencodeUsage, listTeams, listTeamsAsync, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, buildUsageSummary } from './usage.js'
-import { listMemoryTree, listMemoryTreeAsync, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './memory.js'
+import { scanClaudeUsage, scanAllOpencodeUsage, listTeamsAsync, listAigwModels, probeAigwCost, effectiveClaudeConfigDir, buildUsageSummary } from './usage.js'
+import { listMemoryTreeAsync, listMemoryFiles, readMemoryFile, searchMemory, saveMemoryFile } from './memory.js'
 import { listPersonas, readPersona, listSkills } from './personas.js'
 import { listBranches, diffOverview, fileDiff } from './compare.js'
 import { listSessions, previewSession } from './sessions-browser.js'
-import { createScanCache } from './bounded-scan.js'
+import { createScanCache, readTextSafe, timedFs } from './bounded-scan.js'
 import { buildCheckpoints, rewindConversation } from './rewind.js'
 import { listMachines, addMachine, updateMachine, deleteMachine, buildConnectUri, getMachine, buildSshCommand, mergePersonalMachines } from './remote.js'
 import { createRemoteSshHandler, resolveSshpass } from './remote-ssh.js'
 import { loadPersonalConfig, projectForPlugin } from './personal-config.js'
 import { builtinPlugin } from '../public/js/plugins-registry.js'
 import { exportToEvents } from './opencode-adapter.js'
-import { listOpencodeSessions } from './opencode-sessions.js'
+import { listOpencodeSessions, opencodeCliEnv } from './opencode-sessions.js'
 import { createReposRoutes } from './repos-routes.js'
 import { createClaudeModelProbe, claudeSdkVersion } from './claude-models-probe.js'
+import { spawnInDir } from './spawn-in-dir.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -72,8 +72,12 @@ export function createTerminalRoutes(store, opts = {}) {
   // raw ModelInfo[]) is a test seam: when injected the cache is bypassed so
   // unit tests get deterministic per-call behaviour (success / throw / bad
   // entries) without ever spawning the SDK.
+  // The zero-turn probe runs in the server's own working directory, not home:
+  // the SDK spawns claude with that cwd (and stats it) on the event loop, and
+  // home is the shared /jfs mount (REPORT_nanolock_0730.md). The model list
+  // depends on the SDK + account, not on the cwd.
   const claudeModelProbe = opts?.claudeModelProbe ?? null
-  const _claudeRealProbe = claudeModelProbe ? null : createClaudeModelProbe({ home, cwd: opts?.claudeProbeCwd })
+  const _claudeRealProbe = claudeModelProbe ? null : createClaudeModelProbe({ home, cwd: opts?.claudeProbeCwd || process.cwd() })
   let _claudeModelsCache = null // { ts, raw, version }
   const CLAUDE_MODELS_TTL_MS = 10 * 60 * 1000
 
@@ -138,11 +142,10 @@ export function createTerminalRoutes(store, opts = {}) {
     return hosts.filter((h) => h.hostname && h.hostname !== 'github.com')
   }
 
-  router.get('/api/ssh-hosts', (_req, res) => {
-    const configPath = join(home, '.ssh', 'config')
-    if (!existsSync(configPath)) return res.json([])
+  router.get('/api/ssh-hosts', async (_req, res) => {
+    const content = await readTextSafe(join(home, '.ssh', 'config'))
+    if (content === null) return res.json([])
     try {
-      const content = readFileSync(configPath, 'utf-8')
       res.json(parseSshConfig(content))
     } catch {
       res.json([])
@@ -408,10 +411,14 @@ export function createTerminalRoutes(store, opts = {}) {
    *
    * Response: { tabId: string | null }
    */
-  router.get('/api/projects/:id/most-recent-claude-tab', (req, res) => {
+  router.get('/api/projects/:id/most-recent-claude-tab', async (req, res) => {
     const project = store.getProject(req.params.id)
     if (!project) return res.status(404).json({ error: 'project not found' })
-    res.json({ tabId: historyService.findMostRecentClaudeTab(project) })
+    try {
+      res.json({ tabId: await historyService.findMostRecentClaudeTab(project) })
+    } catch (err) {
+      res.status(500).json({ error: err?.message || String(err) })
+    }
   })
 
   // ── GET /api/projects/:id/recent-conversations ──────────────────────────────
@@ -675,13 +682,18 @@ export function createTerminalRoutes(store, opts = {}) {
    * + switch CLAUDE_CONFIG_DIR + upgrade model to the target team's default).
    * Body: { targetConfigDir: string }. Next turn resumes on the target org.
    */
-  router.patch('/api/projects/:id/tabs/:tabId/switch-team', (req, res) => {
+  router.patch('/api/projects/:id/tabs/:tabId/switch-team', async (req, res) => {
     const project = store.getProject(req.params.id)
     if (!project) return res.status(404).json({ error: 'project not found' })
     const targetConfigDir = typeof req.body?.targetConfigDir === 'string' ? req.body.targetConfigDir.trim() : ''
     if (!targetConfigDir) return res.status(400).json({ error: 'targetConfigDir required' })
     if (!sessionController.switchTeam) return res.status(500).json({ error: 'switchTeam unavailable' })
-    const result = sessionController.switchTeam(req.params.id, req.params.tabId, targetConfigDir)
+    let result
+    try {
+      result = await sessionController.switchTeam(req.params.id, req.params.tabId, targetConfigDir)
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err?.message || String(err) })
+    }
     if (!result.ok) return res.status(400).json(result)
     broadcastTabs(req.params.id)
     res.json(result)
@@ -739,7 +751,7 @@ export function createTerminalRoutes(store, opts = {}) {
   // `parent` field (null at a drive root / `/`) so the frontend can disable
   // the "up one level" button. Pure path logic lives in ./fsbrowse.js so the
   // win32 branches are unit-testable on a Linux host.
-  router.get('/api/fs', (req, res) => {
+  router.get('/api/fs', async (req, res) => {
     const platform = currentPlatform()
     const pathMod = platform === 'win32' ? path.win32 : path
     const raw = req.query.path
@@ -753,7 +765,7 @@ export function createTerminalRoutes(store, opts = {}) {
       const base = input
         ? (pathMod.isAbsolute(input) ? pathMod.resolve(input) : pathMod.resolve(home, input))
         : home
-      res.json({ ...listDirectory(base, platform), platform })
+      res.json({ ...(await listDirectory(base, platform)), platform })
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'not found' })
       if (err.code === 'ENOTDIR')
@@ -772,7 +784,9 @@ export function createTerminalRoutes(store, opts = {}) {
     if (!project) return res.status(404).json({ error: 'project not found' })
     const tab = store.getTab ? store.getTab(req.params.id, req.params.tabId) : null
     if (tab && (tab.type === 'fable5' || tab.type === 'opencode') && tab.opencodeSessionId) {
-      handleOpencodeHistory(req, res, project, tab)
+      handleOpencodeHistory(req, res, project, tab).catch((err) => {
+        if (!res.headersSent) res.status(500).json({ error: err?.message || String(err) })
+      })
       return
     }
     if (tab && (tab.type === 'fable5' || tab.type === 'opencode') && !tab.opencodeSessionId) {
@@ -787,18 +801,9 @@ export function createTerminalRoutes(store, opts = {}) {
   })
 
   // opencode export → claude-block events (history replay for Fable5/opencode tabs)
-  function handleOpencodeHistory(req, res, project, tab) {
+  async function handleOpencodeHistory(req, res, project, tab) {
     const sessionId = tab.opencodeSessionId
-    const env = { ...process.env }
-    delete env.FORCE_COLOR
-    env.NO_COLOR = '1'
-    env.TERM = 'dumb'
-    // Carry the AIGW key + config so `opencode export` can resolve the session
-    // even when the global opencode.json needs the kimi provider registered.
-    try {
-      const keyFile = join(home, '.config', 'meshy-aigw.key')
-      if (existsSync(keyFile)) env.MESHY_AIGW_KEY = readFileSync(keyFile, 'utf8').trim()
-    } catch { /* best-effort */ }
+    const env = await opencodeCliEnv(home)
     execFile('opencode', ['export', sessionId], { cwd: project.cwd, env, maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => {
       if (err) {
         console.warn(`[history:opencode] export failed for session ${sessionId}: ${err.message}`)
@@ -855,10 +860,7 @@ export function createTerminalRoutes(store, opts = {}) {
   )
   function _cleanupProbeSession(sid) {
     if (!sid) return
-    try {
-      const p = join(_probeProjectsDir, `${sid}.jsonl`)
-      if (existsSync(p)) unlinkSync(p)
-    } catch {}
+    timedFs.unlink(join(_probeProjectsDir, `${sid}.jsonl`)).catch(() => {})
   }
 
   /** Spawn claude once, pull slash_commands from the init event.
@@ -876,7 +878,7 @@ export function createTerminalRoutes(store, opts = {}) {
       const probeSid = randomUUID()
       let proc
       try {
-        proc = spawn('claude', [
+        proc = spawnInDir('claude', [
           '--print',
           '--session-id', probeSid,
           '--output-format=stream-json',
@@ -1016,7 +1018,7 @@ export function createTerminalRoutes(store, opts = {}) {
       const probeSid = randomUUID()
       let proc
       try {
-        proc = spawn('claude', [
+        proc = spawnInDir('claude', [
           '--print',
           '--session-id', probeSid,
           '--output-format=stream-json',
@@ -1140,20 +1142,16 @@ export function createTerminalRoutes(store, opts = {}) {
   // Response: { model: string|null }
   // The model field is null when the file doesn't exist or contains no model key.
   //
-  router.get('/api/codex/config', (req, res) => {
-    const configPath = join(home, '.codex', 'config.toml')
-    let model = null
-    try {
-      if (existsSync(configPath)) {
-        const content = readFileSync(configPath, 'utf8')
-        // Parse the top-level model = "..." line (before any [section] headers)
-        const match = content.match(/^model\s*=\s*"([^"]+)"/m)
-        if (match) model = match[1]
-      }
-    } catch (err) {
-      console.warn('[codex/config] failed to read config.toml:', err.message)
-    }
-    res.json({ model })
+  // Top-level `model = "..."` of ~/.codex/config.toml (before any [section]
+  // header), or null when the file is missing/unreadable or has no model key.
+  async function readCodexConfigModel() {
+    const content = await readTextSafe(join(home, '.codex', 'config.toml'))
+    const match = content?.match(/^model\s*=\s*"([^"]+)"/m)
+    return match ? match[1] : null
+  }
+
+  router.get('/api/codex/config', async (req, res) => {
+    res.json({ model: await readCodexConfigModel() })
   })
 
   // ── GET /api/codex/models ─────────────────────────────────────────────────
@@ -1169,24 +1167,14 @@ export function createTerminalRoutes(store, opts = {}) {
   // flag the config.toml default in a single round-trip. On any error or a
   // missing cache file the response is `{ models: [], configModel, fallback: true }`
   // and the frontend falls back to its built-in curated list.
-  router.get('/api/codex/models', (req, res) => {
+  router.get('/api/codex/models', async (req, res) => {
     const cachePath = join(home, '.codex', 'models_cache.json')
-    const configPath = join(home, '.codex', 'config.toml')
-    let configModel = null
+    const configModel = await readCodexConfigModel()
     try {
-      if (existsSync(configPath)) {
-        const content = readFileSync(configPath, 'utf8')
-        const match = content.match(/^model\s*=\s*"([^"]+)"/m)
-        if (match) configModel = match[1]
-      }
-    } catch (err) {
-      console.warn('[codex/models] failed to read config.toml:', err.message)
-    }
-    try {
-      if (!existsSync(cachePath)) {
+      const raw = await readTextSafe(cachePath)
+      if (raw === null) {
         return res.json({ fetched_at: null, client_version: null, configModel, models: [], fallback: true })
       }
-      const raw = readFileSync(cachePath, 'utf8')
       const parsed = JSON.parse(raw)
       const all = Array.isArray(parsed && parsed.models) ? parsed.models : []
       // Keep only user-facing models (visibility:"list"); drop hidden/internal
@@ -1322,9 +1310,9 @@ export function createTerminalRoutes(store, opts = {}) {
   // AIGW-routed sessions report cost=0 (provider doesn't report per-session cost
   // to opencode); tokens are real. Degrades to { error } when the DB or
   // node:sqlite is unavailable so the UI labels the source honestly.
-  router.get('/api/usage/opencode', (_req, res) => {
+  router.get('/api/usage/opencode', async (_req, res) => {
     try {
-      const result = scanAllOpencodeUsage(home)
+      const result = await scanAllOpencodeUsage(home)
       res.json(result)
     } catch (err) {
       console.error('[/api/usage/opencode]', err)
@@ -1403,8 +1391,8 @@ export function createTerminalRoutes(store, opts = {}) {
   // character classes inside usage.js (no `..` / `/` traversal).
 
   /** Resolve a team path from the query: default to active team; reject unknown. */
-  function resolveMemoryTeam(teamPath) {
-    const { teams } = listTeams(home, store)
+  async function resolveMemoryTeam(teamPath) {
+    const { teams } = await listTeamsAsync(home, store)
     if (!teamPath) return effectiveClaudeConfigDir(store, home)
     return teams.find((t) => t.path === teamPath && t.exists) ? teamPath : null
   }
@@ -1435,47 +1423,47 @@ export function createTerminalRoutes(store, opts = {}) {
     }
   })
 
-  router.get('/api/memory/files', (req, res) => {
+  router.get('/api/memory/files', async (req, res) => {
     try {
-      const team = resolveMemoryTeam(req.query.team)
+      const team = await resolveMemoryTeam(req.query.team)
       if (!team) return res.status(400).json({ error: 'invalid team' })
-      res.json(listMemoryFiles(team, req.query.project))
+      res.json(await listMemoryFiles(team, req.query.project))
     } catch (err) {
       console.error('[/api/memory/files]', err)
       res.status(500).json({ error: err.message })
     }
   })
 
-  router.get('/api/memory/read', (req, res) => {
+  router.get('/api/memory/read', async (req, res) => {
     try {
-      const team = resolveMemoryTeam(req.query.team)
+      const team = await resolveMemoryTeam(req.query.team)
       if (!team) return res.status(400).json({ error: 'invalid team' })
-      res.json(readMemoryFile(team, req.query.project, req.query.file))
+      res.json(await readMemoryFile(team, req.query.project, req.query.file))
     } catch (err) {
       console.error('[/api/memory/read]', err)
       res.status(500).json({ error: err.message })
     }
   })
 
-  router.get('/api/memory/search', (req, res) => {
+  router.get('/api/memory/search', async (req, res) => {
     try {
-      const team = resolveMemoryTeam(req.query.team)
+      const team = await resolveMemoryTeam(req.query.team)
       if (!team) return res.status(400).json({ error: 'invalid team' })
-      res.json(searchMemory(team, req.query.project, req.query.q))
+      res.json(await searchMemory(team, req.query.project, req.query.q))
     } catch (err) {
       console.error('[/api/memory/search]', err)
       res.status(500).json({ error: err.message })
     }
   })
 
-  router.post('/api/memory/save', (req, res) => {
+  router.post('/api/memory/save', async (req, res) => {
     try {
-      const team = resolveMemoryTeam(req.body?.team)
+      const team = await resolveMemoryTeam(req.body?.team)
       if (!team) return res.status(400).json({ error: 'invalid team' })
       const project = typeof req.body?.project === 'string' ? req.body.project : ''
       const file = typeof req.body?.file === 'string' ? req.body.file : ''
       const content = typeof req.body?.content === 'string' ? req.body.content : ''
-      res.json(saveMemoryFile(team, project, file, content))
+      res.json(await saveMemoryFile(team, project, file, content))
     } catch (err) {
       console.error('[/api/memory/save]', err)
       res.status(500).json({ error: err.message })
@@ -1492,18 +1480,18 @@ export function createTerminalRoutes(store, opts = {}) {
   // (CLI) / appendSystemPrompt (SDK) / --append-system-prompt bridge arg (tmux).
   // Skills are browse-only — loading a native skill is Claude's own mechanism.
 
-  router.get('/api/personas', (req, res) => {
+  router.get('/api/personas', async (req, res) => {
     try {
-      res.json(listPersonas(home))
+      res.json(await listPersonas(home))
     } catch (err) {
       console.error('[/api/personas]', err)
       res.status(500).json({ error: err.message })
     }
   })
 
-  router.get('/api/personas/:id', (req, res) => {
+  router.get('/api/personas/:id', async (req, res) => {
     try {
-      const p = readPersona(home, req.params.id)
+      const p = await readPersona(home, req.params.id)
       if (!p) return res.status(404).json({ error: 'persona not found' })
       res.json(p)
     } catch (err) {
@@ -1512,9 +1500,9 @@ export function createTerminalRoutes(store, opts = {}) {
     }
   })
 
-  router.get('/api/skills', (req, res) => {
+  router.get('/api/skills', async (req, res) => {
     try {
-      res.json(listSkills(home, store))
+      res.json(await listSkills(home, store))
     } catch (err) {
       console.error('[/api/skills]', err)
       res.status(500).json({ error: err.message })
@@ -1620,22 +1608,22 @@ export function createTerminalRoutes(store, opts = {}) {
   // uses, so cross-team / cross-cwd tabs locate the right transcript. Read-only
   // listing never mutates; apply backs up before truncating + writes atomically.
   // "Restore code" (file-snapshot rewind) is intentionally NOT faked — see REPORT.
-  router.get('/api/rewind/checkpoints', (req, res) => {
+  router.get('/api/rewind/checkpoints', async (req, res) => {
     try {
       const project = store.getProject(String(req.query.projectId || ''))
       if (!project) return res.status(404).json({ error: 'project not found' })
       const tab = store.getTab ? store.getTab(project.id, String(req.query.tabId || '')) : null
       if (!tab) return res.status(404).json({ error: 'tab not found' })
-      const { resolvedPath } = resolveSessionJsonl({ store, home, project, tab })
+      const { resolvedPath } = await resolveSessionJsonlAsync({ store, home, project, tab })
       if (!resolvedPath) return res.json({ checkpoints: [], totalLines: 0, totalTurns: 0, sessionId: tab.claudeSessionId || '', error: 'no session file for this tab' })
-      res.json(buildCheckpoints(resolvedPath))
+      res.json(await buildCheckpoints(resolvedPath))
     } catch (err) {
       console.error('[/api/rewind/checkpoints]', err)
       res.status(500).json({ error: err.message })
     }
   })
 
-  router.post('/api/rewind/apply', (req, res) => {
+  router.post('/api/rewind/apply', async (req, res) => {
     try {
       const projectId = String(req.body?.projectId || '')
       const tabId = String(req.body?.tabId || '')
@@ -1645,9 +1633,9 @@ export function createTerminalRoutes(store, opts = {}) {
       if (!project) return res.status(404).json({ error: 'project not found' })
       const tab = store.getTab ? store.getTab(projectId, tabId) : null
       if (!tab) return res.status(404).json({ error: 'tab not found' })
-      const { resolvedPath } = resolveSessionJsonl({ store, home, project, tab })
+      const { resolvedPath } = await resolveSessionJsonlAsync({ store, home, project, tab })
       if (!resolvedPath) return res.status(404).json({ error: 'no session file for this tab' })
-      res.json(rewindConversation({ jsonlPath: resolvedPath, toIndex, dryRun }))
+      res.json(await rewindConversation({ jsonlPath: resolvedPath, toIndex, dryRun }))
     } catch (err) {
       console.error('[/api/rewind/apply]', err)
       res.status(500).json({ error: err.message })

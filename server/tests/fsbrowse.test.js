@@ -142,7 +142,7 @@ describe('fsbrowse listDirectory', () => {
     }
   }
 
-  it('filters to non-hidden directories, sorted case-insensitively, with parent', () => {
+  it('filters to non-hidden directories, sorted case-insensitively, with parent', async () => {
     const readdir = () => [
       dirent('Zeta', true),
       dirent('.hidden', true),
@@ -151,7 +151,7 @@ describe('fsbrowse listDirectory', () => {
       dirent('readme.txt', false),
       dirent('..keep', true),
     ]
-    const result = listDirectory('/home/me', 'posix', { readdir })
+    const result = await listDirectory('/home/me', 'posix', { readdir })
     assert.equal(result.path, '/home/me')
     assert.equal(result.parent, '/home')
     assert.deepEqual(
@@ -164,9 +164,9 @@ describe('fsbrowse listDirectory', () => {
     )
   })
 
-  it('win32 sets parent to null at a drive root', () => {
+  it('win32 sets parent to null at a drive root', async () => {
     const readdir = () => [dirent('Users', true), dirent('Windows', true)]
-    const result = listDirectory('C:\\', 'win32', { readdir })
+    const result = await listDirectory('C:\\', 'win32', { readdir })
     assert.equal(result.path, 'C:\\')
     assert.equal(result.parent, null)
     assert.deepEqual(result.entries, [
@@ -175,17 +175,17 @@ describe('fsbrowse listDirectory', () => {
     ])
   })
 
-  it('posix sets parent to null at /', () => {
+  it('posix sets parent to null at /', async () => {
     const readdir = () => [dirent('home', true), dirent('opt', true)]
-    const result = listDirectory('/', 'posix', { readdir })
+    const result = await listDirectory('/', 'posix', { readdir })
     assert.equal(result.path, '/')
     assert.equal(result.parent, null)
     assert.equal(result.entries.length, 2)
   })
 
-  it('returns an empty entries array for an empty dir', () => {
+  it('returns an empty entries array for an empty dir', async () => {
     const readdir = () => []
-    const result = listDirectory('/home/me/empty', 'posix', { readdir })
+    const result = await listDirectory('/home/me/empty', 'posix', { readdir })
     assert.equal(result.parent, '/home/me')
     assert.deepEqual(result.entries, [])
   })

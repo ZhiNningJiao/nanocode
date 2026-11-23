@@ -28,7 +28,9 @@
 
 import express from 'express'
 import { readFileSync } from 'node:fs'
-import { readFile, stat, open } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
+import { timedFs, withFsSlot } from '../terminal/bounded-scan.js'
+const { readFile, stat } = timedFs // home fs: slot budget + slow-call log
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveLinearApiKey } from './linear-key.js'
@@ -514,7 +516,11 @@ const DOCUMENT_KINDS = new Set(['task', 'step', 'report'])
  * decided by what was read, not by an earlier stat (a file growing between
  * stat and read can't push more than maxBytes into memory).
  */
-export async function readTextCapped(p, maxBytes) {
+export function readTextCapped(p, maxBytes) {
+  return withFsSlot(() => _readTextCapped(p, maxBytes)) // one home-fs slot for the open/read/close
+}
+
+async function _readTextCapped(p, maxBytes) {
   const fh = await open(p, 'r')
   try {
     if (!(await fh.stat()).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTFILE' })

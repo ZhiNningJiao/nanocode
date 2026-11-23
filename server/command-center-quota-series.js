@@ -19,7 +19,8 @@
  *
  * buildQuotaSeries is pure; createQuotaSeriesSource does the (read-only) IO.
  */
-import { stat } from 'node:fs/promises'
+import { timedFs } from '../terminal/bounded-scan.js'
+const { stat } = timedFs // home fs: slot budget + slow-call log
 import { parseUsageSnapLine, parseReadingTime } from './command-center-quota.js'
 import { readTailLines } from '../terminal/bounded-scan.js'
 

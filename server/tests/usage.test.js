@@ -230,7 +230,7 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-opc-')) })
   afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-  it('resolveOpencodeDbPaths honours OPENCODE_DB_PATH override and filters missing', () => {
+  it('resolveOpencodeDbPaths honours OPENCODE_DB_PATH override and filters missing', async () => {
     const dbPath = join(tmp, 'opencode.db')
     writeFileSync(dbPath, 'x') // non-empty placeholder so existsSync+size passes
     // Isolate BOTH env vars: on machines where XDG_DATA_HOME points at a real
@@ -244,7 +244,7 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
     process.env.XDG_DATA_HOME = join(tmp, 'fake-home', '.local', 'share')
     delete process.env.GLM_XDG_DATA_HOME
     try {
-      const paths = resolveOpencodeDbPaths(join(tmp, 'fake-home'))
+      const paths = await resolveOpencodeDbPaths(join(tmp, 'fake-home'))
       assert.deepEqual(paths, [dbPath])
     } finally {
       if (prevDb === undefined) delete process.env.OPENCODE_DB_PATH
@@ -264,7 +264,7 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
     assert.deepEqual(e.totals.input, 0)
   })
 
-  itSqlite('scanOpencodeUsage reads a temp SQLite DB and aggregates tokens', () => {
+  itSqlite('scanOpencodeUsage reads a temp SQLite DB and aggregates tokens', async () => {
     const dbPath = join(tmp, 'opencode.db')
     const db = new _DatabaseSync(dbPath)
     db.exec(`
@@ -283,7 +283,7 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
     ins.run('s2', '{"id":"litellm/claude-fable-5"}', 0, 500, 50, 0, 0, 0, ms, ms, '/home/me/proj')
     db.close()
 
-    const r = scanOpencodeUsage(dbPath)
+    const r = await scanOpencodeUsage(dbPath)
     assert.equal(r.error, undefined)
     assert.equal(r.sessionCount, 2)
     assert.equal(r.totals.input, 1500)
@@ -298,8 +298,8 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
     assert.ok(ids.includes('litellm/claude-fable-5'))
   })
 
-  itSqlite('scanOpencodeUsage returns error for a missing DB path', () => {
-    const r = scanOpencodeUsage(join(tmp, 'nope.db'))
+  itSqlite('scanOpencodeUsage returns error for a missing DB path', async () => {
+    const r = await scanOpencodeUsage(join(tmp, 'nope.db'))
     assert.ok(r.error)
     assert.equal(r.sessionCount, 0)
   })
@@ -465,28 +465,28 @@ describe('usage: streamJsonlTimeline + readClaudeOAuthCredentials', () => {
     assert.equal(rows[0].ts, Date.parse(newTs))
   })
 
-  it('readClaudeOAuthCredentials reads accessToken + tier from a tmp credentials file', () => {
+  it('readClaudeOAuthCredentials reads accessToken + tier from a tmp credentials file', async () => {
     const cfgDir = join(tmp, '.claude')
     mkdirSync(cfgDir, { recursive: true })
     writeFileSync(join(cfgDir, '.credentials.json'), JSON.stringify({
       claudeAiOauth: { accessToken: 'sk-ant-oat01-test', expiresAt: NOW + 999999, subscriptionType: 'team', rateLimitTier: 'default_claude_max_5x', scopes: ['user:profile'] },
     }))
-    const c = readClaudeOAuthCredentials(cfgDir)
+    const c = await readClaudeOAuthCredentials(cfgDir)
     assert.equal(c.accessToken, 'sk-ant-oat01-test')
     assert.equal(c.subscriptionType, 'team')
     assert.equal(c.rateLimitTier, 'default_claude_max_5x')
     assert.ok(c.scopes.includes('user:profile'))
   })
 
-  it('readClaudeOAuthCredentials returns null for missing / malformed file', () => {
-    assert.equal(readClaudeOAuthCredentials(join(tmp, 'nope')), null)
+  it('readClaudeOAuthCredentials returns null for missing / malformed file', async () => {
+    assert.equal(await readClaudeOAuthCredentials(join(tmp, 'nope')), null)
     writeFileSync(join(tmp, '.credentials.json'), '{not json')
-    assert.equal(readClaudeOAuthCredentials(tmp), null)
+    assert.equal(await readClaudeOAuthCredentials(tmp), null)
     writeFileSync(join(tmp, '.credentials2.json'), '{}')
     const cfgDir2 = join(tmp, 'sub')
     mkdirSync(cfgDir2, { recursive: true })
     writeFileSync(join(cfgDir2, '.credentials.json'), JSON.stringify({ other: 1 }))
-    assert.equal(readClaudeOAuthCredentials(cfgDir2), null)
+    assert.equal(await readClaudeOAuthCredentials(cfgDir2), null)
   })
 })
 
