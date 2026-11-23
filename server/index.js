@@ -664,6 +664,11 @@ app.get('/api/services-config', (_req, res) => {
 // lens URL for the one-click jump button) and /api/akari/state bundles health +
 // concurrency + workers + lanes for a single gentle poll (≥10s in the panel).
 
+// Relay where.json URLs for the PWA offline page (tools/reach/, public/sw.js).
+app.get('/api/reach', (_req, res) => {
+  res.json({ where: loadPersonalConfig().reach.where })
+})
+
 app.get('/api/akari/config', (_req, res) => {
   const { serverUrl, lensUrl } = akariUrls()
   res.json({ serverUrl, lensUrl })

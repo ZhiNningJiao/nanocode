@@ -23,6 +23,7 @@
  *   ntfy.url       -> personal.ntfy.url            -> null (backend still reads store setting ntfy_url)
  *   akari.serverUrl-> personal.akari.serverUrl     -> $AKARI_SERVER_URL -> http://127.0.0.1:9481
  *   akari.lensUrl  -> personal.akari.lensUrl       -> $AKARI_LENS_URL   -> http://127.0.0.1:9482
+ *   reach.where    -> personal.reach.where[]       -> [] (relay where.json URLs for the PWA offline page)
  *
  * The loader NEVER throws — a missing/parse-broken personal file degrades to
  * the scattered fallbacks. Secrets are only the same secrets the caller could
@@ -115,6 +116,7 @@ export function personalConfigPath({ home, configPath } = {}) {
  *     claude: { teams: [{name,configDir}] | null },   // null => auto-discover
  *     ntfy:   { url: string | null },
  *     akari:  { serverUrl, lensUrl },                  // dispatch + lens URLs (not secrets)
+ *     reach:  { where: [url] },                        // relay where.json URLs ([] = none)
  *     _source:{ personalFileExists, path, home }
  *   }
  *
@@ -225,6 +227,18 @@ export function loadPersonalConfig({ home, configPath } = {}) {
     process.env.AKARI_LENS_URL ||
     DEFAULT_AKARI_LENS_URL
 
+  // reach --------------------------------------------------------------
+  // The relays' where.json URLs (tools/reach/): the PWA caches this list while
+  // online so its offline page knows where to look up the current entries.
+  // Deployment addresses live only here, never in the repo. http(s) only.
+  const reachWhere = []
+  for (const u of Array.isArray(file?.reach?.where) ? file.reach.where : []) {
+    try {
+      const url = new URL(String(u).trim())
+      if ((url.protocol === 'http:' || url.protocol === 'https:') && !reachWhere.includes(url.href)) reachWhere.push(url.href)
+    } catch { /* not a URL: dropped */ }
+  }
+
   const cfg = Object.freeze({
     aigw: Object.freeze({ base: aigwBase, key: aigwKey, budgetKeyFile: aigwBudgetKeyFile, budgetProbeModel: aigwBudgetProbeModel }),
     linear: Object.freeze({ apiKey: linearApiKey }),
@@ -233,6 +247,7 @@ export function loadPersonalConfig({ home, configPath } = {}) {
     codex: Object.freeze({ sessionsDir: codexSessionsDir }),
     ntfy: Object.freeze({ url: ntfyUrl }),
     akari: Object.freeze({ serverUrl: akariServerUrl, lensUrl: akariLensUrl }),
+    reach: Object.freeze({ where: Object.freeze(reachWhere) }),
     _source: Object.freeze({
       personalFileExists: !!file,
       path,
