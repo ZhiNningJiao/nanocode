@@ -28,7 +28,8 @@ export const AUTH_COOKIE = 'nanocode_auth'
 export const AUTH_COOKIE_MAX_AGE_SEC = 180 * 24 * 3600
 export const LOGIN_PATH = '/login'
 export const LOGIN_API_PATH = '/api/login'
-export const MIN_TOKEN_LENGTH = 32
+// owner 11-23 picked a short numeric token he can type; logins are rate-limited per source, so 6 is the floor.
+export const MIN_TOKEN_LENGTH = 6
 
 const REMOTE_ENTRY = Symbol('nanocode.remoteEntry')
 const COOKIE_HMAC_LABEL = 'nanocode-auth-cookie-v1'
