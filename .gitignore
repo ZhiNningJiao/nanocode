@@ -36,6 +36,9 @@ server/tests/.fixtures-tmp/
 # command center — real root issue key / export path, never committed
 config/command-center.local.json
 
+# dispatch tool — real paths / issue keys / pools, never committed
+config/dispatch.local.json
+
 # services / agents — real internal hosts, never committed (public-repo hygiene)
 server/services-config.local.json
 server/agents-config.local.json
