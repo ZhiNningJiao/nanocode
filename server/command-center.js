@@ -40,6 +40,7 @@ import { str, arr, validIso } from './command-center-fields.js'
 import { mapExportWaiting, buildWaitingView, createOwnerPendingSource } from './command-center-waiting.js'
 import { DEFAULT_QUOTA_STALE_SEC, createQuotaSource, createQuotaSnapshotSource, QUOTA_SNAPSHOT_POLL_MS } from './command-center-quota.js'
 import { createQuotaSeriesSource } from './command-center-quota-series.js'
+import { createLineageSource, classifyLineage, ISSUE_KEY_RE } from './linear-lineage.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
@@ -324,13 +325,28 @@ function eventActivity(e) {
   return Math.max(Date.parse(e.lastProgress?.t || 0) || 0, Date.parse(e.updatedAt || 0) || 0)
 }
 
+/** Issue keys of the cars that need a parent-chain lookup (real tracker keys only). */
+export function carIssueKeys(cars) {
+  if (!cars?.ok) return []
+  return [...new Set(cars.data.cars.map((c) => c.issue).filter((k) => k && ISSUE_KEY_RE.test(k)))]
+}
+
+const MAINTENANCE_PREFIX = 'none:'
+
 /**
- * Join the two sources. When Linear is down the events fall back to the
- * issue keys the cars carry (title/state unknown, said so in the UI); when
- * the car export is down every event says "car data unreachable" instead of
+ * Join the sources. Each car goes to the root's direct child (category) its
+ * issue descends from, found by walking the issue's real parent chain
+ * (`lineage`, linear-lineage.js) — any depth, any team; the car also gets
+ * `sub` = the nearest 【named】 issue below the category (「重定向质量 › IK」).
+ * When a chain lookup failed, the car falls back to the shallow tree (the
+ * category's own children). Only cars that really have no issue, or whose
+ * issue is truly outside the root, land in "unassigned", each with
+ * `unassignedReason`. When Linear is down the events fall back to the issue
+ * keys the cars carry (title/state unknown, said so in the UI); when the car
+ * export is down every event says "car data unreachable" instead of
  * claiming zero cars.
  */
-export function buildCommandCenterView({ linear, cars }) {
+export function buildCommandCenterView({ linear, cars, lineage = null }) {
   const carsOk = !!cars?.ok
   const carList = carsOk ? cars.data.cars : []
   const linearOk = !!linear?.ok
@@ -344,17 +360,32 @@ export function buildCommandCenterView({ linear, cars }) {
       for (const k of e.subIssues.keys) issueToEvent.set(k, e.key)
     }
   } else {
-    const keys = [...new Set(carList.map((c) => c.issue).filter(Boolean))]
+    const keys = [...new Set(carList.map((c) => c.issue).filter((k) => k && !k.startsWith(MAINTENANCE_PREFIX)))]
     bases = keys.map((k) => ({ key: k, title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }))
     for (const k of keys) issueToEvent.set(k, k)
   }
+  const eventKeys = new Set(bases.map((e) => e.key))
+  const rootKey = linearOk ? linear.data.root.key : null
 
   const byEvent = new Map(bases.map((e) => [e.key, []]))
   const unassigned = []
+  const unassign = (c, reason, extra = {}) => unassigned.push({ ...c, unassignedReason: reason, ...extra })
   for (const c of carList) {
-    const ek = c.issue ? issueToEvent.get(c.issue) : null
-    if (ek) byEvent.get(ek).push(c)
-    else unassigned.push({ ...c, unassignedReason: c.issue ? 'not_under_root' : 'no_issue' })
+    if (!c.issue) { unassign(c, 'no_issue'); continue }
+    if (c.issue.startsWith(MAINTENANCE_PREFIX)) { unassign(c, 'maintenance', { unassignedNote: c.issue.slice(MAINTENANCE_PREFIX.length) }); continue }
+    const entry = linearOk ? lineage?.get?.(c.issue) : null
+    if (entry?.ok) {
+      const cls = classifyLineage(entry.data, eventKeys, rootKey)
+      if (cls.eventKey) {
+        byEvent.get(cls.eventKey).push({ ...c, sub: cls.sub, issuePath: cls.path })
+      } else {
+        unassign(c, cls.reason === 'not_found' ? 'issue_not_found' : cls.reason)
+      }
+      continue
+    }
+    const ek = issueToEvent.get(c.issue)
+    if (ek) byEvent.get(ek).push({ ...c, sub: null, issuePath: null })
+    else unassign(c, linearOk && entry ? 'lineage_unknown' : 'not_under_root', entry && !entry.ok ? { unassignedNote: entry.error } : {})
   }
 
   const events = bases.map((b) => summarizeEvent(b, byEvent.get(b.key), carsOk))
@@ -367,6 +398,9 @@ export function buildCommandCenterView({ linear, cars }) {
   })
 
   const unassignedGroup = summarizeEvent({ key: '_none', title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }, unassigned, carsOk)
+  // why each car is unassigned, counted (the UI labels the group with it)
+  unassignedGroup.reasons = {}
+  for (const c of unassigned) unassignedGroup.reasons[c.unassignedReason] = (unassignedGroup.reasons[c.unassignedReason] || 0) + 1
   return {
     root: linearOk ? linear.data.root : null,
     events,
@@ -540,6 +574,7 @@ async function _readTextCapped(p, maxBytes) {
 export function createCommandCenterRoutes({
   configPath = CC_CONFIG_PATH,
   linearSource = createLinearSource(),
+  lineageSource = createLineageSource(),
   carsSource = createCarsSource(),
   ownerSource = createOwnerPendingSource(),
   quotaSource = createQuotaSource(),
@@ -572,7 +607,9 @@ export function createCommandCenterRoutes({
         linearSource.get(config.graphqlUrl, config.rootIssue, config.linearCacheSec),
         carsSource.get(config.carsPath, config.carsStaleSec),
       ])
-      res.json({ configured: true, ...buildCommandCenterView({ linear, cars }) })
+      // parent chains only matter when the tree itself is readable; cached per issue
+      const lineage = linear.ok ? await lineageSource.get(config.graphqlUrl, carIssueKeys(cars)) : null
+      res.json({ configured: true, ...buildCommandCenterView({ linear, cars, lineage }) })
     } catch (err) { next(err) }
   })
 

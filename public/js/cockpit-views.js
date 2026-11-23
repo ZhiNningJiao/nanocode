@@ -94,6 +94,17 @@ export function ganttViewHtml(d, ui, width) {
           <div class="cc-gtrack" style="width:${plotW}px">${bar}</div>
         </div>`
     }
+    if (row.kind === 'sub') {
+      // sub-group header inside an expanded lane: 「category › named issue」, or an unassigned reason
+      const g = row.group
+      const name = g.label || t(`plugin.cc.unassignedReason.${g.reason}`)
+      const st = (g.cars.find((x) => x.endOpen) || g.cars[g.cars.length - 1]).state
+      return `
+        <div class="ck-lane ck-sub" data-event="${esc(row.lane.key)}">
+          <div class="ck-lane-label ck-sub-label" style="width:${labelPx}px" title="${esc(name)}"><span class="cc-dot cc-st-${esc(st)}"></span><span class="ck-lane-name">${esc(name)}</span><span class="ck-lane-n">${g.cars.length}</span></div>
+          <div class="cc-gtrack" style="width:${plotW}px">${ganttBarHtml(thinPoints(r, ui.selPid), st, ' ck-lane-bar ck-sub-bar')}</div>
+        </div>`
+    }
     const c = row.car
     const open = ui.openCar === c.traceId
     return `

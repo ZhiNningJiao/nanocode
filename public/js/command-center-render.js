@@ -68,6 +68,8 @@ export function carDetailHtml(c, eventKey, extraActions = '') {
       <div class="cc-car-title">${esc(c.title || c.car)}</div>
       <div class="cc-car-meta"><span class="cc-dot cc-st-${esc(c.state)}"></span>${esc(stateLabel(c.state) + reason)} · ${esc(fmtTime(c.start))} → ${c.endOpen ? esc(t('plugin.cc.now')) : esc(fmtTime(c.end))}${meta ? ` · ${meta}` : ''}</div>
       ${c.issue && c.issue !== eventKey ? `<div class="cc-car-meta">${esc(t('plugin.cc.issue'))} ${esc(c.issue)}${c.issueInferred ? ` (${esc(t('plugin.cc.inferred'))})` : ''}</div>` : ''}
+      ${c.unassignedReason ? `<div class="cc-car-meta cc-car-unassigned">${esc(t('plugin.cc.unassignedWhy'))}: ${esc(t(`plugin.cc.unassignedReason.${c.unassignedReason}`))}${c.unassignedNote ? ` — ${esc(c.unassignedNote)}` : ''}</div>` : ''}
+      ${Array.isArray(c.issuePath) && c.issuePath.length > 1 ? `<div class="cc-car-meta">${esc(t('plugin.cc.issuePath'))} ${esc(c.issuePath.join(' → '))}</div>` : ''}
       ${c.plain ? `<div class="cc-car-plain">${esc(c.plain)}</div>` : ''}
       <div class="cc-car-sub">${esc(t('plugin.cc.lastMilestones'))}</div>
       ${ms.length ? `<ul class="cc-ms cc-ms-compact">${ms.map((m) => `<li><span class="cc-ms-time">${esc(fmtTime(m.t))}</span><span class="cc-ms-kind">${esc(kindLabel(m.kind))}</span><span class="cc-ms-label">${esc(m.label)}</span></li>`).join('')}</ul>` : `<div class="rp-empty">${esc(t('plugin.cc.noMilestones'))}</div>`}

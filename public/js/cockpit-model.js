@@ -17,6 +17,8 @@
  */
 
 /** Cockpit modules in default order. `area` decides where the cockpit puts it. */
+import { groupLabel } from './issue-group-label.js'
+
 export const COCKPIT_MODULES = [
   { id: 'events', plugin: 'command-center', area: 'main' },
   { id: 'waiting', plugin: 'cc-waiting', area: 'side' },
@@ -123,6 +125,29 @@ export function eventGroups(data) {
   return out
 }
 
+/** Summary span over some cars: first start → last end (open if any car is), every milestone as a point. */
+function carsSpan(id, cars) {
+  let start = null
+  let end = null
+  let endOpen = false
+  let eta = null
+  let startMs = Infinity
+  let endMs = -Infinity
+  const points = []
+  for (const c of cars) {
+    const s = Date.parse(c.start)
+    if (Number.isFinite(s) && s < startMs) { startMs = s; start = c.start }
+    if (c.endOpen) {
+      endOpen = true
+      if (c.eta && (!eta || Date.parse(c.eta) > Date.parse(eta))) eta = c.eta
+    }
+    const en = Date.parse(c.end)
+    if (Number.isFinite(en) && en > endMs) { endMs = en; end = c.end }
+    for (const p of carPoints(c)) points.push({ ...p, label: `${c.car} · ${p.label || ''}` })
+  }
+  return { id, start, end: end || start, endOpen, eta, points }
+}
+
 /**
  * Gantt swimlanes: one lane per event; its summary bar spans first car start →
  * last car end (open if any car is still open) with every car milestone as a
@@ -132,42 +157,57 @@ export function eventGroups(data) {
 export function buildSwimlanes(data, expanded) {
   return eventGroups(data).map((e) => {
     const cars = Array.isArray(e.cars) ? e.cars : []
-    let start = null
-    let end = null
-    let endOpen = false
-    let eta = null
-    let startMs = Infinity
-    let endMs = -Infinity
-    const points = []
-    for (const c of cars) {
-      const s = Date.parse(c.start)
-      if (Number.isFinite(s) && s < startMs) { startMs = s; start = c.start }
-      if (c.endOpen) {
-        endOpen = true
-        if (c.eta && (!eta || Date.parse(c.eta) > Date.parse(eta))) eta = c.eta
-      }
-      const en = Date.parse(c.end)
-      if (Number.isFinite(en) && en > endMs) { endMs = en; end = c.end }
-      for (const p of carPoints(c)) points.push({ ...p, label: `${c.car} · ${p.label || ''}` })
-    }
     return {
       key: e.key,
       event: e,
       unassigned: !!e.unassigned,
-      summary: { id: e.key, start, end: end || start, endOpen, eta, points },
+      summary: carsSpan(e.key, cars),
       cars,
       expanded: !!expanded(e.key, e),
     }
   })
 }
 
-/** Flatten lanes into the row list layoutGantt() takes (summary rows + visible car rows). */
+/**
+ * Sub-rows inside one expanded lane. A tracker lane groups its cars by
+ * `car.sub` (the nearest 【named】 issue on the car's parent chain, chosen by
+ * the server): cars filed straight under the category come first with no
+ * header, then one group per sub — header label 「<category name> › <sub>」.
+ * The unassigned lane groups by `unassignedReason` (header carries `reason`
+ * for the view to word). Groups keep the cars' order of first appearance.
+ * → [{ key, label, reason, cars }] where key null = no header row.
+ */
+export function laneSubgroups(lane) {
+  const groups = new Map()
+  const catName = lane.unassigned ? null : (groupLabel(lane.event?.title) || lane.event?.title || lane.key)
+  for (const c of lane.cars) {
+    let key = null
+    let label = null
+    let reason = null
+    if (lane.unassigned) {
+      reason = c.unassignedReason || 'no_issue'
+      key = `reason:${reason}`
+    } else if (c.sub && c.sub.key) {
+      key = c.sub.key
+      label = `${catName} › ${c.sub.label}`
+    }
+    if (!groups.has(key)) groups.set(key, { key, label, reason, cars: [] })
+    groups.get(key).cars.push(c)
+  }
+  const out = [...groups.values()]
+  return [...out.filter((g) => g.key == null), ...out.filter((g) => g.key != null)]
+}
+
+/** Flatten lanes into the row list layoutGantt() takes (summary rows + sub-group header rows + visible car rows). */
 export function swimlaneRows(lanes) {
   const rows = []
   for (const lane of lanes) {
     rows.push({ kind: 'lane', lane, ...lane.summary })
     if (!lane.expanded) continue
-    for (const c of lane.cars) rows.push({ kind: 'car', lane, car: c, id: c.traceId, start: c.start, end: c.end, endOpen: c.endOpen, eta: c.eta, points: carPoints(c) })
+    for (const g of laneSubgroups(lane)) {
+      if (g.key != null) rows.push({ kind: 'sub', lane, group: g, ...carsSpan(`${lane.key}/${g.key}`, g.cars) })
+      for (const c of g.cars) rows.push({ kind: 'car', lane, car: c, id: c.traceId, start: c.start, end: c.end, endOpen: c.endOpen, eta: c.eta, points: carPoints(c) })
+    }
   }
   return rows
 }
