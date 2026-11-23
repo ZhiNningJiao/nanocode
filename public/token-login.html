@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nanocode 登录</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#0b0c0a" />
+    <style>
+      body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        background: #0b0c0a; color: #e8e6e1; font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+      form { width: min(360px, 90vw); display: flex; flex-direction: column; gap: 12px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      p { margin: 0; font-size: 13px; color: #9a978f; line-height: 1.6; }
+      input { padding: 10px 12px; font-size: 15px; border-radius: 6px; border: 1px solid #3a3a36;
+        background: #161714; color: inherit; font-family: ui-monospace, monospace; }
+      button { padding: 10px; font-size: 15px; border: 0; border-radius: 6px; background: #c9f26b; color: #0b0c0a;
+        font-weight: 600; cursor: pointer; }
+      button:disabled { opacity: .5; cursor: default; }
+      #err { color: #ff8a80; font-size: 13px; min-height: 1.4em; }
+    </style>
+  </head>
+  <body>
+    <form id="login" autocomplete="off">
+      <h1>Nanocode 登录</h1>
+      <p>输入访问令牌。登录一次后这台设备会记住（180 天，换令牌后需重新登录）。</p>
+      <input id="token" type="password" name="token" placeholder="访问令牌" autofocus required />
+      <button id="submit" type="submit">登录</button>
+      <div id="err" role="alert"></div>
+    </form>
+    <script>
+      (function () {
+        var form = document.getElementById('login')
+        var input = document.getElementById('token')
+        var btn = document.getElementById('submit')
+        var err = document.getElementById('err')
+        // Only same-origin paths: "/x" but never "//host" (open redirect).
+        function nextUrl() {
+          var n = new URLSearchParams(location.search).get('next') || '/'
+          return (n.charAt(0) === '/' && n.charAt(1) !== '/' && n.charAt(1) !== '\\') ? n : '/'
+        }
+        form.addEventListener('submit', function (e) {
+          e.preventDefault()
+          err.textContent = ''
+          btn.disabled = true
+          fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ token: input.value.trim() }),
+          }).then(function (res) {
+            return res.json().catch(function () { return {} }).then(function (data) {
+              if (res.ok) { location.replace(nextUrl()); return }
+              err.textContent = data.error || ('登录失败（' + res.status + '）')
+              btn.disabled = false
+            })
+          }).catch(function () {
+            err.textContent = '连不上服务器'
+            btn.disabled = false
+          })
+        })
+      })()
+    </script>
+  </body>
+</html>

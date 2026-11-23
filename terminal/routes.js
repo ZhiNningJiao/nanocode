@@ -26,6 +26,7 @@ import { listOpencodeSessions, opencodeCliEnv } from './opencode-sessions.js'
 import { createReposRoutes } from './repos-routes.js'
 import { createClaudeModelProbe, claudeSdkVersion } from './claude-models-probe.js'
 import { spawnInDir } from './spawn-in-dir.js'
+import { isLocalOrigin } from '../server/token-auth.js'
 
 /**
  * Create terminal routes backed by the given store.
@@ -232,15 +233,14 @@ export function createTerminalRoutes(store, opts = {}) {
   //        sendNow=true forces an atomic interrupt+flush if the session is
   //        mid-turn (mirrors the "立刻发送" button; never kills the process or
   //        sub-agents). Default false queues behind a running turn.
-  function isLocalhostReq(req) {
-    const ip = req.socket?.remoteAddress || ''
-    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
-  }
+  // "localhost" = isLocalOrigin, the token gate's rule (server/token-auth.js):
+  // loopback on the main port only — the remote entry is a tunnel, so its
+  // 127.0.0.1 doesn't count.
 
   // GET /api/sessions — list active (live-attached) sessions for the inject
   // workflow. localhost-only so the session registry isn't exposed remotely.
   router.get('/api/sessions', (req, res) => {
-    if (!isLocalhostReq(req)) {
+    if (!isLocalOrigin(req)) {
       return res.status(403).json({ error: 'forbidden: localhost only' })
     }
     const out = []
@@ -278,7 +278,7 @@ export function createTerminalRoutes(store, opts = {}) {
 
   // POST /api/sessions/:id/inject
   router.post('/api/sessions/:id/inject', async (req, res) => {
-    if (!isLocalhostReq(req)) {
+    if (!isLocalOrigin(req)) {
       return res.status(403).json({ error: 'forbidden: localhost only' })
     }
     // Express 4 does not forward a rejected async handler to error middleware
@@ -352,7 +352,7 @@ export function createTerminalRoutes(store, opts = {}) {
   // the tab shows up in GET /api/sessions and can take an inject. Idempotent:
   // a live session is reported (created:false), never recreated. No turn is run.
   router.post('/api/projects/:id/tabs/:tabId/claude-session', async (req, res) => {
-    if (!isLocalhostReq(req)) {
+    if (!isLocalOrigin(req)) {
       return res.status(403).json({ error: 'forbidden: localhost only' })
     }
     try {

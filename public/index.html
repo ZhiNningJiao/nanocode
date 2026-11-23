@@ -39,6 +39,8 @@
         }
       })()
     </script>
+    <!-- 401 from /api → /login (token auth). Before every other script. -->
+    <script src="/js/auth-redirect.js"></script>
     <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/command-center.css" data-cc-css="1" />

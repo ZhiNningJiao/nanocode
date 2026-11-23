@@ -6,8 +6,12 @@
  * Network first, always: the server's cache-busting (index.html ?v=<sha>)
  * stays in charge; a cached copy is used only when the network fails. API,
  * WebSocket and non-GET requests are never touched.
+ *
+ * Token auth: /login is never intercepted, and only a real 200 for "/" (not a
+ * redirect to /login) may become the cached shell — the login page must never
+ * be served offline as the app.
  */
-const SHELL_CACHE = 'nanocode-shell-v1'
+const SHELL_CACHE = 'nanocode-shell-v2'
 
 self.addEventListener('install', () => self.skipWaiting())
 
@@ -22,13 +26,14 @@ self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
   const url = new URL(req.url)
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) return
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/') || url.pathname === '/login') return
   event.respondWith((async () => {
     try {
       const res = await fetch(req)
-      if (res.ok && (req.mode === 'navigate' || /\.(css|js|svg|png|woff2?)$/.test(url.pathname))) {
+      const isShell = req.mode === 'navigate' && url.pathname === '/' && !res.redirected
+      if (res.ok && (isShell || /\.(css|js|svg|png|woff2?)$/.test(url.pathname))) {
         const copy = res.clone()
-        caches.open(SHELL_CACHE).then((c) => c.put(req.mode === 'navigate' ? '/' : req, copy)).catch(() => {})
+        caches.open(SHELL_CACHE).then((c) => c.put(isShell ? '/' : req, copy)).catch(() => {})
       }
       return res
     } catch (err) {

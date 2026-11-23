@@ -26,6 +26,7 @@ import { loadMachinesConfig, collectAllMachines, recommendHeavyWorkloadTarget } 
 import { PLUGINS_SETTING_KEY, isPluginEnabled } from './plugins-state.js'
 import { createCommandCenterRoutes } from './command-center.js'
 import { isSystemModeEnabled } from './system-mode-flag.js'
+import { AUTH_SETTING_KEY, LOGIN_PATH, LOGIN_API_PATH, createTokenAuth, markRemoteEntrySocket } from './token-auth.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // TTS failures (fetch timeout, connection refused, bad response, stream errors)
@@ -66,6 +67,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
 const PORT = process.env.PORT || 9475
 const HOST = process.env.HOST || '0.0.0.0'
+// Remote entry: optional second listener, bound to 127.0.0.1 only,
+// where every request needs the token — the landing point for an ssh reverse
+// tunnel (see server/token-auth.js). Unset = not opened.
+const REMOTE_PORT = parseRemotePort(process.env.NANOCODE_REMOTE_PORT, PORT)
+
+function parseRemotePort(raw, mainPort) {
+  if (raw === undefined || raw === '') return null
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 65535 || n === Number(mainPort)) {
+    console.error(`[remote-entry] invalid NANOCODE_REMOTE_PORT=${raw} (needs 1-65535, != PORT)`)
+    process.exit(1)
+  }
+  return n
+}
 
 // System mode: this process becomes the router. Workers are spawned
 // per-user by `nanocode login` (via the setuid helper) and reach us via
@@ -112,12 +127,6 @@ function getVersionedIndexHtml() {
     .replace(/(src="\/js\/([^"?]+\.js))(")/g, `$1?v=${ASSET_VERSION}$3`)
 }
 
-app.get('/', (_req, res) => {
-  res.setHeader('Cache-Control', 'no-store')
-  res.setHeader('Content-Type', 'text/html; charset=utf-8')
-  res.send(getVersionedIndexHtml())
-})
-
 // Dev-mode: no-store for all /js/* and /style.css so browser never caches JS/CSS
 app.use((req, res, next) => {
   const url = req.path
@@ -130,8 +139,9 @@ app.use((req, res, next) => {
 // /api/* never goes through express.static: serve-static fs.stat()s every
 // request it sees on a libuv pool worker, so while a stalled /jfs held the pool
 // even /api/health and /api/sessions queued behind it (REPORT_nanolock_0730.md).
+// '/' is the app shell: served by the versioned route below, behind the token gate.
 const servePublic = express.static(path.join(root, 'public'))
-app.use((req, res, next) => (req.path.startsWith('/api/') ? next() : servePublic(req, res, next)))
+app.use((req, res, next) => (req.path.startsWith('/api/') || req.path === '/' ? next() : servePublic(req, res, next)))
 
 const vendorOpts = { maxAge: '365d', immutable: true }
 const vendorMap = {
@@ -173,32 +183,28 @@ const {
   handleRemoteSshWs,
 } = createTerminalRoutes(store, { port: PORT })
 
-// ─── Token auth middleware ─────────────────────────────────────────────────
-// Setting: nanocode_auth_token (string). Default '' = auth disabled.
-// When non-empty, all /api/* requests must supply a matching token via:
-//   - Header:      X-Nanocode-Token: <token>
-//   - Query param: ?token=<token>
-// WebSocket upgrades are also checked via the ?token= query param.
-// /api/health is intentionally exempt so monitors can check liveness.
+// ─── Token auth gate ───────────────────────────────────────────
+// One trust rule for HTTP and WebSocket — server/token-auth.js. Mounted after
+// the static/vendor middleware, so assets (login page, manifest, sw.js, icons,
+// js, css) stay public and every route registered below is gated. /api/health
+// and the login endpoints are exempt.
+const tokenAuth = createTokenAuth({
+  getToken: () => store.getSetting(AUTH_SETTING_KEY) || '',
+  setToken: (token) => store.setSetting(AUTH_SETTING_KEY, token),
+})
+app.use(tokenAuth.httpGate)
 
-function getAuthToken() {
-  return store.getSetting('nanocode_auth_token') || ''
-}
+app.get(LOGIN_PATH, (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.sendFile(path.join(root, 'public', 'token-login.html'))
+})
+app.post(LOGIN_API_PATH, tokenAuth.loginHandler)
+app.post('/api/auth/token', tokenAuth.setTokenHandler)
 
-function checkApiToken(req, res, next) {
-  const expected = getAuthToken()
-  if (!expected) return next()  // auth disabled
-  const provided = req.headers['x-nanocode-token'] || req.query.token || ''
-  if (provided !== expected) {
-    return res.status(401).json({ error: 'Unauthorized: invalid or missing token' })
-  }
-  next()
-}
-
-// Apply token check to all /api/* except /api/health
-app.use('/api', (req, res, next) => {
-  if (req.path === '/health') return next()
-  checkApiToken(req, res, next)
+app.get('/', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Content-Type', 'text/html; charset=utf-8')
+  res.send(getVersionedIndexHtml())
 })
 
 app.use(terminalRouter)
@@ -276,7 +282,8 @@ app.post('/api/notify/linear-poll', asyncWrap(async (_req, res) => {
 const VALID_CLI_PROVIDERS = new Set(['claude', 'agent', 'opencode', 'codex', 'meshy-aigw', 'fable5'])
 
 app.get('/api/settings', (_req, res) => {
-  res.json(store.getAllSettings())
+  const { [AUTH_SETTING_KEY]: _token, ...settings } = store.getAllSettings()
+  res.json(settings)
 })
 
 app.put('/api/settings', (req, res) => {
@@ -286,6 +293,9 @@ app.put('/api/settings', (req, res) => {
   }
   if (key === 'cli_provider' && !VALID_CLI_PROVIDERS.has(value)) {
     return res.status(400).json({ error: `Invalid cli_provider: ${value}` })
+  }
+  if (key === AUTH_SETTING_KEY) {
+    return res.status(400).json({ error: 'the auth token is set only from the local machine: tools/set-auth-token.mjs' })
   }
   store.setSetting(key, value)
   if (key === PLUGINS_SETTING_KEY) syncPluginBackgroundWork()
@@ -987,19 +997,16 @@ const remoteSshWss = new WebSocketServer({
   perMessageDeflate: deflateOpts,
 })
 
-server.on('upgrade', (req, socket, head) => {
-  const parsed = new URL(req.url, `http://${req.headers.host}`)
-  const { pathname, searchParams } = parsed
+function handleUpgrade(req, socket, head) {
+  const { pathname } = new URL(req.url, 'http://nanocode.invalid')
 
-  // WebSocket token auth: if auth is enabled, check ?token= query param
-  const expectedWsToken = getAuthToken()
-  if (expectedWsToken) {
-    const provided = searchParams.get('token') || req.headers['x-nanocode-token'] || ''
-    if (provided !== expectedWsToken) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\nUnauthorized')
-      socket.destroy()
-      return
-    }
+  // Same trust rule as HTTP: cookie / ?token= / header, loopback on main port free.
+  const decision = tokenAuth.checkUpgrade(req)
+  if (!decision.ok) {
+    const reason = decision.status === 403 ? 'Forbidden' : 'Unauthorized'
+    socket.write(`HTTP/1.1 ${decision.status} ${reason}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${decision.code}`)
+    socket.destroy()
+    return
   }
 
   if (pathname === '/ws/terminal') {
@@ -1021,7 +1028,8 @@ server.on('upgrade', (req, socket, head) => {
   } else {
     socket.destroy()
   }
-})
+}
+server.on('upgrade', handleUpgrade)
 
 terminalWss.on('connection', (ws) => handleTerminalWs(ws))
 tabsWss.on('connection', (ws) => handleTabsWs(ws))
@@ -1078,5 +1086,17 @@ app.use((err, req, res, _next) => {
 server.listen(PORT, HOST, () => {
   console.log(`Nanocode running on http://${HOST}:${PORT}`)
 })
+
+if (REMOTE_PORT) {
+  const remoteServer = createServer(app)
+  remoteServer.on('connection', markRemoteEntrySocket)
+  remoteServer.on('upgrade', handleUpgrade)
+  remoteServer.on('error', (err) => {
+    console.error(`[remote-entry] FAILED on 127.0.0.1:${REMOTE_PORT}: ${err?.message || err} — remote entry is DOWN`)
+  })
+  remoteServer.listen(REMOTE_PORT, '127.0.0.1', () => {
+    console.log(`Nanocode remote entry (token always required) on http://127.0.0.1:${REMOTE_PORT}`)
+  })
+}
 
 } // end startSingleUserMode
