@@ -769,31 +769,6 @@ if (autoResumeSaveBtn) {
 // Queue auto-flush on interrupt: UI removed, always enabled (default behavior).
 // Backend reads auto_flush_queue_on_interrupt setting; not '0' means enabled.
 
-// ─── P1-4: Auth status ───────────────────────────────────────────────────────
-
-async function loadAuthStatus() {
-  const el = document.getElementById('auth-status-display')
-  if (!el) return
-  try {
-    const resp = await fetch('/api/auth/status')
-    const data = await resp.json()
-    if (data.loggedIn) {
-      const parts = []
-      if (data.email) parts.push(data.email)
-      if (data.authMethod) parts.push(`(${data.authMethod})`)
-      if (data.orgName) parts.push(`/ ${data.orgName}`)
-      el.textContent = (parts.join(' ') || 'Logged in')
-      el.style.color = 'var(--text-success, #4caf50)'
-    } else {
-      el.textContent = 'Not logged in — run: claude auth login'
-      el.style.color = 'var(--text-error, #f44336)'
-    }
-  } catch {
-    el.textContent = 'Cannot fetch account status'
-    el.style.color = 'var(--text-secondary, #aaa)'
-  }
-}
-
 // ─── P1-3: Model + Effort selectors — migrated to team-model plugin (MES-13740 R2).
 // The Claude model (--model), Codex model, and effort-level selectors now live in
 // the Team & Model pane (Session domain → team-model tab). Storage keys are
@@ -916,7 +891,6 @@ async function openSettingsPanel() {
   loadSettings(serverSettings)
   renderCockpitSettings(document.getElementById('cockpit-settings'))
   renderSkinSettings(document.getElementById('skin-settings'))
-  loadAuthStatus()  // P1-4: refresh auth status on each open
   // Dynamic model options (init-snapshot / codex config) now load inside the
   // team-model plugin pane when it renders — not here. MES-13740 R2.
 }

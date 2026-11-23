@@ -141,10 +141,15 @@ function renderView(pane) {
     <div class="ccq-grid">${last.pools.map(poolHtml).join('')}</div>`
 }
 
+// Only one badge in this slot, and only when there is something to act on:
+// a real logged-out error outranks staleness (both can be true at once — the
+// pool stopped refreshing because it's logged out); a merely old reading
+// says so in plain words; a fresh reading (from any source) shows nothing —
+// no "login unknown" guess that used to fire on every non-cache-file source.
 function loginHtml(p) {
-  if (p.loggedIn === true) return `<span class="ccq-login ccq-login-yes">${esc(t('plugin.ccq.loggedIn'))}</span>`
-  if (p.loggedIn === false) return `<span class="ccq-login ccq-login-no">${esc(t('plugin.ccq.loggedOut'))}</span>`
-  return `<span class="ccq-login ccq-login-unknown">${esc(t('plugin.ccq.loginUnknown'))}</span>`
+  if (p.loggedIn === false) return `<span class="ccq-login ccq-login-no" title="${esc(t('plugin.ccq.loggedOutHint'))}">${esc(t('plugin.ccq.loggedOut'))}</span>`
+  if (p.stale) return `<span class="ccq-stale" title="${esc(t('plugin.ccq.staleTitle'))}">${esc(t('plugin.ccq.readingExpired'))}</span>`
+  return ''
 }
 
 function windowHtml(w) {
@@ -161,13 +166,13 @@ function windowHtml(w) {
     </div>`
 }
 
-function poolHtml(p) {
-  const stale = p.stale ? `<span class="ccq-stale" title="${esc(t('plugin.ccq.staleTitle'))}">${esc(t('plugin.ccq.stale'))}</span>` : ''
+/** One pool card's HTML; exported for the pure-render test (no DOM needed). */
+export function poolHtml(p) {
   const status = p.status ? t(`plugin.ccq.status.${p.status}`) : ''
   const statusTxt = status && !status.startsWith('plugin.') ? status : (p.status || '')
   return `
     <div class="ccq-card${p.stale ? ' ccq-card-stale' : ''}">
-      <div class="ccq-head"><span class="ccq-pool">${esc(p.pool)}</span>${loginHtml(p)}${stale}${statusTxt ? `<span class="cc-chip">${esc(statusTxt)}</span>` : ''}</div>
+      <div class="ccq-head"><span class="ccq-pool">${esc(p.pool)}</span>${loginHtml(p)}${statusTxt ? `<span class="cc-chip">${esc(statusTxt)}</span>` : ''}</div>
       ${p.error ? `<div class="cc-sub cc-err">${esc(p.error)}</div>` : ''}
       ${p.windows.map(windowHtml).join('')}
       <div class="cc-sub ccq-src">${esc(t('plugin.ccq.source'))} · ${esc(t('plugin.ccq.readAt'))} ${esc(fmtTime(p.fetchedAt))}${p.fetchedAt ? `（${esc(fmtAgo(p.fetchedAt))}）` : ''}</div>

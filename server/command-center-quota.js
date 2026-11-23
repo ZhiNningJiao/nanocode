@@ -164,9 +164,14 @@ export function mapQuotaReading(raw, { name, nowMs, staleSec = DEFAULT_QUOTA_STA
   const fetchedMs = parseReadingTime(raw?.fetched_at)
   const ageSec = fetchedMs != null ? Math.max(0, Math.round((nowMs - fetchedMs) / 1000)) : null
   const error = str(raw?.error)
-  let loggedIn = null // unknown
+  let loggedIn = null // unknown (no reading at all, or a non-auth error — can't tell)
   if (error && LOGGED_OUT_RX.test(error)) loggedIn = false
-  else if (!error && fetchedMs != null && str(raw?.status)) loggedIn = true
+  // A clean reading proves the pool is logged in regardless of which source
+  // produced it — usage_snap / quota_hdr_dispatch_log readings never carry a
+  // `status` field (that's an official_headers-only extra), so requiring it
+  // here used to mislabel every non-cache-file reading "login unknown" even
+  // when the numbers were fresh and error-free.
+  else if (!error && fetchedMs != null) loggedIn = true
   return {
     pool,
     source,

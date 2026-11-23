@@ -352,6 +352,14 @@ describe('quota mapping', () => {
     assert.equal(mapQuotaReading({ ...READING, error: 'HTTP 401 Unauthorized' }, { name: 'a', nowMs: NOW }).loggedIn, false)
     assert.equal(mapQuotaReading({ ...READING, error: 'timeout' }, { name: 'a', nowMs: NOW }).loggedIn, null)
   })
+  it('nanolink_0950: a clean reading is "logged in" regardless of source, even without a `status` field', () => {
+    // usage_snap / quota_hdr_dispatch_log readings (command-center-quota.js
+    // parseUsageSnapLine / parseQuotaHdrLine) never carry `status` — only the
+    // official cache-file format does. Requiring it here used to leave every
+    // such pool permanently "login unknown" even when fresh and error-free.
+    const noStatus = { ...READING, status: null, error: null }
+    assert.equal(mapQuotaReading(noStatus, { name: 'T3.json', nowMs: NOW }).loggedIn, true)
+  })
   it('tightest = highest live window %, errors and void windows excluded', () => {
     const pools = [
       mapQuotaReading(READING, { name: 'T3.json', nowMs: NOW }),
