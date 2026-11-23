@@ -239,6 +239,28 @@ export function buildFeed(data, { fromMs = -Infinity, limit = 120 } = {}) {
   return days.map(({ day, events }) => ({ day, events }))
 }
 
+// ─── feed ⇄ gantt viewport link ─────────────────────────────────────────────
+
+/**
+ * Scrollspy: `items` are `{ key, top }` in top-to-bottom (document) order,
+ * `top` = each item's distance (px) from its scroll container's own top edge
+ * (negative = scrolled above it). The "active" one is the last item whose
+ * top has crossed `line` (the reference line a few px below the container's
+ * top) — i.e. the item currently occupying that line, the same rule a
+ * scrollspy / table-of-contents highlight uses. Before anything has
+ * crossed the line (scrolled to the very start) the first item is active.
+ * `null` for an empty list — nothing to link to.
+ */
+export function scrollSpyActiveKey(items, line) {
+  if (!items.length) return null
+  let active = items[0].key
+  for (const it of items) {
+    if (it.top <= line) active = it.key
+    else break
+  }
+  return active
+}
+
 /** Big events somebody is waiting on (the 等你 chips above the gantt), most waiting first. */
 export function waitingEvents(data) {
   return eventGroups(data).filter((e) => e.waitingCount > 0).sort((a, b) => b.waitingCount - a.waitingCount)
