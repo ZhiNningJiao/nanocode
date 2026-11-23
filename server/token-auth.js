@@ -184,13 +184,19 @@ export function createTokenAuth({ getToken, setToken, loginMaxPerWindow = 10, lo
   }
 
   /**
-   * POST /api/auth/token { token } — local origin only, even with a valid
-   * token (tools/set-auth-token.mjs is the caller). Goes through the running
-   * process because each process holds its settings in memory.
+   * POST /api/auth/token { token } | { clear: true } — local origin only, even
+   * with a valid token (tools/set-auth-token.mjs is the caller). Goes through
+   * the running process because each process holds its settings in memory.
+   * Clearing turns remote access off (everything non-local refused); it is the
+   * step before rolling back to a build where an empty token meant "open".
    */
   function setTokenHandler(req, res) {
     if (!isLocalOrigin(req)) {
       return res.status(403).json({ error: 'forbidden: localhost only', code: 'local_only' })
+    }
+    if (req.body?.clear === true) {
+      setToken('')
+      return res.json({ ok: true, cleared: true })
     }
     const token = typeof req.body?.token === 'string' ? req.body.token : ''
     if (token.length < MIN_TOKEN_LENGTH || /\s/.test(token)) {

@@ -32,7 +32,7 @@ import {
   parseCookies,
   safeEqual,
 } from '../token-auth.js'
-import { parseArgs, setAuthToken } from '../../tools/set-auth-token.mjs'
+import { clearAuthToken, parseArgs, setAuthToken } from '../../tools/set-auth-token.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..')
@@ -234,6 +234,20 @@ describe('trust matrix over real sockets (HTTP + WebSocket)', () => {
     assert.equal(await wsOutcome(`ws://127.0.0.1:${remotePort}/ws/terminal`, { cookie: oldCookie }), 401)
     assert.equal((await fetch(`${remote()}/api/ping`, { headers: { cookie: cookie() } })).status, 200)
   })
+  it('/api/auth/token { clear: true } (tools --clear) turns remote access off; loopback stays open', async () => {
+    const saved = token
+    try {
+      const { results } = await clearAuthToken({ ports: [mainPort] })
+      assert.ok(results[0].ok)
+      assert.equal(token, '')
+      assert.equal((await fetch(`${remote()}/api/ping`)).status, 403)
+      assert.equal((await fetch(`${loop()}/api/ping`)).status, 200)
+      const viaRemote = await fetch(`${remote()}/api/auth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clear: true }) })
+      assert.equal(viaRemote.status, 403)
+    } finally {
+      token = saved
+    }
+  })
   it('/api/auth/token is local-only: remote entry with a valid token → 403', async () => {
     const r = await fetch(`${remote()}/api/auth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Nanocode-Token': token }, body: JSON.stringify({ token: 'x'.repeat(40) }) })
     assert.equal(r.status, 403)
@@ -293,7 +307,9 @@ describe('tools/set-auth-token.mjs', () => {
   it('parseArgs requires --out and --port', () => {
     assert.throws(() => parseArgs(['--port', '9475']), /--out/)
     assert.throws(() => parseArgs(['--out', 'x']), /--port/)
-    assert.deepEqual(parseArgs(['--out', 'x', '--port', '9475', '--port', '9476', '--reuse']), { out: 'x', ports: [9475, 9476], reuse: true })
+    assert.deepEqual(parseArgs(['--out', 'x', '--port', '9475', '--port', '9476', '--reuse']), { out: 'x', ports: [9475, 9476], reuse: true, clear: false })
+    assert.deepEqual(parseArgs(['--clear', '--port', '9475']), { out: '', ports: [9475], reuse: false, clear: true })
+    assert.throws(() => parseArgs(['--clear', '--out', 'x', '--port', '9475']), /--clear takes only --port/)
   })
 })
 
