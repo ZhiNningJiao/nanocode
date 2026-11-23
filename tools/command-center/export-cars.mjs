@@ -38,6 +38,7 @@ export const WAITING_SCHEMA = 'nanocc-waiting-signals/v1'
 
 const NEEDSIG_TEXT_MAX_BYTES = 2048
 const NEEDSIG_TEXT_MAX_CHARS = 600
+const TASK_TITLE_MAX_BYTES = 4096
 
 const TRACE_TIMEOUT_MS = 120_000
 const TRACE_MAX_BUFFER = 64 * 1024 * 1024
@@ -58,6 +59,121 @@ export function stripGantt(gantt) {
       }
     }),
   }
+}
+
+// ─── ETA estimation (pure) ──────────────────────────────────────────────────
+// MES-18517 (大事记甘特): a still-running car's `eta` ("expected finish", read
+// as-is by command-center.js mapBar — see its comment "never guessed here")
+// has to come from somewhere; this is that somewhere. One priority order,
+// defined once:
+//   1. the dispatch task doc's own "最好 HH:MM 前交/前出" (an explicit clock
+//      time the dispatcher already wrote down — same Shanghai calendar day
+//      as the car's own start, the only day a same-day task doc means);
+//   2. the task doc's "硬顶 N 小时/分钟" + the car's own start (dispatch time);
+//   3. the median close time of other cars in the same task family (this
+//      export's own window — no second data source);
+// No signal at any step → no `eta` (same as before this feature existed;
+// never a number invented past this point — DCC 荣耻篇 七·二).
+// A trace CLI that one day learns to supply `b.eta` itself is authoritative:
+// addEstimatedEtas() only fills a bar that does not already carry one.
+
+const DEADLINE_HARDCAP_RE = /硬顶\s*([\d.]+)\s*(小时|分钟)/
+const DEADLINE_PREFER_RE = /最好\s*(\d{1,2}):(\d{2})\s*前/
+
+/**
+ * The task doc's first line (its `# TASK ... (...)` title) → the deadline
+ * hint(s) it carries, or null when it carries neither. Both may be present
+ * ("硬顶 1.5 小时，最好 14:15 前交"); the caller tries `preferHH`/`preferMM`
+ * before `hardcapMin` (an explicit clock time beats a relative budget).
+ */
+export function parseTaskDeadline(titleLine) {
+  if (typeof titleLine !== 'string') return null
+  const out = {}
+  const prefer = titleLine.match(DEADLINE_PREFER_RE)
+  if (prefer) { out.preferHH = Number(prefer[1]); out.preferMM = Number(prefer[2]) }
+  const hardcap = titleLine.match(DEADLINE_HARDCAP_RE)
+  if (hardcap) {
+    const v = Number(hardcap[1])
+    if (Number.isFinite(v)) out.hardcapMin = hardcap[2] === '小时' ? v * 60 : v
+  }
+  return (out.preferHH != null || out.hardcapMin != null) ? out : null
+}
+
+/**
+ * Shanghai wall-clock `hh:mm`, same calendar day as `startIso` (UTC+8 fixed —
+ * never the host's own TZ, so this is the same instant no matter which host
+ * runs the exporter) → the ISO instant. Rolled to the next day when that
+ * instant would land before the car even started (the task doc's "HH:MM" is
+ * always later today, never a time already past at dispatch).
+ */
+export function shanghaiDeadlineIso(startIso, hh, mm) {
+  const startMs = Date.parse(startIso)
+  if (!Number.isFinite(startMs)) return null
+  const sh = new Date(startMs + 8 * 3600_000)
+  let ms = Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate(), hh, mm, 0) - 8 * 3600_000
+  if (ms < startMs) ms += 24 * 3600_000
+  return new Date(ms).toISOString()
+}
+
+/** Dispatch tag → task family: drop a trailing run-timestamp/date so repeat dispatches of the same task share one family (distinct sibling tasks, e.g. "..._G1" vs "..._G4", stay distinct). */
+export function taskFamily(tag) {
+  const s = String(tag || '')
+  return s.replace(/_\d{4}-\d{2}-\d{2}$/, '').replace(/_\d{3,4}$/, '') || s
+}
+
+function isOpenBar(b) {
+  return b?.end_open === true || (b?.end_open !== false && b?.end == null && Number.isFinite(Date.parse(b?.start)))
+}
+
+/** Median minutes-to-close of this export's other *closed* bars in `family` (null with zero samples — a median of nothing is not a median). */
+export function familyP50Minutes(bars, family, excludeTraceId) {
+  const mins = []
+  for (const b of (Array.isArray(bars) ? bars : [])) {
+    if (b?.trace_id === excludeTraceId) continue
+    if (taskFamily(b?.car || b?.trace_id) !== family) continue
+    if (isOpenBar(b)) continue
+    const s = Date.parse(b?.start)
+    const e = Date.parse(b?.end)
+    if (Number.isFinite(s) && Number.isFinite(e) && e > s) mins.push((e - s) / 60_000)
+  }
+  if (!mins.length) return null
+  mins.sort((a, b) => a - b)
+  const mid = Math.floor(mins.length / 2)
+  return mins.length % 2 ? mins[mid] : (mins[mid - 1] + mins[mid]) / 2
+}
+
+/** One bar's eta (ISO) by the priority order above, or null — never a guess with zero signal. */
+export function estimateEta(bar, { taskTitle = null, bars = [] } = {}) {
+  const startMs = Date.parse(bar?.start)
+  if (!Number.isFinite(startMs)) return null
+  const deadline = parseTaskDeadline(taskTitle)
+  if (deadline?.preferHH != null) return shanghaiDeadlineIso(bar.start, deadline.preferHH, deadline.preferMM)
+  if (deadline?.hardcapMin != null) return new Date(startMs + deadline.hardcapMin * 60_000).toISOString()
+  const p50 = familyP50Minutes(bars, taskFamily(bar?.car || bar?.trace_id), bar?.trace_id)
+  if (p50 != null) return new Date(startMs + p50 * 60_000).toISOString()
+  return null
+}
+
+/**
+ * IO: fills `bar.eta` on every still-open bar that doesn't already have one
+ * (a trace CLI that learns to supply its own wins — this never overwrites
+ * it); a closed bar never gets one (PRD: 已落 FLAG 的车不显示 ETA). One bar's
+ * doc read failing (missing file, unreadable) degrades that bar to the P50
+ * step, never aborts the export.
+ */
+export async function addEstimatedEtas(gantt, { readTaskTitle } = {}) {
+  const bars = Array.isArray(gantt?.bars) ? gantt.bars : []
+  for (const b of bars) {
+    if (!b || b.eta || !isOpenBar(b)) continue
+    let taskTitle = null
+    const taskPath = b?.links?.task
+    if (taskPath && readTaskTitle) {
+      try { taskTitle = await readTaskTitle(taskPath) } catch { taskTitle = null }
+    }
+    const eta = estimateEta(b, { taskTitle, bars })
+    if (eta) b.eta = eta
+  }
+  return gantt
 }
 
 // ─── "waiting on you" signals (pure) ────────────────────────────────────────
@@ -249,6 +365,16 @@ async function main() {
   let gantt = null
   let ganttError = null
   try { gantt = await runTraceGantt(args.traceCmd, args.from) } catch (err) { ganttError = err.message }
+  if (gantt?.schema === GANTT_SCHEMA) {
+    try {
+      await addEstimatedEtas(gantt, { readTaskTitle: async (p) => (await readHead(p, TASK_TITLE_MAX_BYTES)).split('\n', 1)[0] })
+    } catch (err) {
+      // ETA is a nice-to-have on top of the real gantt data: a bug here degrades
+      // to "no eta this run", never fails the whole export (fail-loud stays on
+      // the trace gantt itself, above).
+      console.error(`[export-cars] eta estimation skipped: ${err.message}`)
+    }
+  }
   const waiting = args.signalsDir ? await scanWaiting(args.signalsDir, gantt) : null
   const env = ganttError
     ? buildEnvelope({ error: ganttError, prev, from: args.from, waiting })
