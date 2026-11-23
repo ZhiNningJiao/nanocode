@@ -318,7 +318,13 @@ export const BUILTIN_PLUGINS = [
     // hosts). Placed in monitor (watching external resources), alongside
     // services/remote. Replaces the ad-hoc resource-guard cron (owner
     // 2026-11-21: once this ships, that cron gets retired).
+    // defaultOn (owner 2026-11-23): the kernel-only-defaults pass the next day
+    // (6fdfcbc) made every non-kernel plugin start off, which silently took
+    // this one — added the day before and never marked defaultOn — out of
+    // view. It belongs in the kernel set alongside the other cockpit side
+    // modules (cc-waiting/cc-quota/command-center).
     name: 'machines',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'monitor',

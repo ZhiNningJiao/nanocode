@@ -13,12 +13,12 @@ const storeWith = (v) => ({ getSetting: (k) => (k === PLUGINS_SETTING_KEY ? v : 
 describe('plugin switch', () => {
   it('fresh install = the kernel set only', () => {
     assert.deepEqual(defaultEnabledPlugins().sort(), [
-      'cc-chat', 'cc-quota', 'cc-waiting', 'command-center', 'sessions', 'team-model', 'usage',
+      'cc-chat', 'cc-quota', 'cc-waiting', 'command-center', 'machines', 'sessions', 'team-model', 'usage',
     ])
     // every other builtin is optional and starts off
     const optional = BUILTIN_PLUGINS.filter((p) => !p.defaultOn).map((p) => p.name).sort()
     assert.deepEqual(optional, [
-      'akari', 'compare', 'historian', 'linear-mobile-push', 'machines', 'memory', 'notify', 'persona',
+      'akari', 'compare', 'historian', 'linear-mobile-push', 'memory', 'notify', 'persona',
       'remote', 'rewind', 'services', 'tasks', 'tts',
     ])
   })

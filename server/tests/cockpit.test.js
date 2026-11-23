@@ -4,7 +4,7 @@ import {
   COCKPIT_MODULES, normalizeLayout, serializeLayout, isModuleOn, setModuleOn, moveModule, modulesIn,
   moduleByPlugin, normalizePage, normalizeMainView, startsExpanded, eventGroups, buildSwimlanes,
   swimlaneRows, quoteText, spanWindow, normalizeSpan, ganttColumns, buildFeed, carPoints, pointId,
-  waitingEvents, GANTT_MIN_PLOT_PX, scrollSpyActiveKey,
+  waitingEvents, GANTT_MIN_PLOT_PX,
 } from '../../public/js/cockpit-model.js'
 import { layoutGantt, ganttWindow } from '../../public/js/command-center-layout.js'
 import { ganttViewHtml, feedHtml } from '../../public/js/cockpit-views.js'
@@ -261,27 +261,6 @@ describe('cockpit 大事记流 (milestone feed)', () => {
     const d = data()
     d.events[2].waitingCount = 3
     assert.deepEqual(waitingEvents(d).map((e) => e.key), ['E-3', 'E-2'])
-  })
-})
-
-describe('nanolink_0950: feed ⇄ gantt viewport link (scrollspy)', () => {
-  it('the last item whose top crossed the line is active (the one sitting at the reference line)', () => {
-    const items = [{ key: 'A', top: -40 }, { key: 'B', top: -5 }, { key: 'C', top: 30 }, { key: 'D', top: 80 }]
-    assert.equal(scrollSpyActiveKey(items, 12), 'B') // C/D haven't reached the line yet
-  })
-  it('scrolled all the way up (nothing has crossed the line yet): the first item is active, not null', () => {
-    const items = [{ key: 'A', top: 50 }, { key: 'B', top: 120 }]
-    assert.equal(scrollSpyActiveKey(items, 12), 'A')
-  })
-  it('scrolled past the last item: the last item stays active', () => {
-    const items = [{ key: 'A', top: -200 }, { key: 'B', top: -120 }, { key: 'C', top: -40 }]
-    assert.equal(scrollSpyActiveKey(items, 12), 'C')
-  })
-  it('exactly on the line counts as crossed (<=)', () => {
-    assert.equal(scrollSpyActiveKey([{ key: 'A', top: 12 }, { key: 'B', top: 50 }], 12), 'A')
-  })
-  it('empty list → null (nothing to link to)', () => {
-    assert.equal(scrollSpyActiveKey([], 12), null)
   })
 })
 

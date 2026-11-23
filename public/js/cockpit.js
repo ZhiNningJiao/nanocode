@@ -33,7 +33,7 @@ import { initPluginState, isPluginEnabled, setPluginEnabled } from './right-pane
 import {
   COCKPIT_MODULES, COCKPIT_SETTING_KEY, normalizeLayout, serializeLayout, isModuleOn,
   setModuleOn, moveModule, modulesIn, moduleById, moduleByPlugin, normalizePage, normalizeMainView,
-  startsExpanded, quoteText, normalizeSpan, buildFeed, scrollSpyActiveKey,
+  startsExpanded, quoteText, normalizeSpan, buildFeed,
 } from './cockpit-model.js'
 import { sourcesHtml, ganttViewHtml, feedHtml, waitingChipsHtml, findCar } from './cockpit-views.js'
 import { stateLabel } from './command-center-render.js'
@@ -99,20 +99,6 @@ const ui = {
   now: null,
 }
 let ganttScrollLeft = null // narrow screens: the user's sideways scroll; null = follow "now"
-
-// Feed ⇄ gantt viewport link: scrolling one side to a big event scrolls the
-// other side to the same event (shared `key`, cockpit-model.js eventGroups).
-// `linkGuard[side]` = a timestamp until which that side's own scroll handler
-// ignores events — set right before we programmatically scroll that side, so
-// the resulting scroll doesn't bounce straight back and ping-pong forever.
-// `linkedKey[side]` is the last key each side was synced to, so re-entering
-// the same event (or the echo of our own scrollIntoView once the guard
-// expires) is a no-op instead of another scrollIntoView call.
-const LINK_LINE_PX = 12
-const LINK_GUARD_MS = 500
-const linkGuard = { gantt: 0, feed: 0 }
-const linkedKey = { gantt: null, feed: null }
-
 
 const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -306,10 +292,8 @@ function ensureRoot() {
   root.querySelector('.ck-refresh').addEventListener('click', () => pollOnce())
   root.querySelector('.ck-stage').addEventListener('click', onMainClick)
   root.querySelector('.ck-feed-body').addEventListener('click', onMainClick)
-  root.querySelector('.ck-feed-open').addEventListener('click', () => { root.classList.add('ck-feed-shown'); syncFeedToGanttNow() })
+  root.querySelector('.ck-feed-open').addEventListener('click', () => root.classList.add('ck-feed-shown'))
   root.querySelector('.ck-feed-close').addEventListener('click', () => root.classList.remove('ck-feed-shown'))
-  root.querySelector('.ck-stage').addEventListener('scroll', onGanttLinkScroll, { passive: true })
-  root.querySelector('.ck-feed-body').addEventListener('scroll', onFeedLinkScroll, { passive: true })
   root.querySelector('.ck-feed-backdrop').addEventListener('click', () => root.classList.remove('ck-feed-shown'))
   root.querySelector('.ck-doc-close').addEventListener('click', () => { root.querySelector('.ck-doc').hidden = true })
   const big = root.querySelector('.ck-qbig')
@@ -455,71 +439,6 @@ function keepGanttScroll(body) {
   const target = ganttScrollLeft ?? (line ? parseFloat(line.style.left) - sc.clientWidth * 0.75 : sc.scrollWidth)
   sc.scrollLeft = Math.max(0, target)
   sc.addEventListener('scroll', () => { ganttScrollLeft = sc.scrollLeft }, { passive: true })
-}
-
-// Feed is a column next to the gantt on desktop, a drawer everywhere narrower
-// (CSS media queries) that is `visibility: hidden` until opened. Linking a
-// hidden drawer would scroll it off-screen and surprise the user the moment
-// they open it on the next unrelated scroll — so the link is a no-op while
-// the feed isn't actually shown (single-column phone portrait included).
-function feedVisible() {
-  const el = root?.querySelector('.ck-feed')
-  if (!el) return false
-  const cs = getComputedStyle(el)
-  return cs.visibility !== 'hidden' && cs.display !== 'none'
-}
-
-/** Each matching element's `data-event`, top-to-bottom, with its top relative to `container`'s own top edge. */
-function eventItemsIn(container, selector) {
-  if (!container) return []
-  const top0 = container.getBoundingClientRect().top
-  return [...container.querySelectorAll(selector)].map((el) => ({ key: el.dataset.event, top: el.getBoundingClientRect().top - top0 }))
-}
-
-function scrollSideTo(side, selector, key) {
-  const container = side === 'feed' ? root.querySelector('.ck-feed-body') : root.querySelector('.ck-stage')
-  const target = container?.querySelector(`${selector}[data-event="${CSS.escape(key)}"]`)
-  if (!target) return
-  linkGuard[side] = Date.now() + LINK_GUARD_MS
-  target.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' })
-}
-
-function onLinkScroll(source) {
-  if (page !== 'home' || !feedVisible()) return
-  if (Date.now() < linkGuard[source]) return
-  const target = source === 'gantt' ? 'feed' : 'gantt'
-  const container = source === 'gantt' ? root.querySelector('.ck-stage') : root.querySelector('.ck-feed-body')
-  const selector = source === 'gantt' ? '.ck-lane[data-event]' : '.ck-feed-ev[data-event]'
-  const key = scrollSpyActiveKey(eventItemsIn(container, selector), LINK_LINE_PX)
-  if (key == null || key === linkedKey[source]) return
-  linkedKey[source] = key
-  linkedKey[target] = key
-  scrollSideTo(target, target === 'feed' ? '.ck-feed-ev' : '.ck-lane', key)
-}
-
-function rafThrottle(fn) {
-  let ticking = false
-  return () => {
-    if (ticking) return
-    ticking = true
-    requestAnimationFrame(() => { ticking = false; fn() })
-  }
-}
-
-const onGanttLinkScroll = rafThrottle(() => onLinkScroll('gantt'))
-const onFeedLinkScroll = rafThrottle(() => onLinkScroll('feed'))
-
-/** Drawer just opened (mobile): jump it to the gantt's current event, instantly, before the user sees it. */
-function syncFeedToGanttNow() {
-  if (page !== 'home') return
-  const key = scrollSpyActiveKey(eventItemsIn(root.querySelector('.ck-stage'), '.ck-lane[data-event]'), LINK_LINE_PX)
-  if (key == null) return
-  linkedKey.gantt = key
-  linkedKey.feed = key
-  const target = root.querySelector('.ck-feed-body')?.querySelector(`.ck-feed-ev[data-event="${CSS.escape(key)}"]`)
-  if (!target) return
-  linkGuard.feed = Date.now() + LINK_GUARD_MS
-  target.scrollIntoView({ block: 'start', behavior: 'auto' })
 }
 
 function renderFeed() {
