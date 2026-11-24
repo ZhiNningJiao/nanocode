@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createScanCache, mapLimit, readHead, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 import { sessionSourceRoots } from './usage.js'
+import { claudeProjectSlugToCwd, relTimeFromMtime } from './session-naming.js'
 
 const RECENT_AGENTS_CACHE_MS = 10_000
 const RECENT_AGENTS_DEADLINE_MS = 4_000
@@ -10,18 +11,6 @@ const RECENT_AGENTS_SCAN_TIMEOUT_MS = 120_000
 const CWD_HEAD_BYTES = 8192
 const SUMMARY_HEAD_BYTES = 16384
 const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000
-
-/** Relative time string from mtime ms and a reference 'now'. */
-export function relTimeFromMtime(mtimeMs, nowMs) {
-  const diff = nowMs - mtimeMs
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  return `${days}d ago`
-}
 
 function readHeadSync(jsonlPath, maxBytes) {
   const fd = openSync(jsonlPath, 'r')
@@ -51,10 +40,6 @@ export function cwdFromJsonl(jsonlPath) {
 /** Async twin of cwdFromJsonl — same parser (cwdFromHead), non-blocking read. */
 export async function cwdFromJsonlAsync(jsonlPath) {
   try { return cwdFromHead(await readHead(jsonlPath, CWD_HEAD_BYTES)) } catch { return null }
-}
-
-export function cwdFromDirName(dirName) {
-  return dirName.replace(/^-/, '/').replace(/-/g, '/')
 }
 
 /** First meaningful user prompt (≤80 chars) in a jsonl head chunk. */
@@ -105,7 +90,7 @@ export async function extractSummaryAsync(jsonlPath) {
 export async function scanRecentAgents(home, now = Date.now(), progress = { stopped: false }) {
   const stop = () => progress.stopped
   const dirs = []
-  for (const root of sessionSourceRoots(home).claudeProjectRoots) {
+  for (const root of (await sessionSourceRoots(home)).claudeProjectRoots) {
     for (const d of await readdirSafe(root, { withFileTypes: true })) {
       if (d.isDirectory()) dirs.push({ root, name: d.name })
     }
@@ -135,7 +120,7 @@ export async function scanRecentAgents(home, now = Date.now(), progress = { stop
   }, stop)
   const mapped = cutoff.map((e) => {
     const head = heads.get(e.fullPath) || ''
-    const cwd = cwdFromHead(head.slice(0, CWD_HEAD_BYTES)) || cwdFromDirName(e.dirName)
+    const cwd = cwdFromHead(head.slice(0, CWD_HEAD_BYTES)) || claudeProjectSlugToCwd(e.dirName)
     const cwdParts = cwd.split('/').filter(Boolean)
     const projectName = cwdParts[cwdParts.length - 1] || e.dirName
     return {

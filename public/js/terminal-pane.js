@@ -5,9 +5,9 @@
 
 import { LocalEcho } from './local-echo.js'
 
-const { Terminal } = window
-const { FitAddon } = window.FitAddon
-const { WebLinksAddon } = window.WebLinksAddon
+// xterm + addons are classic scripts the workspace loads on first entry
+// (app.js loadWorkspace) — read the globals when a pane is built, not at
+// module load, so importing this module never needs them.
 
 // xterm theme — two palettes, picked by body[data-theme]. Switched
 // dynamically on the 'nanocode:theme' event the theme module dispatches.
@@ -155,6 +155,7 @@ export class TerminalPane {
 
     // Create xterm — reduced scrollback saves memory on constrained clients
     const mobile = window.matchMedia('(max-width: 768px)').matches
+    const { Terminal } = window
     this.term = new Terminal({
       theme: currentTheme(),
       fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, monospace",
@@ -174,7 +175,7 @@ export class TerminalPane {
     })
     PANES.add(this)
 
-    this.fitAddon = new FitAddon()
+    this.fitAddon = new window.FitAddon.FitAddon()
     this.term.loadAddon(this.fitAddon)
     // Custom URL handler: nanocode runs in a browser, so workers have no
     // system clipboard or xdg-open equivalent. When the user taps a URL in
@@ -184,7 +185,7 @@ export class TerminalPane {
     // window.open() + location.href dance, which iOS Safari blocks as a
     // synthetic popup.
     this.term.loadAddon(
-      new WebLinksAddon((_event, uri) => {
+      new window.WebLinksAddon.WebLinksAddon((_event, uri) => {
         window.open(uri, '_blank', 'noopener,noreferrer')
       })
     )

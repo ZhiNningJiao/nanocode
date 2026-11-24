@@ -15,6 +15,7 @@
 
 import { fetchSettings, updateSetting } from './api.js'
 import { t } from './i18n.js'
+import { quotaSeverity } from './quota-levels.js'
 
 const AIGW_KEY = 'aigw_model'
 const CLAUDE_MODEL_KEY = 'claude_model'
@@ -455,13 +456,18 @@ export async function renderUsagePane(pane) {
   // Probe section needs no fetch — render immediately.
   fill(probeSlot, renderAigwProbeSection(pane))
   // Fire each source independently; whichever resolves first paints first.
-  j('/api/usage/aigw-budget').then((d) => fill(budgetSlot, renderAigwBudgetSection(d)))
   j('/api/usage/claude').then((d) => fill(claudeSlot, renderClaudeUsageSection(d)))
   j('/api/usage/opencode').then((d) => fill(opencodeSlot, renderOpencodeUsageSection(d)))
-  j('/api/usage/summary').then((d) => fill(summarySlot, renderUsageSummarySection(d)))
+  // The AIGW monthly card reads the summary's `aigw-budget` source — one
+  // request, one number (the old separate /api/usage/aigw-budget is gone).
+  j('/api/usage/summary').then((d) => {
+    const budget = Array.isArray(d?.sources) ? d.sources.find((s) => s.source === 'aigw-budget') : null
+    fill(budgetSlot, renderAigwBudgetSection(budget || { error: d?.error || 'aigw-budget source missing' }))
+    fill(summarySlot, renderUsageSummarySection(d))
+  })
 }
 
-// ── AIGW monthly budget card (MES-13788 延续: /user/info 剩余额度 + 自适配档) ──
+// ── AIGW key budget card (key-budget response headers + 自适配档) ──
 // Headline card: remaining $ + progress bar (spent/max) + tier badge (colored
 // by strategy) + reset date / days-left + advice. Mobile 390×844 + touch ≥44px
 // handled by the .rp-budget-* CSS. Falls back to an honest unavailable state.
@@ -521,8 +527,9 @@ function renderAigwBudgetSection(budget) {
   const fill = document.createElement('div')
   fill.className = 'rp-budget-bar-fill'
   if (Number.isFinite(pctUsed)) fill.style.width = `${Math.min(100, Math.max(0, pctUsed))}%`
-  if (pctUsed >= 90) fill.classList.add('rp-budget-bar-critical')
-  else if (pctUsed >= 75) fill.classList.add('rp-budget-bar-warning')
+  const sev = quotaSeverity(pctUsed)
+  if (sev === 'critical') fill.classList.add('rp-budget-bar-critical')
+  else if (sev === 'warning') fill.classList.add('rp-budget-bar-warning')
   bar.appendChild(fill)
   section.appendChild(bar)
 
@@ -562,12 +569,6 @@ function renderAigwBudgetSection(budget) {
     advice.className = 'rp-hint rp-budget-advice'
     advice.textContent = budget.advice
     section.appendChild(advice)
-  }
-  if (budget.user_email) {
-    const who = document.createElement('div')
-    who.className = 'rp-hint rp-budget-user'
-    who.textContent = budget.user_email
-    section.appendChild(who)
   }
   return section
 }
@@ -648,10 +649,10 @@ function renderUsageSourceCard(src) {
   // status badge: unavailable / oauth-down / estimated
   const badge = document.createElement('span')
   badge.className = 'rp-usage-badge'
-  if (src.source === 'aigw-litellm' && !src.available) {
+  if (!src.available && src.error) {
     badge.classList.add('rp-usage-badge-down')
     badge.textContent = t('usage.summary.unavailable')
-    badge.title = src.error || t('usage.summary.aigwDown')
+    badge.title = src.error
   } else if (src.kind === 'claude-oauth' && src.oauthAvailable === false) {
     badge.classList.add('rp-usage-badge-est')
     badge.textContent = t('usage.summary.estimated')

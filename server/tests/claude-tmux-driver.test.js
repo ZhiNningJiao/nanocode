@@ -7,6 +7,9 @@ import { join } from 'node:path'
 import { createClaudeTmuxDriver } from '../../terminal/claude-tmux-driver.js'
 
 const TEST_DIR = join(tmpdir(), `nanocode-tmux-test-${Date.now()}`)
+// Sockets + sidecars resolve from this at call time; keep them out of the real
+// runtime dir (and out of HOME, where they used to live).
+process.env.NANOCODE_TMUX_SOCKET_DIR = join(TEST_DIR, 'sockets')
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))

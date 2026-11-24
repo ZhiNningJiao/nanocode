@@ -6,7 +6,10 @@
     <title>Nanocode</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#8cc63f" />
+    <meta name="theme-color" content="#0b0c0a" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
 
     <script>
       // Apply theme BEFORE the stylesheet paints — avoids flash.
@@ -27,8 +30,8 @@
         try {
           if (localStorage.getItem('cockpit:mainView') !== 'workspace') document.documentElement.classList.add('cockpit-boot')
           var sk = localStorage.getItem('nanocodeSkin')
-          var skinTheme = { classic: '', glass: '', motion: '', daylight: 'light', neon: 'dark' } // = skin.js SKIN_THEME
-          if (!(sk in skinTheme)) sk = 'classic'
+          var skinTheme = { meshy: 'dark', 'meshy-glass': 'dark', 'meshy-motion': 'dark' } // = skin.js SKIN_THEME
+          if (!(sk in skinTheme)) sk = 'meshy'
           document.documentElement.setAttribute('data-skin', sk)
           if (skinTheme[sk]) document.documentElement.setAttribute('data-theme', skinTheme[sk])
         } catch (_) {
@@ -36,6 +39,8 @@
         }
       })()
     </script>
+    <!-- 401 from /api → /login (token auth). Before every other script. -->
+    <script src="/js/auth-redirect.js"></script>
     <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/command-center.css" data-cc-css="1" />
@@ -46,9 +51,6 @@
          then execute them in source order before app.js (module
          scripts are deferred by default, and run after deferred
          classic scripts). -->
-    <script defer src="/vendor/xterm/lib/xterm.js"></script>
-    <script defer src="/vendor/xterm-addon-fit/lib/addon-fit.js"></script>
-    <script defer src="/vendor/xterm-addon-web-links/lib/addon-web-links.js"></script>
     <script defer src="/vendor/marked/marked.umd.js"></script>
     <script defer src="/vendor/dompurify/purify.min.js"></script>
     <script defer src="/vendor/highlight/highlight.min.js"></script>
@@ -224,12 +226,6 @@
               </div>
             </div>
 
-            <!-- Auth Status (P1-4) -->
-            <div class="settings-subsection" id="auth-status-subsection">
-              <div class="settings-label-row"><span data-i18n="settings.auth.label">Account Status</span> <span class="settings-hint-inline" data-i18n="settings.auth.hint">claude auth status</span></div>
-              <div id="auth-status-display" style="font-size:13px;color:var(--text-secondary,#aaa);padding:4px 0" data-i18n="settings.auth.loading">Loading…</div>
-            </div>
-
             <!-- Claude Model / Codex Model / Effort Level selectors have migrated
                  to the team-model plugin (Session → Team & Model tab). Storage keys
                  are unchanged (claude_model / codex_model / claude_effort) so
@@ -355,25 +351,6 @@
             </div><!-- /settings-section-body[display] -->
           </section>
 
-          <!-- ══ Monitor ══ -->
-          <section class="settings-section" data-section="monitor">
-            <h3 class="settings-section-title settings-group-title settings-section-toggle" data-target="monitor">
-              <span class="settings-section-label" data-i18n="settings.section.monitor">Monitor</span>
-              <span class="settings-section-chevron">&#9660;</span>
-            </h3>
-            <div class="settings-section-body" data-body="monitor">
-
-            <!-- 需求13: Port Health, ntfy, notification sounds, turn-complete alert,
-                 and TTS have all migrated to the Plugins manager (Ops → Plugin
-                 Manager / Port Health tab). Legacy elements are removed; the JS
-                 guards against missing ids so nothing breaks. -->
-            <div class="settings-subsection">
-              <p class="settings-moved-hint" data-i18n="plugin.manager.movedHint">
-                More settings have moved to the Plugins manager (Ops → Plugin Manager).
-              </p>
-            </div>
-            </div><!-- /settings-section-body[monitor] -->
-          </section>
 
         </div>
       </div>
@@ -629,10 +606,12 @@
       </div>
     </div>
 
-    <script type="module" src="/js/i18n.js"></script>
     <script type="module" src="/js/app.js"></script>
     <script type="module" src="/js/tts.js"></script>
     <script type="module" src="/js/ntfy-hook.js"></script>
-    <script type="module" src="/js/agent-health.js"></script>
+    <script>
+      // installable desktop / home-screen app (PWA): network-first shell worker
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {})
+    </script>
   </body>
 </html>

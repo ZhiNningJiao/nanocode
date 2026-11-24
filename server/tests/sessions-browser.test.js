@@ -105,7 +105,7 @@ describe('sessions-browser (codex resume/fork picker)', () => {
   })
 
   it('autoDiscoverTeams=false: only declared pools, nothing under HOME is scanned', async () => {
-    const roots = sessionSourceRoots(homeB)
+    const roots = await sessionSourceRoots(homeB)
     assert.deepEqual(roots, { claudeProjectRoots: [join(pool, 'projects')], codexSessionsDir: null })
     const teams = listTeams(homeB, null).teams
     assert.deepEqual(teams.map((t) => t.path), [pool])
@@ -117,29 +117,34 @@ describe('sessions-browser (codex resume/fork picker)', () => {
     assert.match((await previewSession({ source: 'claude', file: homeFile, home: homeB })).error, /outside/)
   })
 
-  it('NANOCODE_PERSONAL_CONFIG points at a host-local file (shared home keeps its own personal.json)', () => {
+  it('NANOCODE_PERSONAL_CONFIG points at a host-local file (shared home keeps its own personal.json)', async () => {
     const local = join(root, 'host-local-personal.json')
     writeFileSync(local, JSON.stringify({ claude: { autoDiscoverTeams: false, teams: [{ name: 'Pool 1', configDir: pool }] } }))
     const prev = process.env.NANOCODE_PERSONAL_CONFIG
     process.env.NANOCODE_PERSONAL_CONFIG = local
     try {
       // homeA has no switch in its own personal.json; the host-local file wins.
-      assert.deepEqual(sessionSourceRoots(homeA), { claudeProjectRoots: [join(pool, 'projects')], codexSessionsDir: null })
+      assert.deepEqual(await sessionSourceRoots(homeA), { claudeProjectRoots: [join(pool, 'projects')], codexSessionsDir: null })
     } finally {
       if (prev === undefined) delete process.env.NANOCODE_PERSONAL_CONFIG
       else process.env.NANOCODE_PERSONAL_CONFIG = prev
       resetPersonalConfigCache()
     }
-    assert.equal(sessionSourceRoots(homeA).claudeProjectRoots[0], join(homeA, '.claude', 'projects'))
+    assert.equal((await sessionSourceRoots(homeA)).claudeProjectRoots[0], join(homeA, '.claude', 'projects'))
   })
 
-  it('default (switch absent) keeps the historical discovery: ~/.claude + ~/.claude-team*', () => {
-    mkdirSync(join(homeA, '.claude-team2'), { recursive: true })
+  it('default (switch absent): the session roots are the listTeams pools — Team2 sessions are listed too', async () => {
+    const T2_ID = '22222222-2222-4222-8222-222222222222'
+    claudeSession(join(homeA, '.claude-team2', 'projects', '-work-t2'), T2_ID, '/work/t2', 'team2 session', '2026-11-21T11:00:00.000Z')
     const paths = listTeams(homeA, null).teams.map((t) => t.path)
     assert.deepEqual(paths, [join(homeA, '.claude'), join(homeA, '.claude-team2')])
-    assert.deepEqual(sessionSourceRoots(homeA), {
-      claudeProjectRoots: [join(homeA, '.claude', 'projects')],
+    assert.deepEqual(await sessionSourceRoots(homeA), {
+      claudeProjectRoots: [join(homeA, '.claude', 'projects'), join(homeA, '.claude-team2', 'projects')],
       codexSessionsDir: join(homeA, '.codex', 'sessions'),
     })
+    // one pool answer everywhere: the sessions plugin now sees the Team2 session
+    // (the resume picker always did — scanRecentConversationsMulti uses listTeams)
+    const data = await listSessions({ source: 'claude', limit: 50, home: homeA, deadlineMs: 5000 })
+    assert.ok(data.sessions.some((x) => x.id === T2_ID), 'Team2 session listed')
   })
 })

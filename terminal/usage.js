@@ -17,21 +17,19 @@
  * Team discovery: `~/.claude` (team1 / default) and any `~/.claude-team*` dirs.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, copyFileSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
-import { loadPersonalConfig, DEFAULT_AIGW_BASE, DEFAULT_AIGW_BUDGET_USD } from './personal-config.js'
-import { forEachLine, mapLimit, readdirSafe, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
+import { loadPersonalConfig, DEFAULT_AIGW_BASE } from './personal-config.js'
+import { forEachLine, mapLimit, readdirSafe, statSafe, readTextSafe, timedFs, DEFAULT_SCAN_CONCURRENCY, SLOW_FS_MS } from './bounded-scan.js'
+import { Worker } from 'node:worker_threads'
+import { quotaSeverity } from '../public/js/quota-levels.js'
 
-// node:sqlite is experimental (Node 22+). Guarded require so an unavailable /
-// older runtime degrades to an honest "source unavailable" instead of crashing
-// the server at boot. The opencode session-table usage reader (需求15 item6) is
-// the only consumer; if it is null the route returns an honest error shape.
-const _require = createRequire(import.meta.url)
-let _DatabaseSync = null
-try { ({ DatabaseSync: _DatabaseSync } = _require('node:sqlite')) } catch { /* node:sqlite unavailable */ }
+// The opencode session-table reader (需求15 item6) runs node:sqlite (sync-only
+// API) in a worker thread — see opencode-db-worker.js.
+const OPENCODE_DB_WORKER = new URL('./opencode-db-worker.js', import.meta.url)
+const OPENCODE_DB_TIMEOUT_MS = 30_000
 
 // AIGW base + key come from the unified personal config (personal-config.js),
 // which reads ~/.config/nanocode/personal.json first then falls back to the
@@ -40,9 +38,6 @@ try { ({ DatabaseSync: _DatabaseSync } = _require('node:sqlite')) } catch { /* n
 // call picks up the personal config (and tests can pass a fake `home`).
 function getAigwBase({ home } = {}) {
   return loadPersonalConfig({ home }).aigw.base
-}
-function getAigwBudgetUsd({ home } = {}) {
-  return loadPersonalConfig({ home }).aigw.budgetUsd
 }
 
 /** Read the AIGW key (personal config -> ~/.config/meshy-aigw.key). Returns '' if absent. */
@@ -337,25 +332,24 @@ export async function listTeamsAsync(home, store) {
 
 /**
  * Session-file roots the session listings (sessions browser, recent agents)
- * scan. Auto-discovery on (default): ~/.claude/projects + ~/.codex/sessions,
- * exactly as before. Auto-discovery off (personal claude.autoDiscoverTeams=
- * false): only the declared pools' projects/ dirs and the declared
- * codex.sessionsDir — nothing under home is touched.
+ * scan. The Claude pools are exactly listTeams' answer — the same pools the
+ * team picker, the resume picker and the usage summary see (before, the
+ * default here was ~/.claude/projects only, so Team2 sessions were missing
+ * from the sessions plugin and the recent-agents drawer). Auto-discovery off
+ * (personal claude.autoDiscoverTeams=false): only the declared pools and the
+ * declared codex.sessionsDir — nothing under home is touched. Async: the pool
+ * discovery reads HOME, which may be a slow mount.
  * Returns { claudeProjectRoots: string[], codexSessionsDir: string|null }.
  */
-export function sessionSourceRoots(home) {
+export async function sessionSourceRoots(home) {
   const homeDir = home || homedir()
   const personal = loadPersonalConfig({ home: homeDir })
   const declaredCodex = personal?.codex?.sessionsDir || null
-  if (personal?.claude?.autoDiscoverTeams !== false) {
-    return {
-      claudeProjectRoots: [join(homeDir, '.claude', 'projects')],
-      codexSessionsDir: declaredCodex || join(homeDir, '.codex', 'sessions'),
-    }
-  }
+  const autoDiscover = personal?.claude?.autoDiscoverTeams !== false
+  const { teams } = await listTeamsAsync(homeDir, null)
   return {
-    claudeProjectRoots: listTeams(homeDir, null).teams.map((t) => join(t.path, 'projects')),
-    codexSessionsDir: declaredCodex,
+    claudeProjectRoots: teams.map((t) => join(t.path, 'projects')),
+    codexSessionsDir: declaredCodex || (autoDiscover ? join(homeDir, '.codex', 'sessions') : null),
   }
 }
 
@@ -431,216 +425,6 @@ export async function probeAigwCost({ key, model = 'litellm/SGLang-GLM-latest', 
     base,
     keyPresent: true,
     note: 'nanocode made this call directly; opencode session calls are not proxied by nanocode so their per-call cost is not captured here.',
-  }
-}
-
-// ── Claude memory viewer (MES-13740 需求7) ───────────────────────────────────
-//
-// Memory data source: each team config dir's `projects/<slug>/memory/*.md`
-// (MEMORY.md + fragment md files). The plugin lets the user browse by
-// team × project, render md (read-only first), search keywords, and — as a
-// dangerous, opt-in op — edit a file with a timestamped backup of the original.
-//
-// Path-traversal guards: `team` must be a known config dir (validated by the
-// route against listTeams); `projectSlug` and `fileName` are validated by
-// strict character classes so no `..` / `/` can escape the memory dir.
-
-const SLUG_RE = /^[A-Za-z0-9._-]+$/
-const MEM_FILE_RE = /^[A-Za-z0-9._-]+\.md$/i
-
-function isValidSlug(slug) {
-  return typeof slug === 'string' && slug.length > 0 && SLUG_RE.test(slug) && !slug.includes('..')
-}
-function isValidMemFile(name) {
-  return typeof name === 'string' && name.length > 0 && MEM_FILE_RE.test(name) && !name.includes('..')
-}
-
-/**
- * Decode a Claude project slug back to an approximate cwd. Claude encodes cwd
- * by replacing '/' with '-' (see claudeProjectsDir), which is lossy when a path
- * segment itself contains '-'. This is for DISPLAY ONLY — file operations use
- * the exact slug, never the decoded cwd, so the lossiness never affects safety.
- */
-export function claudeProjectSlugToCwd(slug) {
-  if (!slug) return ''
-  return String(slug).replace(/-/g, '/')
-}
-
-/**
- * List projects (slugs) under a team config dir that have a `memory/` subdir,
- * with file count + most-recent mtime. Sorted newest-first.
- */
-export function listMemoryProjects(configDir) {
-  const projectsRoot = join(configDir, 'projects')
-  let entries = []
-  try { entries = readdirSync(projectsRoot, { withFileTypes: true }) } catch { return [] }
-  const out = []
-  for (const d of entries) {
-    if (!d.isDirectory()) continue
-    const memDir = join(projectsRoot, d.name, 'memory')
-    if (!existsSync(memDir)) continue
-    let fileCount = 0
-    let lastMtime = 0
-    try {
-      const files = readdirSync(memDir, { withFileTypes: true })
-      for (const f of files) {
-        if (!f.isFile() || !f.name.endsWith('.md')) continue
-        fileCount++
-        try { const st = statSync(join(memDir, f.name)); if (st.mtimeMs > lastMtime) lastMtime = st.mtimeMs } catch {}
-      }
-    } catch {}
-    out.push({ slug: d.name, cwd: claudeProjectSlugToCwd(d.name), fileCount, lastMtime })
-  }
-  out.sort((a, b) => b.lastMtime - a.lastMtime)
-  return out
-}
-
-/**
- * Build the full browse tree: every known team → its projects that have memory.
- * Teams come from listTeams (~/.claude + ~/.claude-team*). Non-existent team
- * dirs are skipped.
- */
-export function listMemoryTree(home, store) {
-  const { teams } = listTeams(home, store)
-  const out = []
-  for (const team of teams) {
-    if (!team.exists) continue
-    out.push({
-      id: team.id,
-      name: team.name,
-      path: team.path,
-      projects: listMemoryProjects(team.path),
-    })
-  }
-  return out
-}
-
-/** Async twin of listMemoryProjects — bounded-scan readdir/stat, one team's projects root. */
-async function listMemoryProjectsAsync(configDir) {
-  const projectsRoot = join(configDir, 'projects')
-  const entries = await readdirSafe(projectsRoot, { withFileTypes: true })
-  const dirs = entries.filter((d) => d.isDirectory())
-  const out = []
-  await mapLimit(dirs, DEFAULT_SCAN_CONCURRENCY, async (d) => {
-    const memDir = join(projectsRoot, d.name, 'memory')
-    if (!(await statSafe(memDir))) return
-    const files = await readdirSafe(memDir, { withFileTypes: true })
-    let fileCount = 0
-    let lastMtime = 0
-    await mapLimit(files, DEFAULT_SCAN_CONCURRENCY, async (f) => {
-      if (!f.isFile() || !f.name.endsWith('.md')) return
-      fileCount++
-      const st = await statSafe(join(memDir, f.name))
-      if (st && st.mtimeMs > lastMtime) lastMtime = st.mtimeMs
-    })
-    out.push({ slug: d.name, cwd: claudeProjectSlugToCwd(d.name), fileCount, lastMtime })
-  })
-  out.sort((a, b) => b.lastMtime - a.lastMtime)
-  return out
-}
-
-/** Async twin of listMemoryTree for the `/api/memory/tree` route (request-time, slow-mount safe). */
-export async function listMemoryTreeAsync(home, store) {
-  const { teams } = await listTeamsAsync(home, store)
-  const existing = teams.filter((t) => t.exists)
-  return Promise.all(existing.map(async (team) => ({
-    id: team.id,
-    name: team.name,
-    path: team.path,
-    projects: await listMemoryProjectsAsync(team.path),
-  })))
-}
-
-/** List .md files in a team/project memory dir (name, size, mtime), newest-first. */
-export function listMemoryFiles(configDir, projectSlug) {
-  if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
-  const memDir = join(configDir, 'projects', projectSlug, 'memory')
-  if (!existsSync(memDir)) return { files: [], path: memDir }
-  let entries = []
-  try { entries = readdirSync(memDir, { withFileTypes: true }) } catch { return { files: [], path: memDir } }
-  const files = []
-  for (const f of entries) {
-    if (!f.isFile() || !f.name.endsWith('.md')) continue
-    try {
-      const st = statSync(join(memDir, f.name))
-      files.push({ name: f.name, size: st.size, mtime: st.mtimeMs })
-    } catch {}
-  }
-  files.sort((a, b) => b.mtime - a.mtime)
-  return { files, path: memDir }
-}
-
-/** Read a single memory md file. Returns { name, content, size, mtime, path }. */
-export function readMemoryFile(configDir, projectSlug, fileName) {
-  if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
-  if (!isValidMemFile(fileName)) return { error: 'invalid file name' }
-  const filePath = join(configDir, 'projects', projectSlug, 'memory', fileName)
-  if (!existsSync(filePath)) return { error: 'file not found' }
-  try {
-    const content = readFileSync(filePath, 'utf8')
-    const st = statSync(filePath)
-    return { name: fileName, content, size: st.size, mtime: st.mtimeMs, path: filePath }
-  } catch (err) {
-    return { error: err.message }
-  }
-}
-
-/**
- * Search a keyword across .md files in a memory dir (case-insensitive).
- * Returns { query, matches: [{ file, line, snippet }] }, capped at 200 hits.
- */
-export function searchMemory(configDir, projectSlug, query) {
-  if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
-  const q = String(query || '').trim()
-  if (!q) return { query: '', matches: [] }
-  const memDir = join(configDir, 'projects', projectSlug, 'memory')
-  if (!existsSync(memDir)) return { query: q, matches: [] }
-  let entries = []
-  try { entries = readdirSync(memDir, { withFileTypes: true }) } catch { return { query: q, matches: [] } }
-  const lower = q.toLowerCase()
-  const matches = []
-  for (const f of entries) {
-    if (!f.isFile() || !f.name.endsWith('.md')) continue
-    let content = ''
-    try { content = readFileSync(join(memDir, f.name), 'utf8') } catch { continue }
-    const lines = content.split('\n')
-    for (let i = 0; i < lines.length; i++) {
-      const idx = lines[i].toLowerCase().indexOf(lower)
-      if (idx >= 0) {
-        const start = Math.max(0, idx - 30)
-        const end = Math.min(lines[i].length, idx + q.length + 30)
-        matches.push({ file: f.name, line: i + 1, snippet: lines[i].slice(start, end) })
-        if (matches.length >= 200) return { query: q, matches }
-      }
-    }
-  }
-  return { query: q, matches }
-}
-
-/**
- * Save (edit) a memory md file. DANGEROUS — the route only calls this after
- * the UI has confirmed. The original file is copied to a timestamped `.<name>.bak.<ts>`
- * backup in the same memory dir before writing. If the file is new (not present),
- * no backup is made. Returns { name, size, mtime, backupPath, path } or { error }.
- */
-export function saveMemoryFile(configDir, projectSlug, fileName, content) {
-  if (!isValidSlug(projectSlug)) return { error: 'invalid project slug' }
-  if (!isValidMemFile(fileName)) return { error: 'invalid file name' }
-  const memDir = join(configDir, 'projects', projectSlug, 'memory')
-  const filePath = join(memDir, fileName)
-  if (!existsSync(memDir)) return { error: 'memory dir not found' }
-  let backupPath = null
-  if (existsSync(filePath)) {
-    const ts = new Date().toISOString().replace(/[:.]/g, '-')
-    backupPath = join(memDir, `.${fileName}.bak.${ts}`)
-    try { copyFileSync(filePath, backupPath) } catch { backupPath = null }
-  }
-  try {
-    writeFileSync(filePath, String(content ?? ''), 'utf8')
-    const st = statSync(filePath)
-    return { name: fileName, size: st.size, mtime: st.mtimeMs, backupPath, path: filePath }
-  } catch (err) {
-    return { error: err.message }
   }
 }
 
@@ -752,7 +536,7 @@ export function aggregateOpencodeSessions(rows) {
  *
  * Returns string[] of EXISTING non-empty files (de-duplicated, order preserved).
  */
-export function resolveOpencodeDbPaths(home) {
+export async function resolveOpencodeDbPaths(home) {
   const homeDir = home || homedir()
   const candidates = []
   if (process.env.OPENCODE_DB_PATH) candidates.push(process.env.OPENCODE_DB_PATH)
@@ -764,31 +548,44 @@ export function resolveOpencodeDbPaths(home) {
   for (const c of candidates) {
     if (!c || seen.has(c)) continue
     seen.add(c)
-    try { if (existsSync(c) && statSync(c).size > 0) out.push(c) } catch {}
+    if ((await statSafe(c))?.size > 0) out.push(c)
   }
   return out
 }
 
 /**
- * Query raw session rows from ONE opencode SQLite DB (read-only). Returns
- * { rows, dbPath } on success or { error, dbPath, rows: [] } on failure — never
- * throws so the route can 200 with a clear reason.
+ * Query raw session rows from ONE opencode SQLite DB (read-only) in a worker
+ * thread. Resolves { rows, dbPath } or { error, dbPath, rows: [] } — never
+ * rejects so the route can 200 with a clear reason. A read that outlives
+ * OPENCODE_DB_TIMEOUT_MS resolves as an error (the worker is terminated).
  */
 function queryOpencodeSessionRows(dbPath) {
-  if (!_DatabaseSync) return { error: 'node:sqlite unavailable (Node 22+ required)', dbPath, rows: [] }
-  if (!dbPath || !existsSync(dbPath)) return { error: 'opencode DB not found', dbPath, rows: [] }
-  let db
-  try {
-    db = new _DatabaseSync(dbPath, { readOnly: true })
-    const rows = db.prepare(
-      'SELECT model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, time_updated, directory FROM session'
-    ).all()
-    return { rows, dbPath }
-  } catch (err) {
-    return { error: String(err.message || err), dbPath, rows: [] }
-  } finally {
-    try { db && db.close() } catch {}
-  }
+  return new Promise((resolve) => {
+    const t0 = Date.now()
+    let settled = false
+    let worker = null
+    const done = (r) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const ms = Date.now() - t0
+      if (ms > SLOW_FS_MS) console.warn(`[fs-slow] opencode DB read ${dbPath} took ${ms}ms`)
+      resolve(r)
+    }
+    const timer = setTimeout(() => {
+      done({ error: `opencode DB read exceeded ${OPENCODE_DB_TIMEOUT_MS}ms`, dbPath, rows: [] })
+      worker?.terminate()
+    }, OPENCODE_DB_TIMEOUT_MS)
+    try {
+      worker = new Worker(OPENCODE_DB_WORKER, { workerData: { dbPath } })
+    } catch (err) {
+      done({ error: String(err?.message || err), dbPath, rows: [] })
+      return
+    }
+    worker.once('message', done)
+    worker.once('error', (err) => done({ error: String(err?.message || err), dbPath, rows: [] }))
+    worker.once('exit', (code) => done({ error: `opencode DB worker exited (${code})`, dbPath, rows: [] }))
+  })
 }
 
 /**
@@ -796,8 +593,8 @@ function queryOpencodeSessionRows(dbPath) {
  * aggregate shape plus `dbPath` and `source`; on failure returns the empty
  * shape plus `error` + `dbPath` (never throws).
  */
-export function scanOpencodeUsage(dbPath) {
-  const { rows, error } = queryOpencodeSessionRows(dbPath)
+export async function scanOpencodeUsage(dbPath) {
+  const { rows, error } = await queryOpencodeSessionRows(dbPath)
   if (error) return { ...opencodeUsageEmpty(), dbPath, error }
   return { ...aggregateOpencodeSessions(rows), dbPath, source: 'opencode SQLite session table' }
 }
@@ -809,10 +606,10 @@ export function scanOpencodeUsage(dbPath) {
  * candidate that existed) and `errors` (per-DB failures, if any). When every
  * DB is unreadable, returns the empty shape + the first error.
  */
-export function scanAllOpencodeUsage(home) {
-  const dbPaths = resolveOpencodeDbPaths(home)
+export async function scanAllOpencodeUsage(home) {
+  const dbPaths = await resolveOpencodeDbPaths(home)
   if (!dbPaths.length) return { ...opencodeUsageEmpty(), dbPaths: [], error: 'opencode DB not found (no $XDG_DATA_HOME/opencode/opencode.db)' }
-  const perDb = dbPaths.map(queryOpencodeSessionRows)
+  const perDb = await Promise.all(dbPaths.map(queryOpencodeSessionRows))
   const errors = perDb.filter((r) => r.error).map((r) => ({ dbPath: r.dbPath, error: r.error }))
   const allRows = perDb.filter((r) => !r.error).flatMap((r) => r.rows)
   if (!allRows.length) return { ...opencodeUsageEmpty(), dbPaths, errors, error: errors[0]?.error || 'no readable opencode DB' }
@@ -834,12 +631,10 @@ export function scanAllOpencodeUsage(home) {
 // Three sources, each honest (no fabricated numbers — a missing limit is null):
 //   1. Claude Team1 (~/.claude)        — OAuth API (real % + reset) + jsonl burn
 //   2. Claude Team2 (~/.claude-team2)  — same
-//   3. AIGW (LiteLLM)                  — /key/info?key=KEY (real spend) +
-//      /spend/logs/v2 (window token burn). remaining = budgetUsd - spend,
-//      where budgetUsd comes from the personal config (default 1000); the
-//      key-side max_budget is null for a virtual LLM-only key, so the budget
-//      is local and the window is labelled `estimated:true`. Verified live
-//      2026-07-07: spend≈$426.35, alias zhiningjiao@meshy.ai.
+//   3. AIGW key budget                 — the dispatch key's spend + cap from
+//      two LiteLLM response headers (buildAigwBudgetSourceSummary below). The
+//      old /key/info + /spend/logs/v2 source is gone: a virtual LLM-only key
+//      gets 403 on those routes, so it could only ever show an error card.
 //
 // Unified per-window schema (the `entries[]` of /api/usage/summary):
 //   { source, label, windowType, used, limit|null, remaining|null, utilization|null,
@@ -860,16 +655,6 @@ const CLAUDE_OAUTH_TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL || 'https://pl
 const CLAUDE_OAUTH_CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID || '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const WINDOW_5H_MS = 5 * 60 * 60 * 1000
 const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000
-// LiteLLM admin/billing endpoints probed in order by the legacy probeAigwSpend
-// fallback (CodexBar docs/litellm.md). The primary AIGW source now uses the
-// verified-live /key/info?key=KEY + /spend/logs/v2 flow (fetchAigwKeyInfo /
-// fetchAigwSpendLogs below); this list is kept for the legacy fallback.
-const AIGW_ADMIN_ENDPOINTS = ['/key/info', '/user/info', '/global/spend', '/spend/logs']
-// /spend/logs/v2 window sample size. The full history can be 20k+ rows; we
-// fetch the most-recent bounded page and compute burn from its active span
-// (labelled estimated/sampled in the window note).
-const AIGW_SPEND_LOGS_PAGE_SIZE = 100
-const AIGW_SPEND_LOGS_WINDOW_DAYS = 7
 
 /**
  * Read Claude Code OAuth credentials from `<configDir>/.credentials.json`.
@@ -877,11 +662,11 @@ const AIGW_SPEND_LOGS_WINDOW_DAYS = 7
  * or null if the file / key is absent. Never throws. The token is never logged.
  * CodexBar reads the same file (docs/claude.md "File fallback: ~/.claude/.credentials.json").
  */
-export function readClaudeOAuthCredentials(configDir) {
+export async function readClaudeOAuthCredentials(configDir) {
   if (!configDir) return null
   const credPath = join(configDir, '.credentials.json')
   try {
-    const raw = readFileSync(credPath, 'utf8')
+    const raw = await timedFs.readFile(credPath, 'utf8')
     const obj = JSON.parse(raw)
     const o = obj?.claudeAiOauth
     if (!o || typeof o !== 'object') return null
@@ -919,8 +704,9 @@ export function readClaudeOAuthCredentials(configDir) {
 export async function refreshClaudeOAuthToken(configDir, { fetchImpl } = {}) {
   try {
     const credPath = join(configDir, '.credentials.json')
-    if (!existsSync(credPath)) return null
-    const raw = JSON.parse(readFileSync(credPath, 'utf8'))
+    const text = await readTextSafe(credPath)
+    if (text === null) return null
+    const raw = JSON.parse(text)
     const o = raw?.claudeAiOauth
     if (!o?.refreshToken) return null
     const f = fetchImpl || fetch
@@ -936,8 +722,8 @@ export async function refreshClaudeOAuthToken(configDir, { fetchImpl } = {}) {
     o.accessToken = body.access_token
     if (body.refresh_token) o.refreshToken = body.refresh_token
     if (typeof body.expires_in === 'number') o.expiresAt = Date.now() + body.expires_in * 1000
-    try { copyFileSync(credPath, credPath + '.bak-refresh') } catch {}
-    writeFileSync(credPath, JSON.stringify(raw))
+    try { await timedFs.copyFile(credPath, credPath + '.bak-refresh') } catch {}
+    await timedFs.writeFile(credPath, JSON.stringify(raw))
     return {
       accessToken: o.accessToken,
       expiresAt: Number(o.expiresAt) || null,
@@ -949,7 +735,7 @@ export async function refreshClaudeOAuthToken(configDir, { fetchImpl } = {}) {
 }
 
 export async function fetchClaudeOAuthUsage(configDir, { fetchImpl } = {}) {
-  let cred = readClaudeOAuthCredentials(configDir)
+  let cred = await readClaudeOAuthCredentials(configDir)
   if (!cred) return { error: 'no Claude OAuth credentials at <configDir>/.credentials.json' }
   // Token past expiry: refresh it (public PKCE client) rather than giving up.
   // Only if refresh fails (dead refresh token) do we degrade to jsonl estimation.
@@ -1172,11 +958,7 @@ export function mapClaudeOAuthToWindows(apiResp, { source, label, now = Date.now
 }
 
 function severityFor(util) {
-  const u = Number(util)
-  if (!Number.isFinite(u)) return null
-  if (u >= 90) return 'critical'
-  if (u >= 75) return 'warning'
-  return 'normal'
+  return quotaSeverity(util)
 }
 
 /**
@@ -1247,7 +1029,7 @@ export function estimateClaudeWindowsFromTimeline(timeline, { source, label, now
 export async function buildClaudeSourceSummary({ configDir, source, label, home, now = Date.now() }) {
   const dir = configDir || effectiveClaudeConfigDir(null, home)
   const base = { source, label, kind: 'claude-oauth', configDir: dir, available: true }
-  const cred = readClaudeOAuthCredentials(dir)
+  const cred = await readClaudeOAuthCredentials(dir)
   if (cred) {
     base.subscriptionType = cred.subscriptionType
     base.rateLimitTier = cred.rateLimitTier
@@ -1290,304 +1072,27 @@ export async function buildClaudeSourceSummary({ configDir, source, label, home,
   }
 }
 
-// ── AIGW (LiteLLM) spend source ─────────────────────────────────────────────────
-
-/**
- * Fetch AIGW `GET /key/info?key=KEY` (Authorization: Bearer KEY) and return the
- * real spend + alias + the key-side max_budget. Verified live 2026-07-07: 200
- * with `{ info: { spend, max_budget, key_alias, budget_duration, budget_reset_at, ... } }`
- * (max_budget is null for a virtual LLM-only key, so remaining is computed
- * locally from the personal-config budgetUsd — see buildAigwSourceSummary).
- * Never throws; returns { error } so the source degrades honestly.
- */
-export async function fetchAigwKeyInfo({ key, base, fetchImpl } = {}) {
-  const apiKey = String(key ?? '').trim()
-  const b = base || getAigwBase()
-  if (!apiKey) return { error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)' }
-  const f = fetchImpl || fetch
-  try {
-    const res = await f(`${b}/key/info?key=${encodeURIComponent(apiKey)}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(10000),
-    })
-    if (!res.ok) {
-      let body = null
-      try { body = await res.json() } catch {}
-      const msg = body?.detail || body?.error || `HTTP ${res.status}`
-      return { error: `AIGW /key/info HTTP ${res.status}: ${msg}`, status: res.status }
-    }
-    const body = await res.json()
-    const info = body?.info || body  // real API nests under info; flat fallback
-    const spend = Number(info?.spend)
-    if (!Number.isFinite(spend)) return { error: 'AIGW /key/info returned no usable spend field' }
-    return {
-      spend,
-      alias: typeof info?.key_alias === 'string' ? info.key_alias : null,
-      maxBudget: (info?.max_budget == null) ? null : (Number.isFinite(Number(info.max_budget)) ? Number(info.max_budget) : null),
-      budgetDuration: typeof info?.budget_duration === 'string' ? info.budget_duration : null,
-      budgetResetAt: typeof info?.budget_reset_at === 'string' ? info.budget_reset_at : null,
-      raw: { spend: info?.spend, max_budget: info?.max_budget, key_alias: info?.key_alias },
-    }
-  } catch (err) {
-    return { error: `AIGW /key/info fetch failed: ${err?.message || err}` }
-  }
-}
-
-/**
- * Fetch AIGW `GET /spend/logs/v2?key=KEY&page=1&page_size=N&start_date=...&end_date=...`
- * (Authorization: Bearer KEY) and aggregate the window's token detail into a
- * burn rate. The page is bounded (AIGW_SPEND_LOGS_PAGE_SIZE) so a 20k+-entry
- * history does not stall the endpoint; burn is computed from the sampled rows'
- * active span (CodexBar-style, same computeBurnRate used for the jsonl
- * timeline). Each row carries total_tokens/prompt/completion/model/model_group/
- * startTime/endTime. Returns { tokensWindow, burnPerMin, rows, oldestTs,
- * newestTs, sampled, totalEntries } or { error }. Never throws.
- */
-export async function fetchAigwSpendLogs({ key, base, fetchImpl, days = AIGW_SPEND_LOGS_WINDOW_DAYS, now = Date.now() } = {}) {
-  const apiKey = String(key ?? '').trim()
-  const b = base || getAigwBase()
-  if (!apiKey) return { error: 'AIGW key not found' }
-  const f = fetchImpl || fetch
-  const fmt = (d) => new Date(d).toISOString().slice(0, 10)
-  const url = `${b}/spend/logs/v2?key=${encodeURIComponent(apiKey)}&page=1&page_size=${AIGW_SPEND_LOGS_PAGE_SIZE}&start_date=${fmt(now - days * 86400_000)}&end_date=${fmt(now)}`
-  try {
-    const res = await f(url, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(12000),
-    })
-    if (!res.ok) return { error: `AIGW /spend/logs/v2 HTTP ${res.status}` }
-    const body = await res.json()
-    const data = Array.isArray(body?.data) ? body.data : []
-    const rows = []
-    let tokensWindow = 0
-    for (const e of data) {
-      const tsStr = e?.startTime || e?.endTime
-      const ts = tsStr ? Date.parse(tsStr) : 0
-      const tok = Number(e?.total_tokens) || 0
-      if (!ts || !tok) continue
-      rows.push({ ts, tokens: tok, model: e?.model_group || e?.model || '(unknown)' })
-      tokensWindow += tok
-    }
-    rows.sort((a, b) => a.ts - b.ts)
-    const { burnRatePerMin, oldestTs, newestTs } = computeBurnRate(rows, { now })
-    return {
-      tokensWindow,
-      burnPerMin: burnRatePerMin,
-      rows: rows.length,
-      oldestTs, newestTs,
-      sampled: rows.length,
-      totalEntries: typeof body?.total === 'number' ? body.total : null,
-    }
-  } catch (err) {
-    return { error: `AIGW /spend/logs/v2 fetch failed: ${err?.message || err}` }
-  }
-}
-
-/**
- * Legacy probe of LiteLLM admin/billing endpoints (kept as a fallback; the
- * primary AIGW source uses fetchAigwKeyInfo + fetchAigwSpendLogs). Tries
- * /key/info, /user/info, /global/spend, /spend/logs in order. Never throws;
- * returns { available, tried[], error?, spend? } so a caller can label honestly.
- */
-export async function probeAigwSpend({ key, base, fetchImpl, home } = {}) {
-  const apiKey = String(key ?? readAigwKey({ home })).trim()
-  const b = base || getAigwBase({ home })
-  if (!apiKey) {
-    return { available: false, error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)', tried: [] }
-  }
-  const f = fetchImpl || fetch
-  const tried = []
-  for (const ep of AIGW_ADMIN_ENDPOINTS) {
-    const url = `${b}${ep}`
-    try {
-      const res = await f(url, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(10000),
-      })
-      tried.push({ endpoint: ep, status: res.status })
-      if (res.ok) {
-        let body = null
-        try { body = await res.json() } catch {}
-        return mapAigwSpendResponse(ep, body, { tried })
-      }
-      if (res.status === 403) {
-        let body = null
-        try { body = await res.json() } catch {}
-        const msg = body?.detail || body?.error || `HTTP ${res.status}`
-        if (/llm_api_routes|not allowed/i.test(String(msg))) {
-          return {
-            available: false,
-            error: `AIGW key is virtual LLM-only (403 on ${ep}: ${msg}). Admin/billing routes are not permitted; spend/budget unavailable.`,
-            tried,
-          }
-        }
-      }
-    } catch (err) {
-      tried.push({ endpoint: ep, error: String(err?.message || err) })
-    }
-  }
-  return {
-    available: false,
-    error: 'All AIGW admin endpoints rejected or unreachable (no spend/budget data).',
-    tried,
-  }
-}
-
-/**
- * Pure: map a successful AIGW admin response into a monthly-budget window.
- * LiteLLM /key/info returns `{ info: { spend, max_budget, key_alias, ... } }`
- * (verified live; max_budget is null for a virtual LLM-only key) — we accept
- * both the nested `info.*` shape and the flat `{ soft_budget, spend }` shape
- * (the latter is the legacy/CodexBar-documented shape). /global/spend returns
- * `{ total_spend }`. We surface whatever the gateway gave us, labelled with its
- * unit, and never invent fields. Returns { available:true, windows, raw } or
- * { available:false, error }.
- */
-export function mapAigwSpendResponse(endpoint, body, { tried } = {}) {
-  if (!body || typeof body !== 'object') {
-    return { available: false, error: `${endpoint} returned no parseable body`, tried }
-  }
-  if (endpoint === '/key/info') {
-    const info = body.info || body
-    const soft = Number(info?.soft_budget ?? body.soft_budget)
-    const spend = Number(info?.spend ?? body.spend)
-    if (Number.isFinite(spend)) {
-      const limit = Number.isFinite(soft) && soft > 0 ? soft : null
-      return {
-        available: true,
-        tried,
-        raw: { endpoint, soft_budget: info?.soft_budget ?? body.soft_budget, spend: info?.spend ?? body.spend },
-        windows: [{
-          source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
-          windowType: 'monthly',
-          used: spend, limit, remaining: limit != null ? limit - spend : null,
-          utilization: limit != null ? (spend / limit) * 100 : null,
-          unit: 'usd',
-          resetAt: null, burnRatePerMin: null, projectedHitAt: null,
-          estimated: false, severity: severityFor(limit != null ? (spend / limit) * 100 : null),
-          usedTokens: null,
-          note: `AIGW LiteLLM /key/info: spend $${spend.toFixed(4)}${limit != null ? ` of $${limit.toFixed(4)} soft budget` : ''} (real).`,
-        }],
-      }
-    }
-  }
-  if (endpoint === '/global/spend') {
-    const total = Number(body.total_spend ?? body.spend)
-    if (Number.isFinite(total)) {
-      return {
-        available: true,
-        tried,
-        raw: { endpoint, total_spend: body.total_spend },
-        windows: [{
-          source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
-          windowType: 'monthly',
-          used: total, limit: null, remaining: null,
-          utilization: null, unit: 'usd',
-          resetAt: null, burnRatePerMin: null, projectedHitAt: null,
-          estimated: false, severity: null, usedTokens: null,
-          note: `AIGW LiteLLM /global/spend: total spend $${total.toFixed(4)} (real, no budget limit exposed).`,
-        }],
-      }
-    }
-  }
-  return { available: false, error: `${endpoint} response had no usable spend/budget fields`, tried, raw: body }
-}
-
-function aigwUnavailableWindow(note) {
-  return {
-    source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
-    windowType: 'monthly',
-    used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
-    resetAt: null, burnRatePerMin: null, projectedHitAt: null,
-    estimated: false, severity: null, usedTokens: null,
-    note,
-  }
-}
-
-/**
- * Build the AIGW (LiteLLM) source summary. Calls /key/info?key=KEY for the real
- * spend and /spend/logs/v2 for the window token burn. remaining = budgetUsd -
- * spend (budgetUsd from the personal config, default 1000; the key-side
- * max_budget is null for a virtual LLM-only key, so the budget is local and the
- * window is labelled `estimated:true`). `home` / `fetchImpl` are threaded
- * through so tests run hermetically against a fake home + mocked fetch. Never
- * throws; degrades to an honest unavailable window when the key / endpoints fail.
- */
-export async function buildAigwSourceSummary({ now = Date.now(), home, fetchImpl } = {}) {
-  const personal = loadPersonalConfig({ home })
-  const { base, key, budgetUsd } = personal.aigw
-  const baseFields = {
-    source: 'aigw-litellm', label: 'AIGW (LiteLLM)', kind: 'litellm',
-    configDir: null, base, alias: null, available: false, tried: [],
-  }
-  if (!key) {
-    return {
-      ...baseFields,
-      windows: [aigwUnavailableWindow('AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key).')],
-      error: 'AIGW key not found (personal.json aigw.key or ~/.config/meshy-aigw.key)',
-    }
-  }
-  const info = await fetchAigwKeyInfo({ key, base, fetchImpl })
-  if (info.error) {
-    return {
-      ...baseFields, available: false,
-      tried: [{ endpoint: '/key/info', error: info.error }],
-      windows: [aigwUnavailableWindow(info.error)],
-      error: info.error,
-    }
-  }
-  // spend is real from the API; budget is local (key max_budget is null) → estimated.
-  const spend = info.spend
-  const limit = (info.maxBudget != null && info.maxBudget > 0) ? info.maxBudget : budgetUsd
-  const remaining = limit - spend
-  const utilization = limit > 0 ? (spend / limit) * 100 : null
-  // burn from the spend/logs/v2 window (best-effort; does not gate availability)
-  const logs = await fetchAigwSpendLogs({ key, base, fetchImpl, now })
-  const burnPerMin = logs && !logs.error ? (logs.burnPerMin || null) : null
-  const tokensWindow = logs && !logs.error ? (logs.tokensWindow || 0) : null
-  const logsNote = logs?.error
-    ? ` (spend/logs/v2 unavailable: ${logs.error})`
-    : (tokensWindow != null
-      ? ` Window burn from /spend/logs/v2 (last ${AIGW_SPEND_LOGS_WINDOW_DAYS}d, ${logs.sampled} sampled rows${logs.totalEntries != null ? ` of ${logs.totalEntries}` : ''}).`
-      : '')
-  const tried = [{ endpoint: '/key/info', status: 200 }]
-  if (logs?.error) tried.push({ endpoint: '/spend/logs/v2', error: logs.error })
-  else tried.push({ endpoint: '/spend/logs/v2', status: 200, sampled: logs?.sampled ?? null })
-  return {
-    ...baseFields,
-    available: true,
-    alias: info.alias,
-    tried,
-    raw: info.raw,
-    windows: [{
-      source: 'aigw-litellm', label: 'AIGW (LiteLLM)',
-      windowType: 'monthly',
-      used: spend, limit, remaining, utilization, unit: 'usd',
-      resetAt: info.budgetResetAt || null,
-      burnRatePerMin: burnPerMin, projectedHitAt: null,
-      estimated: true,   // budget is local (key max_budget is null); remaining computed locally
-      severity: severityFor(utilization),
-      usedTokens: tokensWindow,
-      // AI-readable AIGW-specific fields (task unified schema):
-      used_usd: spend, budget_usd: limit, remaining_usd: remaining,
-      tokens_window: tokensWindow, burn_per_min: burnPerMin,
-      note: `AIGW LiteLLM /key/info: spend $${spend.toFixed(2)}${info.alias ? ` (alias ${info.alias})` : ''} of $${limit.toFixed(2)} budget (spend real from API, budget local from personal config → estimated). Remaining $${remaining.toFixed(2)}.${logsNote}`,
-    }],
-  }
-}
-
-// ── AIGW monthly budget (MES-13788 延续: /user/info 剩余额度 + 自适配档) ────────
+// ── AIGW key budget (response headers of the dispatch key) ─────────────────
 //
-// The 4th honest source: GET https://aigw.meshy.team/user/info → user_info.
-//   { max_budget, spend, budget_reset_at, budget_duration, user_email }
-// `remaining = max_budget - spend`, `pct_remaining = remaining / max_budget * 100`,
-// `days_left` = whole days from now to budget_reset_at (floor 0). The
-// self-adapting strategy tier is ported verbatim from ~/code/aigw_budget.sh:
+// The 4th honest source. One minimal chat call (1 output token, cheapest
+// model) with the key read from `personal.aigw.budgetKeyFile` (default
+// ~/.config/meshy-aigw.key — the dispatch key with its own budget); LiteLLM
+// answers with that key's running total and cap in two response headers:
+//   x-litellm-key-spend       USD spent by this key
+//   x-litellm-key-max-budget  USD cap of this key
+// `remaining = max_budget - spend`, `pct_remaining = remaining / max_budget * 100`.
+// The headers carry no reset time, so `days_left` is null (the BURN tier is
+// then unreachable — honest, not guessed). The old /user/info path needed a
+// personal key that the gateway no longer knows (token_not_found_in_db).
+// The self-adapting strategy tier is ported verbatim from ~/code/aigw_budget.sh:
 //   FREE_ONLY  : 剩<10%           → 只免费 GLM/Kimi
 //   BURN       : reset≤4天 且 剩>25% → 用不完就清零, 猛往付费堆
 //   SPEND_PAID : >40% 且 reset 还远 → 硬活放开上付费 gpt-5.5/opus
 //   BALANCED   : 10-40%           → 免费铺量, 付费只给硬骨头
 // No fabricated numbers — every field comes from the gateway response.
+
+export const AIGW_KEY_SPEND_HEADER = 'x-litellm-key-spend'
+export const AIGW_KEY_MAX_BUDGET_HEADER = 'x-litellm-key-max-budget'
 
 /** Tier advice strings (mirror aigw_budget.sh, zh source of truth). */
 export const AIGW_BUDGET_ADVICE = {
@@ -1633,82 +1138,80 @@ export function computeBudgetDaysLeft(resetAt, now = Date.now()) {
 }
 
 /**
- * Pure: map a successful AIGW /user/info response body into the budget object.
- * The body's `user_info` carries max_budget / spend / budget_reset_at. Returns
+ * Pure: the two key-budget response headers → the budget object.
+ * `headers` = anything with get(name) (fetch Headers). Returns
  * { available:true, ...budget } or { available:false, error } — no fabrication.
- * This is the testable core; the live fetch is in fetchAigwBudget.
  */
-export function mapAigwBudgetResponse(body, { now = Date.now() } = {}) {
-  const ui = body && typeof body === 'object' ? body.user_info : null
-  if (!ui || typeof ui !== 'object') {
-    return { available: false, error: '/user/info returned no user_info body' }
-  }
-  const maxb = Number(ui.max_budget)
-  const spend = Number(ui.spend)
+export function mapAigwKeyBudgetHeaders(headers) {
+  const get = (n) => (headers && typeof headers.get === 'function' ? headers.get(n) : null)
+  const spendRaw = get(AIGW_KEY_SPEND_HEADER)
+  const spend = spendRaw == null || spendRaw === '' ? NaN : Number(spendRaw)
   if (!Number.isFinite(spend)) {
-    return { available: false, error: '/user/info user_info.spend is not a number' }
+    return { available: false, error: `AIGW response has no ${AIGW_KEY_SPEND_HEADER} header` }
   }
+  const maxRaw = get(AIGW_KEY_MAX_BUDGET_HEADER)
+  const maxb = maxRaw == null || maxRaw === '' ? NaN : Number(maxRaw)
   const maxBudget = Number.isFinite(maxb) && maxb > 0 ? maxb : null
   const remaining = maxBudget != null ? Math.round((maxBudget - spend) * 100) / 100 : null
   const pctRemaining = maxBudget != null ? Math.round((remaining / maxBudget) * 1000) / 10 : null
   const pctUsed = maxBudget != null ? Math.round((spend / maxBudget) * 1000) / 10 : null
-  const resetAt = typeof ui.budget_reset_at === 'string' && ui.budget_reset_at ? ui.budget_reset_at : null
-  const daysLeft = computeBudgetDaysLeft(resetAt, now)
-  const tier = computeAigwBudgetTier({ pctRemaining: pctRemaining ?? -1, daysLeft })
+  const tier = computeAigwBudgetTier({ pctRemaining: pctRemaining ?? -1, daysLeft: null })
   return {
     available: true,
-    user_email: typeof ui.user_email === 'string' && ui.user_email ? ui.user_email : null,
     max_budget: maxBudget,
     spend: Math.round(spend * 100000) / 100000,
     remaining,
     pct_remaining: pctRemaining,
     pct_used: pctUsed,
-    reset_at: resetAt,
-    days_left: daysLeft,
-    budget_duration: typeof ui.budget_duration === 'string' && ui.budget_duration ? ui.budget_duration : null,
+    reset_at: null,
+    days_left: null,
+    budget_duration: null,
     tier,
     advice: AIGW_BUDGET_ADVICE[tier] || null,
   }
 }
 
 /**
- * Fetch the AIGW /user/info budget endpoint. Uses the well-known meshy-aigw.key
- * (readAigwKey). Never throws — returns { available:false, error, keyPresent }
- * on any failure so the route can 200 with a clear reason. Accepts a fetchImpl
- * injection so unit tests can stub the network without a real gateway.
+ * One minimal AIGW chat call; read the key-budget headers. The key comes from
+ * the FILE `personal.aigw.budgetKeyFile` (never a command line / log). Never
+ * throws — returns { available:false, error, keyPresent } on any failure so the
+ * route can 200 with a clear reason. `fetchImpl` lets tests stub the network.
  */
 export async function fetchAigwBudget({ key, home, fetchImpl, now = Date.now() } = {}) {
-  const base = getAigwBase({ home })
-  const apiKey = (key ?? readAigwKey({ home })).trim()
+  const personal = loadPersonalConfig({ home })
+  const base = personal.aigw.base
+  const apiKey = String(key ?? (await readTextSafe(personal.aigw.budgetKeyFile)) ?? '').trim()
   if (!apiKey) {
-    return { available: false, keyPresent: false, base, error: 'AIGW key not found (~/.config/meshy-aigw.key)' }
+    return { available: false, keyPresent: false, base, error: 'AIGW budget key file not found (personal.json aigw.budgetKeyFile, default ~/.config/meshy-aigw.key)' }
   }
   const f = fetchImpl || fetch
   try {
-    const res = await f(`${base}/user/info`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(15000),
+    const res = await f(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: personal.aigw.budgetProbeModel, messages: [{ role: 'user', content: 'ok' }], max_tokens: 1 }),
+      signal: AbortSignal.timeout(20000),
     })
     if (!res.ok) {
       let body = null
       try { body = await res.json() } catch {}
-      const msg = body?.detail || body?.error || `HTTP ${res.status}`
-      return { available: false, keyPresent: true, base, error: `AIGW /user/info ${msg}` }
+      const msg = body?.error?.type || body?.error?.message || body?.detail || `HTTP ${res.status}`
+      return { available: false, keyPresent: true, base, error: `AIGW budget probe HTTP ${res.status}: ${msg}` }
     }
-    const data = await res.json()
-    return { ...mapAigwBudgetResponse(data, { now }), keyPresent: true, base }
+    try { await res.text?.() } catch {} // drain the 1-token body
+    return { ...mapAigwKeyBudgetHeaders(res.headers), keyPresent: true, base, checkedAt: new Date(now).toISOString() }
   } catch (err) {
-    return { available: false, keyPresent: true, base, error: `AIGW /user/info fetch failed: ${err?.message || err}` }
+    return { available: false, keyPresent: true, base, error: `AIGW budget probe failed: ${err?.message || err}` }
   }
 }
 
 /**
- * Build the AIGW monthly-budget source summary for /api/usage/summary. Probes
- * /user/info and surfaces a monthly window carrying the tier + advice + reset
+ * Build the AIGW key-budget source summary for /api/usage/summary. Probes
+ * the key-budget headers (fetchAigwBudget) and surfaces a monthly window carrying the tier + advice + reset
  * for the AI-readable surface. No fabricated numbers — unavailable is honest.
  */
-export async function buildAigwBudgetSourceSummary({ now = Date.now(), fetchImpl } = {}) {
-  const budget = await fetchAigwBudget({ fetchImpl, now })
+export async function buildAigwBudgetSourceSummary({ now = Date.now(), home, fetchImpl } = {}) {
+  const budget = await fetchAigwBudget({ home, fetchImpl, now })
   const base = {
     source: 'aigw-budget', label: 'AIGW 月度额度', kind: 'litellm-budget',
     configDir: null, available: !!budget.available, base: budget.base,
@@ -1716,10 +1219,10 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), fetchImpl
   }
   if (budget.available) {
     const pctUsed = budget.pct_used
-    const sev = pctUsed == null ? null : (pctUsed >= 90 ? 'critical' : pctUsed >= 75 ? 'warning' : 'normal')
+    const sev = pctUsed == null ? null : severityFor(pctUsed)
     return {
       ...base,
-      user_email: budget.user_email,
+      pct_used: pctUsed,
       max_budget: budget.max_budget,
       spend: budget.spend,
       remaining: budget.remaining,
@@ -1738,7 +1241,7 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), fetchImpl
         estimated: false, severity: sev, usedTokens: null,
         pctRemaining: budget.pct_remaining, daysLeft: budget.days_left,
         tier: budget.tier, advice: budget.advice,
-        note: `AIGW /user/info: 预算 $${budget.max_budget} / 已花 $${budget.spend} / 剩余 $${budget.remaining} (${budget.pct_remaining}%). 重置 ${budget.reset_at || '?'}${budget.days_left != null ? ` (还剩 ~${budget.days_left} 天)` : ''}. 策略档=${budget.tier}`,
+        note: `AIGW key budget (response headers): 上限 $${budget.max_budget ?? '?'} / 已花 $${budget.spend} / 剩余 $${budget.remaining ?? '?'}${budget.pct_remaining != null ? ` (${budget.pct_remaining}%)` : ''}. 策略档=${budget.tier}`,
       }],
     }
   }
@@ -1750,7 +1253,7 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), fetchImpl
       used: null, limit: null, remaining: null, utilization: null, unit: 'usd',
       resetAt: null, burnRatePerMin: null, projectedHitAt: null,
       estimated: false, severity: null, usedTokens: null,
-      note: budget.error || 'AIGW /user/info budget unavailable.',
+      note: budget.error || 'AIGW key budget unavailable.',
     }],
     error: budget.error,
   }
@@ -1772,7 +1275,7 @@ export async function buildAigwBudgetSourceSummary({ now = Date.now(), fetchImpl
  */
 export async function buildUsageSummary({ home, store, now = Date.now(), fetchImpl } = {}) {
   const homeDir = home || homedir()
-  const { teams } = listTeams(homeDir, store)
+  const { teams } = await listTeamsAsync(homeDir, store)
   const sources = []
   // Claude teams: ~/.claude (team1) + ~/.claude-team* + personal.claude.teams.
   for (const team of teams) {
@@ -1785,10 +1288,8 @@ export async function buildUsageSummary({ home, store, now = Date.now(), fetchIm
     })
     sources.push(src)
   }
-  // AIGW (LiteLLM) — /key/info real spend + /spend/logs/v2 burn + local budgetUsd.
-  sources.push(await buildAigwSourceSummary({ now, home: homeDir, fetchImpl }))
-  // AIGW monthly budget — /user/info max_budget + spend + reset + tier (MES-13788 延续)
-  sources.push(await buildAigwBudgetSourceSummary({ now, fetchImpl }))
+  // AIGW key budget — response headers spend + max budget + tier
+  sources.push(await buildAigwBudgetSourceSummary({ now, home: homeDir, fetchImpl }))
   // flat entries for AI consumption
   const entries = []
   for (const s of sources) {

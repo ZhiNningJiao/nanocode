@@ -24,7 +24,7 @@ import {
 let tmpHome
 
 function setup() {
-  tmpHome = mkdtempSync('/tmp/nanocode-locktest-')
+  tmpHome = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-locktest-')
 }
 
 function teardown() {
@@ -36,17 +36,17 @@ describe('session-lock', () => {
   afterEach(teardown)
 
   describe('isPidAlive', () => {
-    it('returns true for the current process', () => {
+    it('returns true for the current process', async () => {
       assert.equal(isPidAlive(process.pid), true)
     })
 
-    it('returns false for a non-existent pid', () => {
+    it('returns false for a non-existent pid', async () => {
       // Pid 0 is never a valid kill target in this context; use a very high
       // pid that is almost certainly not running.
       assert.equal(isPidAlive(999_999), false)
     })
 
-    it('returns false for null / undefined / invalid', () => {
+    it('returns false for null / undefined / invalid', async () => {
       assert.equal(isPidAlive(null), false)
       assert.equal(isPidAlive(undefined), false)
       assert.equal(isPidAlive(0), false)
@@ -54,14 +54,14 @@ describe('session-lock', () => {
   })
 
   describe('acquireSessionLock', () => {
-    it('acquires a lock for a new session', () => {
-      const result = acquireSessionLock('sess-a', { pid: 1000, port: 9477 }, tmpHome)
+    it('acquires a lock for a new session', async () => {
+      const result = await acquireSessionLock('sess-a', { pid: 1000, port: 9477 }, tmpHome)
       assert.equal(result.acquired, true)
       assert.equal(result.holder, undefined)
     })
 
-    it('writes pid + port + timestamp to the lock file', () => {
-      acquireSessionLock('sess-b', { pid: 2000, port: 9478 }, tmpHome)
+    it('writes pid + port + timestamp to the lock file', async () => {
+      await acquireSessionLock('sess-b', { pid: 2000, port: 9478 }, tmpHome)
       const dir = `${tmpHome}/.nanocode/session-locks`
       const raw = readFileSync(`${dir}/sess-b.lock`, 'utf8')
       const obj = JSON.parse(raw)
@@ -71,182 +71,182 @@ describe('session-lock', () => {
       assert.ok(obj.timestamp > 0)
     })
 
-    it('is re-entrant for the same pid + port', () => {
-      acquireSessionLock('sess-c', { pid: 3000, port: 9477 }, tmpHome)
-      const result = acquireSessionLock('sess-c', { pid: 3000, port: 9477 }, tmpHome)
+    it('is re-entrant for the same pid + port', async () => {
+      await acquireSessionLock('sess-c', { pid: 3000, port: 9477 }, tmpHome)
+      const result = await acquireSessionLock('sess-c', { pid: 3000, port: 9477 }, tmpHome)
       assert.equal(result.acquired, true)
     })
 
-    it('rejects a second acquire when another live process holds the lock', () => {
+    it('rejects a second acquire when another live process holds the lock', async () => {
       // Server A (pid=our pid, port 9477) acquires.
-      acquireSessionLock('sess-e', { pid: process.pid, port: 9477 }, tmpHome)
+      await acquireSessionLock('sess-e', { pid: process.pid, port: 9477 }, tmpHome)
       // Server B (same pid — alive, port 9478) tries to acquire.
       // Since pid is alive but port differs, it's a different holder → reject.
-      const result = acquireSessionLock('sess-e', { pid: process.pid, port: 9478 }, tmpHome)
+      const result = await acquireSessionLock('sess-e', { pid: process.pid, port: 9478 }, tmpHome)
       assert.equal(result.acquired, false)
       assert.ok(result.holder)
       assert.equal(result.holder.pid, process.pid)
       assert.equal(result.holder.port, 9477)
     })
 
-    it('steals a stale lock when the holder pid is dead', () => {
+    it('steals a stale lock when the holder pid is dead', async () => {
       // "Dead" process acquires (pid 999999 is not alive).
-      acquireSessionLock('sess-f', { pid: 999_999, port: 9477 }, tmpHome)
+      await acquireSessionLock('sess-f', { pid: 999_999, port: 9477 }, tmpHome)
       // New live process steals.
-      const result = acquireSessionLock('sess-f', { pid: process.pid, port: 9478 }, tmpHome)
+      const result = await acquireSessionLock('sess-f', { pid: process.pid, port: 9478 }, tmpHome)
       assert.equal(result.acquired, true)
       assert.equal(result.holder, undefined)
     })
 
-    it('overwrites a corrupt lock file', () => {
+    it('overwrites a corrupt lock file', async () => {
       const dir = `${tmpHome}/.nanocode/session-locks`
       mkdirSync(dir, { recursive: true })
       writeFileSync(`${dir}/sess-g.lock`, 'not-json{')
-      const result = acquireSessionLock('sess-g', { pid: 1000, port: 9477 }, tmpHome)
+      const result = await acquireSessionLock('sess-g', { pid: 1000, port: 9477 }, tmpHome)
       assert.equal(result.acquired, true)
     })
   })
 
   describe('releaseSessionLock', () => {
-    it('releases a lock held by the caller', () => {
-      acquireSessionLock('sess-h', { pid: 1000, port: 9477 }, tmpHome)
-      const ok = releaseSessionLock('sess-h', { pid: 1000, port: 9477 }, tmpHome)
+    it('releases a lock held by the caller', async () => {
+      await acquireSessionLock('sess-h', { pid: 1000, port: 9477 }, tmpHome)
+      const ok = await releaseSessionLock('sess-h', { pid: 1000, port: 9477 }, tmpHome)
       assert.equal(ok, true)
       assert.equal(existsSync(`${tmpHome}/.nanocode/session-locks/sess-h.lock`), false)
     })
 
-    it('refuses to release a lock held by another process', () => {
-      acquireSessionLock('sess-i', { pid: 1000, port: 9477 }, tmpHome)
-      const ok = releaseSessionLock('sess-i', { pid: 2000, port: 9478 }, tmpHome)
+    it('refuses to release a lock held by another process', async () => {
+      await acquireSessionLock('sess-i', { pid: 1000, port: 9477 }, tmpHome)
+      const ok = await releaseSessionLock('sess-i', { pid: 2000, port: 9478 }, tmpHome)
       assert.equal(ok, false)
       assert.equal(existsSync(`${tmpHome}/.nanocode/session-locks/sess-i.lock`), true)
     })
 
-    it('returns false when no lock exists', () => {
-      const ok = releaseSessionLock('sess-j', { pid: 1000, port: 9477 }, tmpHome)
+    it('returns false when no lock exists', async () => {
+      const ok = await releaseSessionLock('sess-j', { pid: 1000, port: 9477 }, tmpHome)
       assert.equal(ok, false)
     })
   })
 
   describe('getLockHolder', () => {
-    it('returns null when no lock exists', () => {
-      assert.equal(getLockHolder('sess-k', tmpHome), null)
+    it('returns null when no lock exists', async () => {
+      assert.equal(await getLockHolder('sess-k', tmpHome), null)
     })
 
-    it('returns the holder when a live process holds the lock', () => {
-      acquireSessionLock('sess-l', { pid: process.pid, port: 9477 }, tmpHome)
-      const holder = getLockHolder('sess-l', tmpHome)
+    it('returns the holder when a live process holds the lock', async () => {
+      await acquireSessionLock('sess-l', { pid: process.pid, port: 9477 }, tmpHome)
+      const holder = await getLockHolder('sess-l', tmpHome)
       assert.ok(holder)
       assert.equal(holder.pid, process.pid)
       assert.equal(holder.port, 9477)
     })
 
-    it('returns null and cleans up a stale lock', () => {
-      acquireSessionLock('sess-m', { pid: 999_999, port: 9477 }, tmpHome)
-      const holder = getLockHolder('sess-m', tmpHome)
+    it('returns null and cleans up a stale lock', async () => {
+      await acquireSessionLock('sess-m', { pid: 999_999, port: 9477 }, tmpHome)
+      const holder = await getLockHolder('sess-m', tmpHome)
       assert.equal(holder, null)
       assert.equal(existsSync(`${tmpHome}/.nanocode/session-locks/sess-m.lock`), false)
     })
   })
 
   describe('isLockHeldByOther', () => {
-    it('returns null when no lock exists', () => {
-      const result = isLockHeldByOther('sess-n', { pid: 1000, port: 9477 }, tmpHome)
+    it('returns null when no lock exists', async () => {
+      const result = await isLockHeldByOther('sess-n', { pid: 1000, port: 9477 }, tmpHome)
       assert.equal(result, null)
     })
 
-    it('returns null when we hold the lock', () => {
-      acquireSessionLock('sess-o', { pid: 1000, port: 9477 }, tmpHome)
-      const result = isLockHeldByOther('sess-o', { pid: 1000, port: 9477 }, tmpHome)
+    it('returns null when we hold the lock', async () => {
+      await acquireSessionLock('sess-o', { pid: 1000, port: 9477 }, tmpHome)
+      const result = await isLockHeldByOther('sess-o', { pid: 1000, port: 9477 }, tmpHome)
       assert.equal(result, null)
     })
 
-    it('returns the holder when another live process holds the lock', () => {
-      acquireSessionLock('sess-p', { pid: process.pid, port: 9477 }, tmpHome)
-      const result = isLockHeldByOther('sess-p', { pid: process.pid, port: 9478 }, tmpHome)
+    it('returns the holder when another live process holds the lock', async () => {
+      await acquireSessionLock('sess-p', { pid: process.pid, port: 9477 }, tmpHome)
+      const result = await isLockHeldByOther('sess-p', { pid: process.pid, port: 9478 }, tmpHome)
       assert.ok(result)
       assert.equal(result.pid, process.pid)
       assert.equal(result.port, 9477)
     })
 
-    it('returns null when the lock is stale', () => {
-      acquireSessionLock('sess-q', { pid: 999_999, port: 9477 }, tmpHome)
-      const result = isLockHeldByOther('sess-q', { pid: process.pid, port: 9478 }, tmpHome)
+    it('returns null when the lock is stale', async () => {
+      await acquireSessionLock('sess-q', { pid: 999_999, port: 9477 }, tmpHome)
+      const result = await isLockHeldByOther('sess-q', { pid: process.pid, port: 9478 }, tmpHome)
       assert.equal(result, null)
     })
   })
 
   describe('acquire → release → acquire cycle', () => {
-    it('allows a new process to acquire after the old one releases', () => {
-      acquireSessionLock('sess-r', { pid: 1000, port: 9477 }, tmpHome)
-      releaseSessionLock('sess-r', { pid: 1000, port: 9477 }, tmpHome)
-      const result = acquireSessionLock('sess-r', { pid: 2000, port: 9478 }, tmpHome)
+    it('allows a new process to acquire after the old one releases', async () => {
+      await acquireSessionLock('sess-r', { pid: 1000, port: 9477 }, tmpHome)
+      await releaseSessionLock('sess-r', { pid: 1000, port: 9477 }, tmpHome)
+      const result = await acquireSessionLock('sess-r', { pid: 2000, port: 9478 }, tmpHome)
       assert.equal(result.acquired, true)
     })
 
-    it('supports two servers with different sessions (no conflict)', () => {
-      const a = acquireSessionLock('sess-s1', { pid: 1000, port: 9477 }, tmpHome)
-      const b = acquireSessionLock('sess-s2', { pid: 2000, port: 9478 }, tmpHome)
+    it('supports two servers with different sessions (no conflict)', async () => {
+      const a = await acquireSessionLock('sess-s1', { pid: 1000, port: 9477 }, tmpHome)
+      const b = await acquireSessionLock('sess-s2', { pid: 2000, port: 9478 }, tmpHome)
       assert.equal(a.acquired, true)
       assert.equal(b.acquired, true)
     })
   })
 
   describe('stealSessionLock', () => {
-    it('steals a lock held by another live process (unconditional overwrite)', () => {
+    it('steals a lock held by another live process (unconditional overwrite)', async () => {
       // Server A (live pid, port 9477) acquires.
-      acquireSessionLock('steal-a', { pid: process.pid, port: 9477 }, tmpHome)
+      await acquireSessionLock('steal-a', { pid: process.pid, port: 9477 }, tmpHome)
       // Server B (same pid, port 9478) steals — must succeed even though A is alive.
-      const result = stealSessionLock('steal-a', { pid: process.pid, port: 9478 }, tmpHome)
+      const result = await stealSessionLock('steal-a', { pid: process.pid, port: 9478 }, tmpHome)
       assert.equal(result.acquired, true)
       assert.ok(result.holder, 'steal must report the previous holder')
       assert.equal(result.holder.pid, process.pid)
       assert.equal(result.holder.port, 9477)
       // Lock file now reflects B.
-      const holder = getLockHolder('steal-a', tmpHome)
+      const holder = await getLockHolder('steal-a', tmpHome)
       assert.equal(holder.port, 9478)
     })
 
-    it('is a no-op re-acquire when we already hold the lock', () => {
-      acquireSessionLock('steal-b', { pid: 1000, port: 9477 }, tmpHome)
-      const result = stealSessionLock('steal-b', { pid: 1000, port: 9477 }, tmpHome)
+    it('is a no-op re-acquire when we already hold the lock', async () => {
+      await acquireSessionLock('steal-b', { pid: 1000, port: 9477 }, tmpHome)
+      const result = await stealSessionLock('steal-b', { pid: 1000, port: 9477 }, tmpHome)
       assert.equal(result.acquired, true)
       assert.equal(result.holder, null, 're-entrant steal reports null previous holder')
     })
 
-    it('steals a lock with no previous holder (absent lock file)', () => {
-      const result = stealSessionLock('steal-c', { pid: process.pid, port: 9477 }, tmpHome)
+    it('steals a lock with no previous holder (absent lock file)', async () => {
+      const result = await stealSessionLock('steal-c', { pid: process.pid, port: 9477 }, tmpHome)
       assert.equal(result.acquired, true)
       assert.equal(result.holder, null)
-      const holder = getLockHolder('steal-c', tmpHome)
+      const holder = await getLockHolder('steal-c', tmpHome)
       assert.equal(holder.port, 9477)
     })
 
-    it('overwrites a stale lock and reports the dead holder', () => {
-      acquireSessionLock('steal-d', { pid: 999_999, port: 9477 }, tmpHome)
-      const result = stealSessionLock('steal-d', { pid: process.pid, port: 9478 }, tmpHome)
+    it('overwrites a stale lock and reports the dead holder', async () => {
+      await acquireSessionLock('steal-d', { pid: 999_999, port: 9477 }, tmpHome)
+      const result = await stealSessionLock('steal-d', { pid: process.pid, port: 9478 }, tmpHome)
       assert.equal(result.acquired, true)
       assert.ok(result.holder, 'steal reports the stale (dead-pid) previous holder')
       assert.equal(result.holder.pid, 999_999)
     })
 
-    it('overwrites a corrupt lock file', () => {
+    it('overwrites a corrupt lock file', async () => {
       const dir = `${tmpHome}/.nanocode/session-locks`
       mkdirSync(dir, { recursive: true })
       writeFileSync(`${dir}/steal-e.lock`, 'not-json{')
-      const result = stealSessionLock('steal-e', { pid: process.pid, port: 9477 }, tmpHome)
+      const result = await stealSessionLock('steal-e', { pid: process.pid, port: 9477 }, tmpHome)
       assert.equal(result.acquired, true)
-      const holder = getLockHolder('steal-e', tmpHome)
+      const holder = await getLockHolder('steal-e', tmpHome)
       assert.equal(holder.port, 9477)
     })
 
-    it('differs from acquireSessionLock: acquire rejects, steal succeeds', () => {
-      acquireSessionLock('steal-f', { pid: process.pid, port: 9477 }, tmpHome)
+    it('differs from acquireSessionLock: acquire rejects, steal succeeds', async () => {
+      await acquireSessionLock('steal-f', { pid: process.pid, port: 9477 }, tmpHome)
       // acquire must fail (held by another live process on a different port).
-      const acq = acquireSessionLock('steal-f', { pid: process.pid, port: 9478 }, tmpHome)
+      const acq = await acquireSessionLock('steal-f', { pid: process.pid, port: 9478 }, tmpHome)
       assert.equal(acq.acquired, false)
       // steal must succeed.
-      const stl = stealSessionLock('steal-f', { pid: process.pid, port: 9478 }, tmpHome)
+      const stl = await stealSessionLock('steal-f', { pid: process.pid, port: 9478 }, tmpHome)
       assert.equal(stl.acquired, true)
     })
   })

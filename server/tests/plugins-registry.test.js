@@ -260,4 +260,20 @@ describe('plugins-registry (MES-13740 需求6)', () => {
       for (const perm of p.permissions) assert.equal(typeof perm, 'string')
     }
   })
+
+  it('linear-mobile-push (owner 2026-11-22 point 4): split out of notify, default off, togglable', () => {
+    const m = builtinPlugin('linear-mobile-push')
+    assert.ok(m, 'linear-mobile-push plugin must be registered')
+    assert.equal(m.group, 'monitor')
+    assert.equal(m.tab, undefined, 'settings-only, no tab')
+    assert.equal(m.defaultOn, undefined, 'must default OFF')
+    assert.equal(m.togglable, true, 'needs a real UI on/off switch despite having no tab')
+    assert.ok(m.permissions.includes('personal.linear'))
+  })
+
+  it('notify no longer declares a settings-only override for Linear (split, not duplicated)', () => {
+    const notify = builtinPlugin('notify')
+    assert.ok(notify)
+    assert.ok(!notify.permissions.includes('personal.linear'), 'Linear access belongs only to linear-mobile-push now')
+  })
 })

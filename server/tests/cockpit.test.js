@@ -2,10 +2,13 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   COCKPIT_MODULES, normalizeLayout, serializeLayout, isModuleOn, setModuleOn, moveModule, modulesIn,
-  moduleByPlugin, normalizeView, normalizeMainView, startsExpanded, eventGroups, buildSwimlanes,
-  swimlaneRows, layoutGraph, quoteText, spanWindow, normalizeSpan,
+  moduleByPlugin, normalizePage, normalizeMainView, startsExpanded, eventGroups, buildSwimlanes,
+  swimlaneRows, quoteText, spanWindow, normalizeSpan, ganttColumns, buildFeed, carPoints, pointId,
+  waitingEvents, GANTT_MIN_PLOT_PX,
 } from '../../public/js/cockpit-model.js'
 import { layoutGantt, ganttWindow } from '../../public/js/command-center-layout.js'
+import { ganttViewHtml, feedHtml } from '../../public/js/cockpit-views.js'
+import { layoutQuotaCurve, quotaLevel, quotaHoverHtml } from '../../public/js/cockpit-quota-curve.js'
 
 const IDS = COCKPIT_MODULES.map((m) => m.id)
 
@@ -72,13 +75,13 @@ describe('cockpit layout setting', () => {
     for (const m of COCKPIT_MODULES) assert.equal(moduleByPlugin(m.plugin), m)
     assert.equal(moduleByPlugin('sessions'), null)
   })
-  it('per-device memory normalises to the cockpit / list defaults', () => {
+  it('per-device memory normalises to the cockpit / home defaults', () => {
     assert.equal(normalizeMainView(null), 'cockpit')
     assert.equal(normalizeMainView('workspace'), 'workspace')
     assert.equal(normalizeMainView('<x>'), 'cockpit')
-    assert.equal(normalizeView('gantt'), 'gantt')
-    assert.equal(normalizeView('graph'), 'graph')
-    assert.equal(normalizeView(''), 'list')
+    assert.equal(normalizePage('quota'), 'quota')
+    assert.equal(normalizePage('gantt'), 'home') // the old list / gantt / graph view memory is not a page
+    assert.equal(normalizePage(null), 'home')
   })
 })
 
@@ -100,6 +103,18 @@ describe('cockpit big events', () => {
     assert.equal(eventGroups(d).at(-1).key, '_none')
     assert.deepEqual(eventGroups(null), [])
     assert.deepEqual(eventGroups({ configured: false }), [])
+  })
+  // dailycat_0955: daily/misc are their own lanes (between tracker events and unassigned),
+  // shown only when they actually carry a car — unlike unassigned they never show empty.
+  it('daily/misc show as their own lanes (only when non-empty), ahead of unassigned, not inside it', () => {
+    const d = data()
+    d.daily = { key: '_daily', title: '每日', cars: [car('d1', 'done', '2026-11-21T07:00:00Z', '2026-11-21T07:30:00Z')] }
+    d.misc = { key: '_misc', title: '杂项', cars: [] }
+    assert.deepEqual(eventGroups(d).map((e) => e.key), ['E-1', 'E-2', 'E-3', '_daily', '_none'])
+    const dailyLane = eventGroups(d).find((e) => e.key === '_daily')
+    assert.equal(dailyLane.unassigned, undefined)
+    d.misc.cars = [car('m1', 'done', '2026-11-21T07:00:00Z', '2026-11-21T07:30:00Z')]
+    assert.deepEqual(eventGroups(d).map((e) => e.key), ['E-1', 'E-2', 'E-3', '_daily', '_misc', '_none'])
   })
 })
 
@@ -163,33 +178,149 @@ describe('cockpit gantt window', () => {
   })
 })
 
-describe('cockpit node graph', () => {
-  it('requires an explicit width', () => {
-    assert.throws(() => layoutGraph([], {}), /width/)
-    assert.throws(() => layoutGraph([], { width: 0 }), /width/)
-  })
-  it('every coordinate is finite and inside the canvas; urgent cars first; overflow counted', () => {
-    const many = Array.from({ length: 30 }, (_, i) => car(`c${i}`, i === 29 ? 'blocked' : 'done', '2026-11-21T10:00:00Z', '2026-11-21T11:00:00Z'))
-    const groups = [...eventGroups(data()), { key: 'BIG', cars: many, carsAvailable: true, carCount: 30 }]
-    for (const width of [390, 800, 1440]) {
-      const g = layoutGraph(groups, { width, cell: 220, maxSatellites: 16 })
-      assert.ok(Number.isFinite(g.height) && g.height > 0)
-      for (const n of g.nodes) {
-        for (const p of [n, ...n.satellites]) {
-          assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y))
-          assert.ok(p.x >= 0 && p.x <= width && p.y >= 0 && p.y <= g.height, `${width}: ${p.x},${p.y}`)
-        }
-      }
-      const big = g.nodes.find((n) => n.event.key === 'BIG')
-      assert.equal(big.satellites.length, 16)
-      assert.equal(big.hidden, 14)
-      assert.equal(big.satellites[0].car.state, 'blocked')
+describe('cockpit gantt: one time → x conversion for axis, bars, points, now, eta', () => {
+  const now = Date.parse('2026-11-21T14:00:00Z')
+  const pt = (t, label) => ({ t, kind: 'milestone', label })
+  function d2() {
+    const d = data()
+    d.events[1].cars[0] = car('b1', 'running', '2026-11-21T09:00:00Z', null, { eta: '2026-11-21T16:00:00Z', points: [pt('2026-11-21T10:00:00Z', 'ten'), pt('2026-11-21T14:00:00Z', 'at now')] })
+    return d
+  }
+  it('columns: label + plot widths are the only two numbers; narrow screens keep a minimum plot and scroll', () => {
+    for (const w of [390, 820, 1180, 1440]) {
+      const c = ganttColumns(w)
+      assert.ok(c.plotW >= GANTT_MIN_PLOT_PX)
+      if (!c.scroll) assert.ok(c.labelPx + c.plotW <= w)
     }
+    assert.equal(ganttColumns(390).scroll, true)
+    assert.equal(ganttColumns(1440).scroll, false)
   })
-  it('progress ring: fraction of the event progress, null when there is none', () => {
-    const g = layoutGraph(eventGroups(data()), { width: 800 })
-    assert.equal(g.nodes.find((n) => n.event.key === 'E-2').progress, 0.25)
-    assert.equal(g.nodes.find((n) => n.event.key === 'E-1').progress, null)
+  it('a point at "now" sits exactly on the now line; a point at a tick sits on that tick; bars start at their start time', () => {
+    const rows = swimlaneRows(buildSwimlanes(d2(), () => true))
+    const win = { from: Date.parse('2026-11-21T08:00:00Z'), to: Date.parse('2026-11-21T17:00:00Z') }
+    const lay = layoutGantt(rows, { width: 900, from: win.from, to: win.to, now })
+    const carRow = lay.rows[rows.findIndex((r) => r.id === 'b1')]
+    const atNow = carRow.points.find((p) => p.label === 'at now')
+    assert.equal(atNow.x, lay.nowX)
+    const tick10 = lay.ticks.find((tk) => tk.t === Date.parse('2026-11-21T10:00:00Z'))
+    assert.ok(tick10, 'a 10:00 tick exists')
+    assert.equal(carRow.points.find((p) => p.label === 'ten').x, tick10.x)
+    const tick9 = lay.ticks.find((tk) => tk.t === Date.parse('2026-11-21T09:00:00Z'))
+    assert.equal(carRow.x, tick9.x)
+    // the lane summary row shows the same milestone at the same x (same pid)
+    const laneRow = lay.rows[rows.findIndex((r) => r.kind === 'lane' && r.lane.key === 'E-2')]
+    const lanePt = laneRow.points.find((p) => p.pid === pointId('b1', 1))
+    assert.equal(lanePt.x, atNow.x)
+  })
+  it('expected finish: dashed tail from the bar end to eta, also on the lane; window grows to include it', () => {
+    const rows = swimlaneRows(buildSwimlanes(d2(), () => true))
+    const win = ganttWindow(rows, now)
+    assert.ok(win.to >= Date.parse('2026-11-21T16:00:00Z'))
+    const lay = layoutGantt(rows, { width: 900, from: win.from, to: win.to, now })
+    const carRow = lay.rows[rows.findIndex((r) => r.id === 'b1')]
+    assert.ok(carRow.etaX > carRow.x + carRow.w)
+    const laneRow = lay.rows[rows.findIndex((r) => r.kind === 'lane' && r.lane.key === 'E-2')]
+    assert.equal(laneRow.etaX, carRow.etaX)
+    const done = lay.rows[rows.findIndex((r) => r.id === 'a1')]
+    assert.equal(done.etaX, null)
+  })
+  it('rendered HTML: axis now label, now line and point all use lay.nowX (offset by the one label column)', () => {
+    const d = d2()
+    const html = ganttViewHtml(d, { isExpanded: () => true, openCar: null, span: 0, now }, 1440)
+    const { labelPx } = ganttColumns(1440)
+    const nowLabel = Number(/class="cc-now" style="left:([\d.]+)px"/.exec(html)[1])
+    const nowLine = Number(/class="cc-now-line" style="left:([\d.]+)px"/.exec(html)[1])
+    assert.ok(Math.abs(nowLine - labelPx - nowLabel) < 0.11, `${nowLine} - ${labelPx} vs ${nowLabel}`)
+    const pts = [...html.matchAll(/class="cc-pt cc-pt-milestone" style="left:([\d.]+)px" data-act="pt" data-pid="b1#1"/g)].map((m) => Number(m[1]))
+    assert.equal(pts.length, 2) // lane summary + car row
+    for (const x of pts) assert.ok(Math.abs(x - nowLabel) < 0.11)
+    // every row is label + plot of the same two widths
+    const widths = new Set([...html.matchAll(/class="cc-gtrack" style="width:(\d+)px"/g)].map((m) => m[1]))
+    assert.equal(widths.size, 1)
+  })
+})
+
+describe('cockpit 大事记流 (milestone feed)', () => {
+  function feedData() {
+    const d = data()
+    d.events[0].cars[0].points = [{ t: '2026-11-20T23:30:00Z', kind: 'accepted', label: 'late' }, { t: '2026-11-21T10:30:00Z', kind: 'milestone', label: 'half' }]
+    d.events[1].cars[0].points = [{ t: '2026-11-21T11:00:00Z', kind: 'blocked', label: 'stuck' }]
+    return d
+  }
+  it('newest first, grouped by day then event; items carry the gantt pid', () => {
+    const days = buildFeed(feedData())
+    const flat = days.flatMap((dd) => dd.events.flatMap((g) => g.items.map((i) => i.label)))
+    assert.deepEqual(flat, ['stuck', 'half', 'late'])
+    assert.equal(days[0].events[0].key, 'E-2')
+    assert.equal(days[0].events[0].items[0].pid, pointId('b1', 0))
+    const items = days.flatMap((dd) => dd.events.flatMap((g) => g.items))
+    assert.equal(items.find((i) => i.label === 'late').pid, pointId('a1', 0))
+    for (const dd of days) assert.match(dd.day, /^\d{4}-\d{2}-\d{2}$/)
+  })
+  it('window + limit keep the newest', () => {
+    const d = feedData()
+    assert.deepEqual(buildFeed(d, { fromMs: Date.parse('2026-11-21T10:45:00Z') }).flatMap((x) => x.events.flatMap((g) => g.items.map((i) => i.label))), ['stuck'])
+    assert.equal(buildFeed(d, { limit: 2 }).flatMap((x) => x.events.flatMap((g) => g.items)).length, 2)
+    assert.deepEqual(buildFeed(null), [])
+  })
+  it('feed item and gantt point share the pid; the selected one is marked', () => {
+    const d = feedData()
+    const html = feedHtml(buildFeed(d), d, pointId('a1', 1))
+    assert.match(html, /class="ck-fi ck-fi-step sel" data-act="pt" data-pid="a1#1"/)
+    assert.equal(carPoints(d.events[0].cars[0])[1].pid, 'a1#1')
+  })
+  it('等你 chips: events with someone waiting, most first', () => {
+    const d = data()
+    d.events[2].waitingCount = 3
+    assert.deepEqual(waitingEvents(d).map((e) => e.key), ['E-3', 'E-2'])
+  })
+})
+
+describe('cockpit quota curve layout', () => {
+  const series = {
+    from: '2026-11-15T13:00:00.000Z',
+    to: '2026-11-22T13:00:00.000Z',
+    pools: ['T1', 'T2'],
+    points: [
+      { t: '2026-11-16T00:00:00.000Z', total7d: 0.5, total5h: 1.5, pools: { T1: { r7: 10, r5: 80 }, T2: { r7: 40, r5: 70 } } },
+      { t: '2026-11-17T00:00:00.000Z', total7d: 1.4, total5h: 1.8, pools: { T1: { r7: 100, r5: 90 }, T2: { r7: 40, r5: 90 } } },
+      { t: '2026-11-22T13:00:00.000Z', total7d: 1.0, total5h: 1.9, pools: { T1: { r7: 60, r5: 95 }, T2: { r7: 40, r5: 95 } } },
+    ],
+    resets: [{ t: '2026-11-17T00:00:00.000Z', pool: 'T1', beforeR7: 10, afterR7: 100 }],
+    upcoming: [{ pool: 'T2', kind: '5h', at: '2026-11-22T15:00:00.000Z', gainPct: 5 }, { pool: 'T2', kind: '7d', at: '2026-11-24T13:00:00.000Z', gainPct: 60 }],
+  }
+  it('needs explicit size and valid times', () => {
+    assert.throws(() => layoutQuotaCurve(series, {}), /width/)
+    assert.throws(() => layoutQuotaCurve({ ...series, to: 'x' }, { width: 100, height: 50 }), /from\/to/)
+  })
+  it('now sits where the past ends (7 d back, 7 d ahead → the middle); spike on its reset point; 0 pools at the bottom', () => {
+    const lay = layoutQuotaCurve(series, { width: 700, height: 100, pad: 0 })
+    assert.equal(lay.nowX, 350)
+    assert.equal(lay.spikes[0].x, lay.xs[1])
+    assert.equal(lay.spikes[0].pool, 'T1')
+    assert.equal(lay.spikes[0].y, 100 - (1.4 / 2) * 100)
+    assert.equal(lay.totalNow, 1.0)
+  })
+  it('future: the 7-day total steps up at the next weekly reset by what that pool uses now; 5h resets are only marks', () => {
+    const lay = layoutQuotaCurve(series, { width: 700, height: 100, pad: 0 })
+    const m7 = lay.future.marks.find((m) => m.kind === '7d')
+    assert.ok(Math.abs(m7.x - (350 + 100)) < 1e-9) // 2 of the 7 future days
+    assert.ok(Math.abs(m7.y - (100 - (1.6 / 2) * 100)) < 1e-9)
+    assert.ok(lay.future.marks.some((m) => m.kind === '5h'))
+    assert.match(lay.future.path, /^M350\.0 50\.0 L450\.0 50\.0 L450\.0 20\.0 L700\.0 20\.0$/)
+  })
+  it('colour only when low (share of all pools left)', () => {
+    assert.equal(quotaLevel(3.4, 6), 'ok')
+    assert.equal(quotaLevel(1.2, 6), 'warn')
+    assert.equal(quotaLevel(0.5, 6), 'crit')
+    assert.equal(quotaLevel(null, 6), 'none')
+  })
+  it('hover read-out: nearest snapshot, every pool, nothing after now', () => {
+    const lay = layoutQuotaCurve(series, { width: 700, height: 100 })
+    const hit = quotaHoverHtml(series, lay, lay.xs[1] + 3)
+    assert.equal(hit.x, lay.xs[1])
+    assert.match(hit.html, /T1<\/td><td>100%/)
+    assert.equal(quotaHoverHtml(series, lay, 600), null)
   })
 })
 

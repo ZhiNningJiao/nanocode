@@ -1,0 +1,30 @@
+{
+  "_comment": "Copy to config/dispatch.local.json (gitignored) for tools/dispatch/dispatch.mjs. hostNames = machines (os.hostname()) allowed to really dispatch / steer; hostLabel = how task books name that machine. commandCenterConfig = the command-center config this reuses for the tracker root, graphqlUrl, quota readings and the cars export (one source; relative = repo root). lines = alias → parent issue + team for new child issues; the parent is re-checked against the tracker on every dispatch, so when the owner re-parents issues only this alias table may need an edit. pools: configDir per pool; overage = paid overage on (cars keep running past caps; guardTagsFile gets the tag appended before launch); secretary = never auto-picked; env = extra env for cars on that pool. poolRules override the defaults in tools/dispatch/pool-pick.mjs. backfill = only for tools/dispatch/backfill-issue-map.mjs.",
+  "hostNames": ["car-host"],
+  "hostLabel": "car-host",
+  "steerSsh": "car-host.example.invalid",
+  "commandCenterConfig": "config/command-center.local.json",
+  "paths": {
+    "workRoot": "/path/to/work",
+    "dispatchScript": "/path/to/dispatch.sh",
+    "steerScript": "/path/to/steer.sh",
+    "sharedCheckouts": "/path/to/code/*",
+    "boardRoot": "/path/to/boards",
+    "issueMap": "/path/to/work/car_issue_map.jsonl"
+  },
+  "lines": {
+    "ik": { "parent": "TEAM-13", "team": "ALGO", "label": "IK" },
+    "tools": { "parent": "TEAM-17", "team": "TEAM", "label": "tools" }
+  },
+  "pools": {
+    "P1": { "configDir": "/path/to/pool1", "overage": true, "guardTagsFile": "/path/to/work/p1_guard_tags.txt" },
+    "P2": { "configDir": "/path/to/pool2" },
+    "P5": { "configDir": "/path/to/pool5", "secretary": true, "env": { "EXAMPLE_POOL_FLAG": "1" } }
+  },
+  "poolRules": { "weeklyCapPct": 97, "fiveHourCapPct": 90, "heavyFiveHourPct": 60, "heavyResetGraceMin": 15, "heavyMaxCars": 3, "maxReadingAgeSec": 2700 },
+  "dispatchTimeoutSec": 280,
+  "backfill": {
+    "maintenancePrefixes": { "nightly_job_": "nightly-job" },
+    "tagPrefixLines": { "ikctrl": "ik" }
+  }
+}

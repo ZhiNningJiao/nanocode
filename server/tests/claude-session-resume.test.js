@@ -58,6 +58,16 @@ function makeMockWs(attachMsg) {
   return ws
 }
 
+async function waitForCs(get, timeoutMs = 3000) {
+  const end = Date.now() + timeoutMs
+  while (Date.now() < end) {
+    const cs = get()
+    if (cs) return cs
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  return get()
+}
+
 function writeJsonlEvents(projectDir, sessionId, events) {
   const sessionsDir = projectDir
   mkdirSync(sessionsDir, { recursive: true })
@@ -78,8 +88,8 @@ function writeJsonlEvents(projectDir, sessionId, events) {
 function makeController({ tabClaudeSessionId, mainSessionId, hasSeedHistory = false, withDiskHistory = null, tabSkipAutoResume = false }) {
   const projectId = 'proj-1'
   const tabId = 'tab-1'
-  const projectCwd = mkdtempSync('/tmp/nanocode-resume-')
-  const home = mkdtempSync('/tmp/nanocode-home-')
+  const projectCwd = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-resume-')
+  const home = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-home-')
 
   let diskSessionId = null
   if (withDiskHistory) {
@@ -141,8 +151,9 @@ function makeController({ tabClaudeSessionId, mainSessionId, hasSeedHistory = fa
     return new Promise((resolve) => {
       const ws = makeMockWs({ type: 'attach', projectId, tabId, sessionType: 'bash' })
       controller.handleTerminalWs(ws)
-      // Wait for attach to process (setImmediate fires the 'message' event)
-      setImmediate(() => resolve(getCs()))
+      // The attach creates the cs after an async jsonl read (disk recovery is
+      // async so a slow home cannot freeze the server): wait until it exists.
+      resolve(waitForCs(getCs))
     })
   }
 
@@ -397,8 +408,8 @@ describe('claude session auto-recovery — cross-instance', () => {
   function makeSharedResources({ tabClaudeSessionId, mainSessionId, withDiskHistory }) {
     const projectId = 'proj-shared'
     const tabId = 'tab-shared'
-    const projectCwd = mkdtempSync('/tmp/nanocode-resume-')
-    const home = mkdtempSync('/tmp/nanocode-home-')
+    const projectCwd = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-resume-')
+    const home = mkdtempSync((process.env.TMPDIR || '/tmp') + '/nanocode-home-')
 
     if (withDiskHistory) {
       const projectDir = cwdToClaudeProjectDir(home, projectCwd)
@@ -448,7 +459,7 @@ describe('claude session auto-recovery — cross-instance', () => {
       return new Promise((resolve) => {
         const ws = makeMockWs({ type: 'attach', projectId, tabId, sessionType: 'bash' })
         controller.handleTerminalWs(ws)
-        setImmediate(() => resolve(controller.claudeSessions.get(`${projectId}:claude:${tabId}`)))
+        resolve(waitForCs(() => controller.claudeSessions.get(`${projectId}:claude:${tabId}`)))
       })
     }
 

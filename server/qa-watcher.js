@@ -5,8 +5,8 @@
  *   {repo}/evidence.md → aggregate latest entry to activity-feed.json + WS broadcast
  */
 
-import { watchFile } from 'node:fs'
-import { readFile, writeFile, appendFile } from 'node:fs/promises'
+import { timedFs, statSafe } from '../terminal/bounded-scan.js'
+const { readFile, writeFile, appendFile } = timedFs // home fs: slot budget + slow-call log
 import { homedir } from 'node:os'
 import { exec } from 'node:child_process'
 import path from 'node:path'
@@ -348,21 +348,43 @@ export function startQaWatcher(broadcast) {
   readNewJsonlEntries(QA_SIGNAL_PATH, 'qa')
   readNewJsonlEntries(DONE_SIGNAL_PATH, 'done')
 
-  // Watch signal files with poll-based watchFile (works on CephFS/NFS). The
-  // callback can't be awaited (watchFile doesn't support async callbacks), so
-  // each handler is fired-and-forgotten with a .catch guard against an
-  // unhandled rejection — the handlers themselves already try/catch their IO.
-  const opts = { persistent: true, interval: POLL_INTERVAL_MS }
-
-  watchFile(QA_SIGNAL_PATH, opts, () => { handleQaEntries(broadcast).catch((e) => console.warn('[watcher] qa handler:', e.message)) })
+  // Poll the signal files (stat polling works on CephFS/NFS/sshfs). Each
+  // handler is fired-and-forgotten with a .catch guard against an unhandled
+  // rejection — the handlers themselves already try/catch their IO.
+  pollFile(QA_SIGNAL_PATH, () => { handleQaEntries(broadcast).catch((e) => console.warn('[watcher] qa handler:', e.message)) })
   console.log('[watcher] polling', QA_SIGNAL_PATH)
 
-  watchFile(DONE_SIGNAL_PATH, opts, () => { handleDoneEntries(broadcast).catch((e) => console.warn('[watcher] done handler:', e.message)) })
+  pollFile(DONE_SIGNAL_PATH, () => { handleDoneEntries(broadcast).catch((e) => console.warn('[watcher] done handler:', e.message)) })
   console.log('[watcher] polling', DONE_SIGNAL_PATH)
 
   for (const repo of WATCHED_REPOS) {
     const filePath = path.join(CODE_DIR, repo, 'evidence.md')
-    watchFile(filePath, opts, () => { handleEvidenceChange(repo, broadcast).catch((e) => console.warn('[watcher] evidence handler:', e.message)) })
+    pollFile(filePath, () => { handleEvidenceChange(repo, broadcast).catch((e) => console.warn('[watcher] evidence handler:', e.message)) })
     console.log(`[watcher] polling ${filePath}`)
   }
+}
+
+// fs.watchFile replacement. watchFile polls through libuv's uv_fs_poll: one
+// pool worker per watched file, kept busy for as long as a stat hangs — the six
+// watched files under ~/code (shared /jfs) could hold more than the whole
+// 4-worker pool by themselves. This poller stats through bounded-scan.js
+// (home-fs slot budget + slow-call log) and never overlaps itself: a tick whose
+// previous stat is still running is skipped. Fires `onChange` when mtime/size/
+// existence changes after the first (baseline) stat — watchFile's contract.
+function pollFile(filePath, onChange, intervalMs = POLL_INTERVAL_MS) {
+  let prev = null
+  let busy = false
+  const timer = setInterval(async () => {
+    if (busy) return
+    busy = true
+    try {
+      const st = await statSafe(filePath)
+      const cur = st ? `${st.mtimeMs}:${st.size}` : 'missing'
+      if (prev !== null && cur !== prev) onChange()
+      prev = cur
+    } finally {
+      busy = false
+    }
+  }, intervalMs)
+  return timer
 }

@@ -69,7 +69,7 @@ describe('persona injection (需求8) — SDK systemPrompt preset.append', () =>
       queryImpl: makeQueryCapture(calls),
     })
     // Simulate the attach-time resolution: tab.persona='catgirl' → cs.personaPrompt.
-    const personaPrompt = resolvePersonaPrompt(undefined, 'catgirl')
+    const personaPrompt = await resolvePersonaPrompt(undefined, 'catgirl')
     assert.ok(personaPrompt.length > 0, 'catgirl persona must resolve to non-empty instruction')
     const cs = baseCs({ personaPrompt })
     await driver.runSdkTurn(cs, 'hello', 'p1:claude:t1', process.cwd())
@@ -114,7 +114,7 @@ describe('persona injection (需求8) — SDK systemPrompt preset.append', () =>
       queryImpl: makeQueryCapture(calls),
     })
     // tab.persona='does-not-exist' → resolvePersonaPrompt returns '' → no injection.
-    const cs = baseCs({ personaPrompt: resolvePersonaPrompt(undefined, 'does-not-exist') })
+    const cs = baseCs({ personaPrompt: await resolvePersonaPrompt(undefined, 'does-not-exist') })
     await driver.runSdkTurn(cs, 'hello', 'p1:claude:t3', process.cwd())
 
     assert.equal(calls.length, 1)

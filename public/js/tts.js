@@ -3,6 +3,7 @@
  * Listens on document 'nanocode:terminal-output' custom events.
  * Extracts [TTS_START]...[TTS_END] content and enqueues for playback.
  */
+import { isPluginEnabled } from './right-panel.js'
 
 let ttsEnabled = localStorage.getItem('ttsEnabled') === 'true'
 let ttsStreaming = localStorage.getItem('ttsStreaming') === 'true'
@@ -350,7 +351,20 @@ if (micBtn && chatInput) {
   }
 }
 
-// Initialize
+// Initialize. The TTS service probe runs only while the tts plugin is on — it
+// used to ask every 30s on every page whether or not anyone used speech.
 updateTtsUi()
-checkTtsStatus()
-setInterval(checkTtsStatus, 30000)
+let ttsStatusTimer = null
+function syncTtsStatusPoll() {
+  const on = isPluginEnabled('tts')
+  if (on && !ttsStatusTimer) {
+    checkTtsStatus()
+    ttsStatusTimer = setInterval(checkTtsStatus, 30000)
+  } else if (!on && ttsStatusTimer) {
+    clearInterval(ttsStatusTimer)
+    ttsStatusTimer = null
+  }
+}
+document.addEventListener('nanocode:plugins-ready', syncTtsStatusPoll)
+document.addEventListener('nanocode:plugin-toggled', syncTtsStatusPoll)
+syncTtsStatusPoll()

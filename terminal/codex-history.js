@@ -15,6 +15,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { isSystemWrapper } from './session-naming.js'
 
 const TURN_SEPARATOR = '────────────\n'
 const DEFAULT_MAX_BYTES = 250_000
@@ -59,22 +60,6 @@ export function resolveCodexRolloutPath(home, threadId) {
     }
   }
   return null
-}
-
-// A first-turn user message bundles system wrappers (environment_context,
-// permissions, AGENTS.md instructions) as separate blocks — skip those, keep
-// only the human prompt. Mirrors sessions-browser.js isSystemWrapper.
-function isSystemWrapper(text) {
-  if (typeof text !== 'string') return true
-  const t = text.trimStart()
-  return (
-    t.startsWith('<environment_context>') ||
-    t.startsWith('<permissions') ||
-    t.startsWith('<system_') ||
-    t.startsWith('<recommended_plugins>') ||
-    t.startsWith('<INSTRUCTIONS') ||
-    t.startsWith('<user_instructions')
-  )
 }
 
 function ensureNl(s) {

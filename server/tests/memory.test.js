@@ -17,16 +17,16 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { claudeProjectSlugToCwd } from '../../terminal/session-naming.js'
 import {
-  claudeProjectSlugToCwd,
   listMemoryProjects,
   listMemoryTree,
   listMemoryFiles,
   readMemoryFile,
   searchMemory,
   saveMemoryFile,
-  listTeams,
-} from '../../terminal/usage.js'
+} from '../../terminal/memory.js'
+import { listTeams } from '../../terminal/usage.js'
 import { createStore } from '../store.js'
 
 function memDir(configDir, slug) {
@@ -40,13 +40,13 @@ function writeMem(configDir, slug, file, content) {
 }
 
 describe('memory: claudeProjectSlugToCwd (display decode)', () => {
-  it('replaces - with / for an absolute path', () => {
-    assert.equal(claudeProjectSlugToCwd('-storage-home-zhiningjiao'), '/storage/home/zhiningjiao')
+  it('replaces - with / for an absolute path', async () => {
+    assert.equal(claudeProjectSlugToCwd('-data-users-someone'), '/data/users/someone')
   })
-  it('decodes -tmp to /tmp', () => {
+  it('decodes -tmp to /tmp', async () => {
     assert.equal(claudeProjectSlugToCwd('-tmp'), '/tmp')
   })
-  it('returns empty for empty input', () => {
+  it('returns empty for empty input', async () => {
     assert.equal(claudeProjectSlugToCwd(''), '')
     assert.equal(claudeProjectSlugToCwd(null), '')
   })
@@ -63,7 +63,7 @@ describe('memory: listMemoryProjects / listMemoryTree', () => {
   })
   afterEach(() => rmSync(tmp, { recursive: true, force: true }))
 
-  it('listMemoryProjects lists only projects with a memory/ dir, counts .md files', () => {
+  it('listMemoryProjects lists only projects with a memory/ dir, counts .md files', async () => {
     writeMem(claudeDir, '-home-proj', 'MEMORY.md', '# Title\n')
     writeMem(claudeDir, '-home-proj', 'feedback_x.md', 'feedback\n')
     // a project without memory should be skipped
@@ -82,7 +82,7 @@ describe('memory: listMemoryProjects / listMemoryTree', () => {
     assert.equal(onlyTxt.fileCount, 0)
   })
 
-  it('listMemoryProjects is sorted newest-mtime first', () => {
+  it('listMemoryProjects is sorted newest-mtime first', async () => {
     writeMem(claudeDir, '-old', 'MEMORY.md', 'old\n')
     // give -new a newer mtime by writing after a tiny delay
     writeMem(claudeDir, '-new', 'MEMORY.md', 'new\n')
@@ -91,7 +91,7 @@ describe('memory: listMemoryProjects / listMemoryTree', () => {
     assert.equal(projects[0].slug, '-new')
   })
 
-  it('listMemoryTree aggregates all teams and skips non-existent', () => {
+  it('listMemoryTree aggregates all teams and skips non-existent', async () => {
     writeMem(claudeDir, '-a', 'MEMORY.md', 'a\n')
     writeMem(team2Dir, '-b', 'MEMORY.md', 'b\n')
     const store = createStore(':memory:')
@@ -104,7 +104,7 @@ describe('memory: listMemoryProjects / listMemoryTree', () => {
     assert.ok(t2.projects.some((p) => p.slug === '-b'))
   })
 
-  it('listMemoryTree returns empty list for a home with no claude dirs', () => {
+  it('listMemoryTree returns empty list for a home with no claude dirs', async () => {
     const empty = mkdtempSync(join(tmpdir(), 'nano-empty-'))
     try {
       const store = createStore(':memory:')
@@ -126,24 +126,24 @@ describe('memory: listMemoryFiles / readMemoryFile', () => {
   })
   afterEach(() => rmSync(tmp, { recursive: true, force: true }))
 
-  it('listMemoryFiles lists .md files newest-first with size + mtime', () => {
+  it('listMemoryFiles lists .md files newest-first with size + mtime', async () => {
     writeMem(configDir, '-p', 'MEMORY.md', '# M\n')
     writeMem(configDir, '-p', 'feedback_x.md', 'x\n')
-    const r = listMemoryFiles(configDir, '-p')
+    const r = await listMemoryFiles(configDir, '-p')
     assert.ok(!r.error)
     assert.equal(r.files.length, 2)
     assert.ok(r.files.every((f) => typeof f.size === 'number' && typeof f.mtime === 'number'))
   })
 
-  it('listMemoryFiles rejects an invalid slug (path-traversal guard)', () => {
-    const r = listMemoryFiles(configDir, '../etc-passwd')
+  it('listMemoryFiles rejects an invalid slug (path-traversal guard)', async () => {
+    const r = await listMemoryFiles(configDir, '../etc-passwd')
     assert.ok(r.error)
     assert.match(r.error, /slug/i)
   })
 
-  it('readMemoryFile returns content + meta', () => {
+  it('readMemoryFile returns content + meta', async () => {
     writeMem(configDir, '-p', 'MEMORY.md', '# Hello\nworld\n')
-    const r = readMemoryFile(configDir, '-p', 'MEMORY.md')
+    const r = await readMemoryFile(configDir, '-p', 'MEMORY.md')
     assert.ok(!r.error)
     assert.equal(r.name, 'MEMORY.md')
     assert.equal(r.content, '# Hello\nworld\n')
@@ -151,20 +151,20 @@ describe('memory: listMemoryFiles / readMemoryFile', () => {
     assert.ok(r.path.endsWith(join('memory', 'MEMORY.md')))
   })
 
-  it('readMemoryFile rejects non-.md and traversal file names', () => {
+  it('readMemoryFile rejects non-.md and traversal file names', async () => {
     writeMem(configDir, '-p', 'MEMORY.md', 'x')
-    assert.ok(readMemoryFile(configDir, '-p', 'secret.txt').error)
-    assert.ok(readMemoryFile(configDir, '-p', '../../../etc/passwd').error)
-    assert.ok(readMemoryFile(configDir, '-p', 'a/b.md').error)
+    assert.ok((await readMemoryFile(configDir, '-p', 'secret.txt')).error)
+    assert.ok((await readMemoryFile(configDir, '-p', '../../../etc/passwd')).error)
+    assert.ok((await readMemoryFile(configDir, '-p', 'a/b.md')).error)
   })
 
-  it('readMemoryFile rejects invalid slug', () => {
-    assert.ok(readMemoryFile(configDir, '../p', 'MEMORY.md').error)
+  it('readMemoryFile rejects invalid slug', async () => {
+    assert.ok((await readMemoryFile(configDir, '../p', 'MEMORY.md')).error)
   })
 
-  it('readMemoryFile returns error for missing file', () => {
+  it('readMemoryFile returns error for missing file', async () => {
     writeMem(configDir, '-p', 'MEMORY.md', 'x')
-    assert.ok(readMemoryFile(configDir, '-p', 'gone.md').error)
+    assert.ok((await readMemoryFile(configDir, '-p', 'gone.md')).error)
   })
 })
 
@@ -177,10 +177,10 @@ describe('memory: searchMemory', () => {
   })
   afterEach(() => rmSync(tmp, { recursive: true, force: true }))
 
-  it('finds keyword case-insensitively with file + line + snippet', () => {
+  it('finds keyword case-insensitively with file + line + snippet', async () => {
     writeMem(configDir, '-p', 'MEMORY.md', '# Title\nKeep this SECRET safe\n')
     writeMem(configDir, '-p', 'feedback.md', 'no match here\nbut secret yes\n')
-    const r = searchMemory(configDir, '-p', 'secret')
+    const r = await searchMemory(configDir, '-p', 'secret')
     assert.equal(r.query, 'secret')
     assert.equal(r.matches.length, 2)
     assert.equal(r.matches[0].file, 'MEMORY.md')
@@ -190,21 +190,21 @@ describe('memory: searchMemory', () => {
     assert.equal(r.matches[1].line, 2)
   })
 
-  it('returns empty matches for empty query', () => {
+  it('returns empty matches for empty query', async () => {
     writeMem(configDir, '-p', 'MEMORY.md', 'x\n')
-    const r = searchMemory(configDir, '-p', '')
+    const r = await searchMemory(configDir, '-p', '')
     assert.deepEqual(r.matches, [])
   })
 
-  it('rejects invalid slug', () => {
-    assert.ok(searchMemory(configDir, '../p', 'x').error)
+  it('rejects invalid slug', async () => {
+    assert.ok((await searchMemory(configDir, '../p', 'x')).error)
   })
 
-  it('caps at 200 matches', () => {
+  it('caps at 200 matches', async () => {
     let content = ''
     for (let i = 0; i < 250; i++) content += `line ${i} kwmatch\n`
     writeMem(configDir, '-p', 'big.md', content)
-    const r = searchMemory(configDir, '-p', 'kwmatch')
+    const r = await searchMemory(configDir, '-p', 'kwmatch')
     assert.equal(r.matches.length, 200)
   })
 })
@@ -218,9 +218,9 @@ describe('memory: saveMemoryFile (edit + backup)', () => {
   })
   afterEach(() => rmSync(tmp, { recursive: true, force: true }))
 
-  it('overwrites the file and creates a timestamped .bak backup of the original', () => {
+  it('overwrites the file and creates a timestamped .bak backup of the original', async () => {
     writeMem(configDir, '-p', 'MEMORY.md', 'original content\n')
-    const r = saveMemoryFile(configDir, '-p', 'MEMORY.md', 'new content\n')
+    const r = await saveMemoryFile(configDir, '-p', 'MEMORY.md', 'new content\n')
     assert.ok(!r.error, r.error)
     assert.equal(readFileSync(join(memDir(configDir, '-p'), 'MEMORY.md'), 'utf8'), 'new content\n')
     assert.ok(r.backupPath, 'backupPath should be set')
@@ -230,29 +230,29 @@ describe('memory: saveMemoryFile (edit + backup)', () => {
     assert.match(r.backupPath.split('/').pop(), /^\.MEMORY\.md\.bak\./)
   })
 
-  it('writes a new file without a backup when the file did not exist', () => {
+  it('writes a new file without a backup when the file did not exist', async () => {
     mkdirSync(memDir(configDir, '-p'), { recursive: true })
-    const r = saveMemoryFile(configDir, '-p', 'fresh.md', 'fresh\n')
+    const r = await saveMemoryFile(configDir, '-p', 'fresh.md', 'fresh\n')
     assert.ok(!r.error)
     assert.equal(r.backupPath, null)
     assert.equal(readFileSync(join(memDir(configDir, '-p'), 'fresh.md'), 'utf8'), 'fresh\n')
   })
 
-  it('rejects invalid slug and file name', () => {
+  it('rejects invalid slug and file name', async () => {
     writeMem(configDir, '-p', 'MEMORY.md', 'x')
-    assert.ok(saveMemoryFile(configDir, '../p', 'MEMORY.md', 'x').error)
-    assert.ok(saveMemoryFile(configDir, '-p', '../../../x.md', 'x').error)
-    assert.ok(saveMemoryFile(configDir, '-p', 'notes.txt', 'x').error)
+    assert.ok((await saveMemoryFile(configDir, '../p', 'MEMORY.md', 'x')).error)
+    assert.ok((await saveMemoryFile(configDir, '-p', '../../../x.md', 'x')).error)
+    assert.ok((await saveMemoryFile(configDir, '-p', 'notes.txt', 'x')).error)
   })
 
-  it('rejects save when the memory dir does not exist', () => {
-    const r = saveMemoryFile(configDir, '-nope', 'MEMORY.md', 'x')
+  it('rejects save when the memory dir does not exist', async () => {
+    const r = await saveMemoryFile(configDir, '-nope', 'MEMORY.md', 'x')
     assert.ok(r.error)
   })
 })
 
 describe('memory: route team validation shape', () => {
-  it('listTeams exposes the team paths the route validates against', () => {
+  it('listTeams exposes the team paths the route validates against', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'nano-tv-'))
     try {
       mkdirSync(join(tmp, '.claude'), { recursive: true })

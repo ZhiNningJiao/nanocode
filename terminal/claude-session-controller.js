@@ -1,10 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, unlinkSync } from 'node:fs'
 import { platform } from 'node:os'
 import { join } from 'node:path'
 import * as sessions from './sessions.js'
-import { buildReplaySeed, buildUserReplayId, resolveSessionJsonl, parseJsonlHistoryTail } from './claude-history.js'
+import { buildReplaySeed, buildUserReplayId, resolveSessionJsonlAsync, parseJsonlHistoryTailAsync } from './claude-history.js'
 import { createClaudeSdkDriver } from './claude-sdk-driver.js'
 import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
@@ -14,9 +12,20 @@ import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
 import { copyTranscriptToTeam, teamModelDefaults } from './team-failover.js'
 import { loadPersonalConfig } from './personal-config.js'
-import { acquireSessionLock, releaseSessionLock, stealSessionLock, getLockHolder } from './session-lock.js'
+import { pathExists, readdirSafe, timedFs } from './bounded-scan.js'
+import { spawnInDir } from './spawn-in-dir.js'
+import { acquireSessionLock, releaseSessionLock, stealSessionLock, getLockHolder, isOwnLock, touchSessionLock, boundLockOp, LOCK_OP_TIMEOUT_MS } from './session-lock.js'
 
-export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl, port, lockWatchIntervalMs }) {
+// cli driver binary. Unset → plain `claude` resolved by the login shell's PATH
+// (unchanged behaviour). Set → that executable (same env var the SDK/tmux
+// drivers already honour). Useful when the login shell's PATH puts a copy on a
+// slow network mount first: the unit points this at a local-disk binary.
+function claudeCliBin() {
+  const value = process.env.NANOCODE_CLAUDE_CODE_EXECUTABLE
+  return typeof value === 'string' && value.trim() ? `'${value.trim().replace(/'/g, "'\\''")}'` : 'claude'
+}
+
+export function createClaudeSessionController({ store, home, recentAgents, testQueryImpl, port, lockWatchIntervalMs, lockOpTimeoutMs }) {
   const IS_WIN = platform() === 'win32'
   const SHELL = IS_WIN
     ? (process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe')
@@ -106,9 +115,9 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       const keyFile = join(home || process.env.HOME, '.config', 'meshy-aigw.key')
       const aigwModel = store.getSetting('aigw_model')
       const parts = []
-      if (existsSync(keyFile)) {
-        parts.push(`export MESHY_AIGW_KEY=$(cat ${keyFile})`)
-      }
+      // Key presence is tested by the child shell, not here: the key file sits
+      // under the shared home and this runs in the request path.
+      parts.push(`[ -r ${keyFile} ] && export MESHY_AIGW_KEY=$(cat ${keyFile})`)
       if (aigwModel && typeof aigwModel === 'string' && aigwModel.trim()) {
         const m = aigwModel.trim()
         const cfg = JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { kimi: { models: { [m]: { name: m } } } } })
@@ -135,10 +144,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         : 'litellm/claude-fable-5'
       const cfg = JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { kimi: { models: { [model]: { name: model } } } } })
       const launch = `export OPENCODE_CONFIG_CONTENT='${cfg}'; opencode -m kimi/${model} .; exec bash -l`
-      if (existsSync(keyFile)) {
-        return `export MESHY_AIGW_KEY=$(cat ${keyFile}); ${launch}`
-      }
-      return launch
+      return `[ -r ${keyFile} ] && export MESHY_AIGW_KEY=$(cat ${keyFile}); ${launch}`
     },
   }
 
@@ -195,7 +201,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // Release ownership of cs.claudeSessionId when the last client disconnects.
   // If this cs was the host, promote a displaced tab back to host so the
   // session is never left without an active consumer.
-  function releaseClaudeSessionOwnership(cs, sessionKey) {
+  async function releaseClaudeSessionOwnership(cs, sessionKey) {
     const sid = cs.claudeSessionId
     if (!sid) return
     const owner = claudeSessionOwners.get(sid)
@@ -214,7 +220,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // _lockHeld=true pointing at a deleted lock file, allowing another
         // nanocode server to silently grab the lock → cross-process twin.
         otherCs._lockHeld = false
-        const result = acquireSessionLock(otherCs.claudeSessionId, { pid: process.pid, port }, home)
+        const result = await acquireSessionLock(otherCs.claudeSessionId, { pid: process.pid, port }, home)
         if (result.acquired) {
           otherCs._lockHeld = true
         } else {
@@ -234,13 +240,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     }
   }
 
-  function setClaudeSessionId(projectId, tabId, claudeSessionId, { resetTurnCount = false } = {}) {
+  async function setClaudeSessionId(projectId, tabId, claudeSessionId, { resetTurnCount = false } = {}) {
     const sessionKey = sessionKeyFor(projectId, tabId)
     const cs = claudeSessions.get(sessionKey)
     if (!cs) return
     // Release ownership of the old sessionId before switching.
     if (cs.claudeSessionId && cs.claudeSessionId !== claudeSessionId) {
-      releaseClaudeSessionOwnership(cs, sessionKey)
+      await releaseClaudeSessionOwnership(cs, sessionKey)
     }
     cs.claudeSessionId = claudeSessionId
     if (resetTurnCount) cs.turnCount = 0
@@ -282,17 +288,17 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // (Team1→fable/high, other→opus/high). The next turn resumes on the target
   // org's quota. Reuses the failover machinery; also clears any auto-failover
   // state so the manual choice sticks.
-  function switchTeam(projectId, tabId, targetConfigDir) {
+  async function switchTeam(projectId, tabId, targetConfigDir) {
     const tab = store.getTab ? store.getTab(projectId, tabId) : null
     if (!tab || tab.type !== 'claude') return { ok: false, error: 'not a claude tab' }
-    if (!targetConfigDir || !existsSync(targetConfigDir)) return { ok: false, error: 'target team not found' }
+    if (!targetConfigDir || !(await pathExists(targetConfigDir))) return { ok: false, error: 'target team not found' }
     const cs = claudeSessions.get(sessionKeyFor(projectId, tabId))
     const project = store.getProject ? store.getProject(projectId) : null
     const fromDir = cs ? resolveClaudeConfigDir({ cs, store, home }) : (tab.claudeConfigDir || join(home, '.claude'))
     if (fromDir === targetConfigDir) return { ok: false, error: 'already on that team' }
     const cwd = (cs && cs.cwd) || tab.claudeSessionCwd || project?.cwd || home
     const sid = (cs && cs.claudeSessionId) || tab.claudeSessionId
-    const copied = copyTranscriptToTeam(sid, cwd, fromDir, targetConfigDir)
+    const copied = await copyTranscriptToTeam(sid, cwd, fromDir, targetConfigDir)
     const md = teamModelDefaults(targetConfigDir, { home, personalTeams: loadPersonalConfig({ home })?.claude?.teams || [] })
     store.updateTabMetadata(projectId, tabId, { claudeConfigDir: targetConfigDir })
     if (cs) {
@@ -403,6 +409,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // steal — they stay read-only (return 423 to the caller).
 
   const LOCK_WATCH_INTERVAL_MS = lockWatchIntervalMs ?? 3000
+  const LOCK_OP_TIMEOUT = lockOpTimeoutMs ?? LOCK_OP_TIMEOUT_MS
 
   function _broadcastLockBanner(cs, readonly, holderPort, text) {
     const event = {
@@ -451,42 +458,134 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
 
   function _startLockWatch(cs) {
     if (cs._lockWatchTimer) return
-    const timer = setInterval(() => {
+    // Overlap guard: getLockHolder/acquireSessionLock/touchSessionLock below are
+    // async (fs/promises on the shared /jfs home, which can stall for seconds).
+    // If one tick's IO is still in flight when the next 3-second tick fires, run
+    // them concurrently and a race can resurrect/clobber the lock (e.g. a touch
+    // from this tick landing after a release from elsewhere) — see
+    // REPORT_nanolock_1735.md race analysis. _lockWatchBusy makes ticks skip
+    // instead of overlap; _lockWatchSkips is a counter tests/ops can read.
+    // A skipped tick is logged (first skip of a streak, then once more when the
+    // slow tick finally lands) so a stalled lock dir is never silent.
+    cs._lockWatchSkips = cs._lockWatchSkips || 0
+    let streak = 0
+    let tickStartedAt = 0
+    const timer = setInterval(async () => {
       if (!cs._lockHeld) { _stopLockWatch(cs); return }
-      // Use the stable lock session ID (captured at acquire/steal time) instead
-      // of cs.claudeSessionId, which is mutable — the SDK driver updates it from
-      // streaming events (event.session_id). Using the mutable value would make
-      // the lock-watch poll the wrong lock file after a session-id change.
-      const lockSid = cs._lockSessionId || cs.claudeSessionId
-      if (!lockSid) { _stopLockWatch(cs); return }
-      const holder = getLockHolder(lockSid, home)
-      // Lock file gone unexpectedly — try to re-acquire (best-effort).
-      if (!holder) {
-        console.log(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch: holder gone, re-acquiring`)
-        const result = acquireSessionLock(lockSid, { pid: process.pid, port }, home)
-        if (!result.acquired && result.holder) {
-          _loseLockToOther(cs, result.holder)
+      if (cs._lockWatchBusy) {
+        cs._lockWatchSkips++
+        if (++streak === 1) {
+          console.warn(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch tick still running after ${Date.now() - tickStartedAt}ms (lock dir slow?) — skipping this beat`)
         }
         return
       }
-      if (holder.pid !== process.pid || holder.port !== port) {
-        _loseLockToOther(cs, holder)
+      cs._lockWatchBusy = true
+      tickStartedAt = Date.now()
+      try {
+        // Use the stable lock session ID (captured at acquire/steal time) instead
+        // of cs.claudeSessionId, which is mutable — the SDK driver updates it from
+        // streaming events (event.session_id). Using the mutable value would make
+        // the lock-watch poll the wrong lock file after a session-id change.
+        const lockSid = cs._lockSessionId || cs.claudeSessionId
+        if (!lockSid) { _stopLockWatch(cs); return }
+        const holder = await getLockHolder(lockSid, home)
+        // Re-check after the await: ws-close may have run releaseSessionLock
+        // concurrently (same process, same lock file — session-lock.js's
+        // queue only serializes the file IO itself; it does not know this
+        // tick's decision below is now based on a stale read of "who held
+        // it"). Without this check, a tick that read "holder gone" a moment
+        // before a legitimate close() can go on to resurrect a lock file
+        // nobody holds anymore. Reproduced by (and fixed per) the "read-only
+        // server promotes after host disconnects" case in
+        // session-lock-dual-server.test.js, which uses lockWatchIntervalMs:
+        // 50 — fast enough that a tick overlaps the test's close() for real.
+        if (!cs._lockHeld || cs._lockSessionId !== lockSid) return
+        // Lock file gone unexpectedly — try to re-acquire (best-effort).
+        if (!holder) {
+          console.log(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch: holder gone, re-acquiring`)
+          const result = await acquireSessionLock(lockSid, { pid: process.pid, port }, home)
+          if (!cs._lockHeld || cs._lockSessionId !== lockSid) return // stale again — a close ran while we re-acquired
+          if (!result.acquired && result.holder) {
+            _loseLockToOther(cs, result.holder)
+          }
+          return
+        }
+        // Compare pid + port + host: the lock dir is shared across machines, so a
+        // same pid/port on another host is NOT us.
+        if (!isOwnLock(holder, { pid: process.pid, port })) {
+          _loseLockToOther(cs, holder)
+          return
+        }
+        // Still ours: refresh the heartbeat other machines use to judge liveness.
+        await touchSessionLock(lockSid, { pid: process.pid, port }, home)
+      } catch (err) {
+        // setInterval ignores this callback's return value — an uncaught
+        // rejection here would become an unhandled rejection, not a retry.
+        console.error(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch tick failed: ${err?.message || err}`)
+      } finally {
+        cs._lockWatchBusy = false
+        if (streak > 0) {
+          console.warn(`[claude:lock] :${port} ${cs.sessionKey}: lock-watch tick took ${Date.now() - tickStartedAt}ms; skipped ${streak} beat(s)`)
+          streak = 0
+        }
       }
     }, LOCK_WATCH_INTERVAL_MS)
     if (timer.unref) timer.unref()
     cs._lockWatchTimer = timer
   }
 
+  // A bounded lock call (boundLockOp) gave up waiting but the fs call is still
+  // running. When it lands: adopt the lock if this cs still wants it (clients
+  // attached, same session, not already holding it), otherwise give it back so
+  // the file never outlives the cs that asked for it.
+  function _settleLateLock(cs, lockSid, late, what) {
+    late.then((result) => {
+      cs._lockPending = false
+      if (!result?.acquired) {
+        if (result?.holder) cs.lockHolder = result.holder
+        console.warn(`[claude:lock] ${cs.sessionKey}: late ${what} for session ${lockSid} lost to :${result?.holder?.port} — stays read-only`)
+        return
+      }
+      if (cs._lockHeld && cs._lockSessionId === lockSid) return // a newer call already took it (same file, re-entrant)
+      if (cs._lockHeld || cs.claudeSessionId !== lockSid || cs.clients.size === 0) {
+        console.log(`[claude:lock] ${cs.sessionKey}: late ${what} for session ${lockSid} no longer wanted — releasing`)
+        releaseSessionLock(lockSid, { pid: process.pid, port }, home).catch(() => {})
+        return
+      }
+      cs._lockHeld = true
+      cs._lockSessionId = lockSid
+      console.log(`[claude:lock] ${cs.sessionKey}: late ${what} landed — now host for session ${lockSid}`)
+      if (cs.readOnly) {
+        cs.readOnly = false
+        cs.lockHolder = null
+        _broadcastLockBanner(cs, false, null, '会话已恢复为可编辑模式')
+      }
+      _startLockWatch(cs)
+    }).catch((err) => {
+      cs._lockPending = false
+      console.error(`[claude:lock] ${cs.sessionKey}: late ${what} for session ${lockSid} failed: ${err?.message || err}`)
+    })
+  }
+
   // Steal the lock for a user message. Returns true if we now hold the lock
   // (already host OR just stole it); false if the steal failed (stay read-only).
-  function _stealLockForUserMessage(cs) {
+  async function _stealLockForUserMessage(cs) {
     if (!cs.readOnly) return true
     // Use the stable lock session ID if we previously held the lock, otherwise
     // fall back to cs.claudeSessionId (which, for a read-only server that never
     // started streaming, is still the original session ID).
     const lockSid = cs._lockSessionId || cs.claudeSessionId
     if (!lockSid) return false
-    const result = stealSessionLock(lockSid, { pid: process.pid, port }, home)
+    const bounded = await boundLockOp(stealSessionLock(lockSid, { pid: process.pid, port }, home), LOCK_OP_TIMEOUT)
+    if (bounded.timedOut) {
+      console.warn(
+        `[claude:lock] ${cs.sessionKey}: steal for session ${lockSid} still pending after ` +
+        `${LOCK_OP_TIMEOUT}ms (lock dir slow?) — staying read-only; will promote if it lands`
+      )
+      _settleLateLock(cs, lockSid, bounded.late, 'steal')
+      return false
+    }
+    const result = bounded.value
     if (!result.acquired) return false
     cs._lockSessionId = lockSid
     console.log(
@@ -648,28 +747,23 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     rerunTurn: (...args) => dispatchOpencodeBlockTurn(...args),
   })
 
+  // Housekeeping only (claude's ~/.claude/sessions/<pid>.json of dead pids):
+  // async and fire-and-forget — the dir sits under the shared home.
   let _lastGcMs = 0
-  function gcClaudeSessions() {
+  async function gcClaudeSessions() {
     const now = Date.now()
     if (now - _lastGcMs < 60_000) return
     _lastGcMs = now
-    try {
-      const sessDir = join(home, '.claude', 'sessions')
-      if (!existsSync(sessDir)) return
-      const files = readdirSync(sessDir)
-      for (const f of files) {
-        if (!/^\d+\.json$/.test(f)) continue
-        const pid = parseInt(f, 10)
-        try {
-          process.kill(pid, 0)
-        } catch {
-          try {
-            unlinkSync(join(sessDir, f))
-            console.log(`[gc:sessions] removed stale lock for PID ${pid}`)
-          } catch {}
-        }
-      }
-    } catch {}
+    const sessDir = join(home, '.claude', 'sessions')
+    for (const f of await readdirSafe(sessDir)) {
+      if (!/^\d+\.json$/.test(f)) continue
+      const pid = parseInt(f, 10)
+      try { process.kill(pid, 0); continue } catch {}
+      try {
+        await timedFs.unlink(join(sessDir, f))
+        console.log(`[gc:sessions] removed stale lock for PID ${pid}`)
+      } catch {}
+    }
   }
 
   function buildClaudeChildEnv(cs) {
@@ -725,10 +819,10 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     launchArgs.push(userText)
 
     const escapedArgs = launchArgs.map((a) => sq(a))
-    const launchCmd = `exec claude ${escapedArgs.join(' ')}`
+    const launchCmd = `exec ${claudeCliBin()} ${escapedArgs.join(' ')}`
 
     console.log(`[claude:continue-fallback:spawn] sessionKey=${sessionKey}`)
-    const proc = spawn('bash', ['-lc', launchCmd], {
+    const proc = spawnInDir('bash', ['-lc', launchCmd], { // cwd on /jfs: chdir in the child
       cwd,
       env: buildClaudeChildEnv(cs),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -858,7 +952,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     cs.currentProc = null
 
     const isFirstTurn = cs.turnCount === 0
-    if (isFirstTurn) gcClaudeSessions()
+    if (isFirstTurn) gcClaudeSessions().catch(() => {})
     // ── Three-layer session fallback ─────────────────────────────────────────
     // Layer 1: has history or was resumed before → --resume <sid>
     // Layer 2: first-turn with explicit stored sessionId → also --resume <sid>
@@ -913,11 +1007,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     launchArgs.push('--')
     launchArgs.push(userText)
     const escapedArgs = launchArgs.map((a) => sq(a))
-    const launchCmd = `exec claude ${escapedArgs.join(' ')}`
+    const launchCmd = `exec ${claudeCliBin()} ${escapedArgs.join(' ')}`
 
     const _spawnEnv = buildClaudeChildEnv(cs)
     console.log(`[claude:spawn] sessionKey=${sessionKey} turn=${cs.turnCount} len=${userText.length} cfgDir=${cs.claudeConfigDir || '(default)'} env.CLAUDE_CONFIG_DIR=${_spawnEnv.CLAUDE_CONFIG_DIR || '(unset)'} persona=${cs.persona || '(none)'} personaPromptLen=${(cs.personaPrompt || '').length} cmd=${launchCmd.slice(0, 200)}`)
-    const proc = spawn('bash', ['-lc', launchCmd], {
+    // spawnInDir: the turn's cwd is usually on the shared /jfs home; the chdir
+    // must happen in the child, not inside uv_spawn on this event loop.
+    const proc = spawnInDir('bash', ['-lc', launchCmd], {
       cwd,
       env: _spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1140,7 +1236,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // non-user message (waker / secretary briefing, isUser=false) must NOT
   // steal: it stays read-only and returns { readOnly: true } so the caller
   // can route the wake to the host instead.
-  function injectClaudeMessage(sessionKey, text, { sendNow = false, isUser = true } = {}) {
+  async function injectClaudeMessage(sessionKey, text, { sendNow = false, isUser = true } = {}) {
     const cs = claudeSessions.get(sessionKey)
     if (!cs) return { ok: false, error: 'session not found' }
     if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'empty text' }
@@ -1167,7 +1263,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
       // User message: auto-steal the lock. The old holder detects the steal
       // via its lock-watch and gracefully degrades (interrupt + teardown).
-      if (!_stealLockForUserMessage(cs)) {
+      if (!(await _stealLockForUserMessage(cs))) {
         const holderPort = cs.lockHolder?.port
         console.warn(
           `[claude:lock] ${sessionKey}: steal failed — session ${cs.claudeSessionId} ` +
@@ -1263,174 +1359,319 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     return { ok: true, sessionKey, type: 'codex', reset: true }
   }
 
-  function attachClaudeSession(ws, { projectId, tabId, project }) {
+  // Build the in-memory claude session state for a tab that has none yet and
+  // register it in claudeSessions (+ in-process ownership claim). Synchronous on
+  // purpose: two callers for the same tab (a WS attach and a headless
+  // ensureClaudeSession) can never both create a cs. Shared by attachClaudeSession
+  // and ensureClaudeSession — one implementation of "start a claude session".
+  //
+  // The disk recovery below (jsonl resolve + tail read + persona file) is async:
+  // the jsonl lives under the shared /jfs home and a synchronous read here froze
+  // the whole server on every WS attach while /jfs stalled (REPORT_nanolock_0730.md).
+  // _creatingClaudeSessions keeps the "only one cs per tab" guarantee across
+  // that await: a second caller for the same tab awaits the first one's cs.
+  const _creatingClaudeSessions = new Map() // sessionKey -> Promise<cs>
+  function _getOrCreateClaudeSessionState(projectId, tabId, project) {
     const sessionKey = sessionKeyFor(projectId, tabId)
-    let cs = claudeSessions.get(sessionKey)
+    const live = claudeSessions.get(sessionKey)
+    if (live) return Promise.resolve(live)
+    let pending = _creatingClaudeSessions.get(sessionKey)
+    if (!pending) {
+      pending = _createClaudeSessionState(projectId, tabId, project)
+        .finally(() => _creatingClaudeSessions.delete(sessionKey))
+      _creatingClaudeSessions.set(sessionKey, pending)
+    }
+    return pending
+  }
 
-    if (!cs) {
-      const tab = store.getTab ? store.getTab(projectId, tabId) : null
-      // Track whether the sessionId came from store metadata (user-chosen, explicit)
-      // vs was generated fresh because the tab had no stored session (implicit/new tab).
-      const storedSessionId = tab?.claudeSessionId || null
-      // createTab pre-assigns a random claudeSessionId with claudeSessionStarted=false
-      // (store.js createTab): that UUID has no conversation behind it yet, so it must
-      // NOT count as user-chosen. Treating it as explicit made every fresh tab
-      // --resume a nonexistent session ("No conversation found") on its first turn.
-      // Tabs persisted before the flag existed lack claudeSessionStarted entirely
-      // (undefined !== false), so they keep the resume behaviour; tabs with real
-      // history are also covered by the disk-recovery path below (diskRecovered).
-      const explicitSessionId = storedSessionId !== null && tab?.claudeSessionStarted !== false
-      let claudeSessionId = storedSessionId || randomUUID()
+  async function _createClaudeSessionState(projectId, tabId, project) {
+    const sessionKey = sessionKeyFor(projectId, tabId)
+    let cs
+    const tab = store.getTab ? store.getTab(projectId, tabId) : null
+    // Track whether the sessionId came from store metadata (user-chosen, explicit)
+    // vs was generated fresh because the tab had no stored session (implicit/new tab).
+    const storedSessionId = tab?.claudeSessionId || null
+    // createTab pre-assigns a random claudeSessionId with claudeSessionStarted=false
+    // (store.js createTab): that UUID has no conversation behind it yet, so it must
+    // NOT count as user-chosen. Treating it as explicit made every fresh tab
+    // --resume a nonexistent session ("No conversation found") on its first turn.
+    // Tabs persisted before the flag existed lack claudeSessionStarted entirely
+    // (undefined !== false), so they keep the resume behaviour; tabs with real
+    // history are also covered by the disk recovery path below (diskRecovered).
+    const explicitSessionId = storedSessionId !== null && tab?.claudeSessionStarted !== false
+    let claudeSessionId = storedSessionId || randomUUID()
 
-      const mainSessionId = process.env.CLAUDE_CODE_SESSION_ID
-      let _activeSessionOverride = false
-      if (mainSessionId && claudeSessionId === mainSessionId && !explicitSessionId) {
-        // Only apply the active-session guard when the sessionId was NOT explicitly
-        // chosen by the user (i.e., it came from a newest-jsonl fallback on an
-        // implicit/new tab). Without this guard, an implicit tab would silently
-        // --resume the running main nanocode session, causing lock conflicts.
-        //
-        // When the sessionId IS explicit (user picked it via Recent Agents or it
-        // was persisted in store metadata), we trust the user's intent and let
-        // them resume — even if it's the currently active session. The history
-        // endpoint already skips the guard for explicit sessionIds (commit 0117376).
-        console.warn(
-          `[claude:session] Tab ${tabId} implicit sessionId collides with the running ` +
-          `main session (${mainSessionId}). Generating a fresh UUID to avoid conflict.`
-        )
-        claudeSessionId = randomUUID()
-        _activeSessionOverride = true
-        // NOTE: do NOT call store.updateTabMetadata here. Persisting the fresh UUID
-        // would break subsequent history fetches: the history endpoint reads the stored
-        // claudeSessionId to find the jsonl, so if we overwrite it with the fresh UUID
-        // (which has no jsonl) the tab loses its history display after the next reconnect.
-        // The fresh UUID only needs to live in-memory (cs.claudeSessionId) for routing
-        // new turns. The stored sessionId stays as the original (e.g. 987c2f1c) so the
-        // history endpoint can always find the correct jsonl file.
-      }
+    const mainSessionId = process.env.CLAUDE_CODE_SESSION_ID
+    let _activeSessionOverride = false
+    if (mainSessionId && claudeSessionId === mainSessionId && !explicitSessionId) {
+      // Only apply the active-session guard when the sessionId was NOT explicitly
+      // chosen by the user (i.e., it came from a newest-jsonl fallback on an
+      // implicit/new tab). Without this guard, an implicit tab would silently
+      // --resume the running main nanocode session, causing lock conflicts.
+      //
+      // When the sessionId IS explicit (user picked it via Recent Agents or it
+      // was persisted in store metadata), we trust the user's intent and let
+      // them resume — even if it's the currently active session. The history
+      // endpoint already skips the guard for explicit sessionIds (commit 0117376).
+      console.warn(
+        `[claude:session] Tab ${tabId} implicit sessionId collides with the running ` +
+        `main session (${mainSessionId}). Generating a fresh UUID to avoid conflict.`
+      )
+      claudeSessionId = randomUUID()
+      _activeSessionOverride = true
+      // NOTE: do NOT call store.updateTabMetadata here. Persisting the fresh UUID
+      // would break subsequent history fetches: the history endpoint reads the stored
+      // claudeSessionId to find the jsonl, so if we overwrite it with the fresh UUID
+      // (which has no jsonl) the tab loses its history display after the next reconnect.
+      // The fresh UUID only needs to live in-memory (cs.claudeSessionId) for routing
+      // new turns. The stored sessionId stays as the original (e.g. 987c2f1c) so the
+      // history endpoint can always find the correct jsonl file.
+    }
 
-      // ── Cross-instance session auto-recovery ──────────────────────────────────
-      // Block-mode history replay already reads Claude's jsonl from disk, but the
-      // server-side cs.history used to fall back to pure memory. After a server
-      // restart (or any time the in-memory cs is gone) the first WS attach would
-      // create an empty cs and start a brand new session, even though the directory
-      // still contained the persisted conversation. Hydrate cs.history directly
-      // from the same directory-resolved jsonl source so the backend never relies
-      // solely on in-memory history across instances.
-      let recoveredEvents = []
-      let recoveredFallback = false
-      let recoveredSkipped = false
-      if (!_activeSessionOverride && tab) {
-        try {
-          const resolution = resolveSessionJsonl({ store, home, project, tab })
-          if (resolution.resolvedPath) {
-            claudeSessionId = resolution.resolvedSessionId
-            recoveredEvents = parseJsonlHistoryTail(resolution.resolvedPath)
-            recoveredFallback = resolution.fallback
-            if (resolution.fallback && resolution.resolvedSessionId !== storedSessionId) {
-              if (store.updateTabMetadata) {
-                store.updateTabMetadata(projectId, tabId, { claudeSessionId: resolution.resolvedSessionId })
-              }
-              console.log(
-                `[claude:session] Tab ${tabId} auto-recovered fallback session ${resolution.resolvedSessionId} from ${resolution.resolvedPath}`
-              )
-            }
-          } else if (resolution.skipped) {
-            claudeSessionId = resolution.resolvedSessionId
-            recoveredSkipped = true
+    // ── Cross-instance session auto-recovery ──────────────────────────────────
+    // Block-mode history replay already reads Claude's jsonl from disk, but the
+    // server-side cs.history used to fall back to pure memory. After a server
+    // restart (or any time the in-memory cs is gone) the first WS attach would
+    // create an empty cs and start a brand new session, even though the directory
+    // still contained the persisted conversation. Hydrate cs.history directly
+    // from the same directory-resolved jsonl source so the backend never relies
+    // solely on in-memory history across instances.
+    let recoveredEvents = []
+    let recoveredFallback = false
+    let recoveredSkipped = false
+    if (!_activeSessionOverride && tab) {
+      try {
+        const resolution = await resolveSessionJsonlAsync({ store, home, project, tab })
+        if (resolution.resolvedPath) {
+          claudeSessionId = resolution.resolvedSessionId
+          recoveredEvents = await parseJsonlHistoryTailAsync(resolution.resolvedPath)
+          recoveredFallback = resolution.fallback
+          if (resolution.fallback && resolution.resolvedSessionId !== storedSessionId) {
             if (store.updateTabMetadata) {
               store.updateTabMetadata(projectId, tabId, { claudeSessionId: resolution.resolvedSessionId })
             }
             console.log(
-              `[claude:session] Tab ${tabId} active-session guard skipped auto-recovery, assigned fresh ${resolution.resolvedSessionId}`
+              `[claude:session] Tab ${tabId} auto-recovered fallback session ${resolution.resolvedSessionId} from ${resolution.resolvedPath}`
             )
           }
-        } catch (err) {
-          // Best-effort recovery: never let a disk-read failure block attach.
-          console.warn(`[claude:session] Tab ${tabId} auto-recovery failed: ${err?.message}`)
+        } else if (resolution.skipped) {
+          claudeSessionId = resolution.resolvedSessionId
+          recoveredSkipped = true
+          if (store.updateTabMetadata) {
+            store.updateTabMetadata(projectId, tabId, { claudeSessionId: resolution.resolvedSessionId })
+          }
+          console.log(
+            `[claude:session] Tab ${tabId} active-session guard skipped auto-recovery, assigned fresh ${resolution.resolvedSessionId}`
+          )
         }
+      } catch (err) {
+        // Best-effort recovery: never let a failed disk read block attach.
+        console.warn(`[claude:session] Tab ${tabId} auto-recovery failed: ${err?.message}`)
       }
-
-      const seed = replaySeeds.get(sessionKey)
-      // Prefer the seed built from recovered disk events over the stale
-      // in-memory replaySeeds, so cross-instance recovery sets turnCount=1.
-      const liveSeed = recoveredEvents.length > 0
-        ? buildReplaySeed(recoveredEvents)
-        : seed
-      // If history was loaded from jsonl (hasHistory=true), treat the first user
-      // turn as a resume rather than a new session start. This makes runClaudeTurn
-      // use `--resume <sessionId>` instead of `--session-id <sessionId>` so
-      // Claude continues the existing conversation context.
-      //
-      // Exception: if the active-session guard just assigned a fresh UUID (the tab
-      // was pointing at the currently running nanocode session via an implicit
-      // fallback), do NOT inherit hasHistory=true — the fresh UUID has no prior
-      // history so --resume would fail. Start fresh with turnCount=0.
-      //
-      // Explicit sessionId path: skip _activeSessionOverride entirely (it won't
-      // be set for explicit sessions), so hasHistory wins and turnCount starts at 1.
-      const initialTurnCount = (!_activeSessionOverride && !recoveredSkipped && liveSeed?.hasHistory) ? 1 : 0
-      // explicitSessionId=true means the first user turn should use --resume instead of
-      // --session-id. This is true when the sessionId came from store metadata (the user
-      // explicitly chose a prior session) and also when we successfully auto-recovered
-      // history from disk — in both cases we want Claude to continue the existing
-      // conversation rather than start a new one. The flag is consumed by the fallback
-      // paths, which clear it when --resume fails so the retry does not loop.
-      const diskRecovered = recoveredEvents.length > 0 && !_activeSessionOverride && !recoveredSkipped
-      const resolvedExplicit = explicitSessionId && claudeSessionId === storedSessionId && !_activeSessionOverride && !recoveredSkipped
-      cs = {
-        sessionKey,
-        claudeSessionId,
-        clients: new Set(),
-        history: recoveredEvents.slice(-500),
-        busy: false,
-        turnCount: initialTurnCount,
-        // Carries the "try --resume on first turn" flag (store-chosen or disk-recovered).
-        // Reset to false by fallback paths once --resume has been attempted.
-        explicitSessionId: resolvedExplicit || diskRecovered,
-        // 需求3: tab opened via "开启新对话" — forces a truly-new --session-id first
-        // turn (Layer 3) instead of --resume on the not-yet-existing jsonl.
-        skipAutoResume: !!tab?.skipAutoResume,
-        // 需求5: cross-team resume stores the session's owning team (CLAUDE_CONFIG_DIR)
-        // on the tab; carry it on cs so buildClaudeChildEnv spawns claude under that
-        // team. cwd follows the session's original cwd (tab.claudeSessionCwd) so
-        // claude --resume finds the jsonl in the matching project-slug dir and keeps
-        // the conversation's file context — falling back to the project cwd.
-        claudeConfigDir: tab?.claudeConfigDir || null,
-        // team-failover opt-in (secretary sessions only; default off; inherited by
-        // child tabs). When true, a 429 triggers switch-team + copy transcript +
-        // resume on the other org's quota. See terminal/team-failover.js.
-        allowTeamFailover: !!tab?.allowTeamFailover,
-        // Per-tab model/effort override (root fix for cross-tab /model sync): the
-        // user's /model choice is persisted on the tab (modelOverride/effortOverride)
-        // — NOT the global setting — so sibling claude tabs keep their own model.
-        // Drivers read cs.claudeModelOverride || global setting; null/'' falls back
-        // to the global default (the settings page still controls the default).
-        claudeModelOverride: tab?.modelOverride || null,
-        claudeEffortOverride: tab?.effortOverride || null,
-        cwd: (tab?.claudeSessionCwd && typeof tab.claudeSessionCwd === 'string' && tab.claudeSessionCwd.trim()) ? tab.claudeSessionCwd.trim() : project.cwd,
-        currentProc: null,
-        tabLabel: tab?.label || '',
-        // 需求8: persona chosen at new-session creation. Resolved to its
-        // instruction text once at attach, FRAMED so it can override a strong
-        // CLAUDE.md personality (e.g. catgirl), and carried on cs so every driver
-        // injects it via --append-system-prompt / appendSystemPrompt each turn
-        // (keeps the persona active across reconnects/resumes).
-        persona: tab?.persona || null,
-        personaPrompt: tab?.persona ? framePersonaPrompt(resolvePersonaPrompt(home, tab.persona)) : '',
-        queue: [],
-        pendingUserDialogs: new Map(),
-        _replayUserTextCounts: liveSeed?.userTextCounts || seed?.userTextCounts || new Map(),
-      }
-      replaySeeds.delete(sessionKey)
-      claudeSessions.set(sessionKey, cs)
-      // ── In-process ownership claim (cross-project twin guard) ────────────
-      // For a NEW cs, claim ownership of its claudeSessionId. If another tab
-      // in this process already owns this session (cross-project resume), the
-      // old host is demoted to read-only and this cs takes over. This runs
-      // BEFORE the file lock below so the in-process owner is authoritative.
-      claimClaudeSessionOwnership(cs, sessionKey, projectId, tabId, tab?.label || '')
     }
+
+    const personaPrompt = tab?.persona ? framePersonaPrompt(await resolvePersonaPrompt(home, tab.persona)) : ''
+    const seed = replaySeeds.get(sessionKey)
+    // Prefer the seed built from recovered disk events over the stale
+    // in-memory replaySeeds, so cross-instance recovery sets turnCount=1.
+    const liveSeed = recoveredEvents.length > 0
+      ? buildReplaySeed(recoveredEvents)
+      : seed
+    // If history was loaded from jsonl (hasHistory=true), treat the first user
+    // turn as a resume rather than a new session start. This makes runClaudeTurn
+    // use `--resume <sessionId>` instead of `--session-id <sessionId>` so
+    // Claude continues the existing conversation context.
+    //
+    // Exception: if the active-session guard just assigned a fresh UUID (the tab
+    // was pointing at the currently running nanocode session via an implicit
+    // fallback), do NOT inherit hasHistory=true — the fresh UUID has no prior
+    // history so --resume would fail. Start fresh with turnCount=0.
+    //
+    // Explicit sessionId path: skip _activeSessionOverride entirely (it won't
+    // be set for explicit sessions), so hasHistory wins and turnCount starts at 1.
+    const initialTurnCount = (!_activeSessionOverride && !recoveredSkipped && liveSeed?.hasHistory) ? 1 : 0
+    // explicitSessionId=true means the first user turn should use --resume instead of
+    // --session-id. This is true when the sessionId came from store metadata (the user
+    // explicitly chose a prior session) and also when we successfully auto-recovered
+    // history from disk — in both cases we want Claude to continue the existing
+    // conversation rather than start a new one. The flag is consumed by the fallback
+    // paths, which clear it when --resume fails so the retry does not loop.
+    const diskRecovered = recoveredEvents.length > 0 && !_activeSessionOverride && !recoveredSkipped
+    const resolvedExplicit = explicitSessionId && claudeSessionId === storedSessionId && !_activeSessionOverride && !recoveredSkipped
+    cs = {
+      sessionKey,
+      claudeSessionId,
+      clients: new Set(),
+      history: recoveredEvents.slice(-500),
+      busy: false,
+      turnCount: initialTurnCount,
+      // Carries the "try --resume on first turn" flag (store-chosen or recovered from disk).
+      // Reset to false by fallback paths once --resume has been attempted.
+      explicitSessionId: resolvedExplicit || diskRecovered,
+      // 需求3: tab opened via "开启新对话" — forces a truly-new --session-id first
+      // turn (Layer 3) instead of --resume on the not-yet-existing jsonl.
+      skipAutoResume: !!tab?.skipAutoResume,
+      // 需求5: cross-team resume stores the session's owning team (CLAUDE_CONFIG_DIR)
+      // on the tab; carry it on cs so buildClaudeChildEnv spawns claude under that
+      // team. cwd follows the session's original cwd (tab.claudeSessionCwd) so
+      // claude --resume finds the jsonl in the matching project-slug dir and keeps
+      // the conversation's file context — falling back to the project cwd.
+      claudeConfigDir: tab?.claudeConfigDir || null,
+      // team-failover opt-in (secretary sessions only; default off; inherited by
+      // child tabs). When true, a 429 triggers switch-team + copy transcript +
+      // resume on the other org's quota. See terminal/team-failover.js.
+      allowTeamFailover: !!tab?.allowTeamFailover,
+      // Per-tab model/effort override (root fix for cross-tab /model sync): the
+      // user's /model choice is persisted on the tab (modelOverride/effortOverride)
+      // — NOT the global setting — so sibling claude tabs keep their own model.
+      // Drivers read cs.claudeModelOverride || global setting; null/'' falls back
+      // to the global default (the settings page still controls the default).
+      claudeModelOverride: tab?.modelOverride || null,
+      claudeEffortOverride: tab?.effortOverride || null,
+      cwd: (tab?.claudeSessionCwd && typeof tab.claudeSessionCwd === 'string' && tab.claudeSessionCwd.trim()) ? tab.claudeSessionCwd.trim() : project.cwd,
+      currentProc: null,
+      tabLabel: tab?.label || '',
+      // 需求8: persona chosen at new-session creation. Resolved to its
+      // instruction text once at attach, FRAMED so it can override a strong
+      // CLAUDE.md personality (e.g. catgirl), and carried on cs so every driver
+      // injects it via --append-system-prompt / appendSystemPrompt each turn
+      // (keeps the persona active across reconnects/resumes).
+      persona: tab?.persona || null,
+      personaPrompt,
+      queue: [],
+      pendingUserDialogs: new Map(),
+      _replayUserTextCounts: liveSeed?.userTextCounts || seed?.userTextCounts || new Map(),
+    }
+    replaySeeds.delete(sessionKey)
+    claudeSessions.set(sessionKey, cs)
+    // ── In-process ownership claim (cross-project twin guard) ────────────
+    // For a NEW cs, claim ownership of its claudeSessionId. If another tab
+    // in this process already owns this session (cross-project resume), the
+    // old host is demoted to read-only and this cs takes over. This runs
+    // BEFORE the file lock below so the in-process owner is authoritative.
+    claimClaudeSessionOwnership(cs, sessionKey, projectId, tabId, tab?.label || '')
+    return cs
+  }
+
+  // Session singleton lock acquire for a cs that does not hold it yet (shared by
+  // attachClaudeSession and ensureClaudeSession).
+  async function _acquireHostLock(cs) {
+    if (cs._lockHeld) return
+    const sessionKey = cs.sessionKey
+    const lockOpts = { pid: process.pid, port }
+    const lockSid = cs.claudeSessionId
+    // Bounded: on a stalled lock dir the attach must still finish (history,
+    // busy-state, client registration) — see boundLockOp in session-lock.js.
+    const bounded = await boundLockOp(acquireSessionLock(lockSid, lockOpts, home), LOCK_OP_TIMEOUT)
+    const result = bounded.value
+    if (bounded.timedOut) {
+      cs.readOnly = true
+      cs.lockHolder = null
+      cs._lockPending = true
+      console.warn(
+        `[claude:lock] ${sessionKey}: acquire for session ${lockSid} still pending after ` +
+        `${LOCK_OP_TIMEOUT}ms (lock dir slow?) — attaching read-only; will promote if it lands`
+      )
+      _settleLateLock(cs, lockSid, bounded.late, 'acquire')
+    } else if (result.acquired) {
+      cs._lockHeld = true
+      cs._lockSessionId = cs.claudeSessionId
+      if (cs.readOnly) {
+        cs.readOnly = false
+        cs.lockHolder = null
+        cs._justPromoted = true
+        console.log(`[claude:lock] ${sessionKey}: promoted to host for session ${cs.claudeSessionId}`)
+      }
+      // Start watching for steals so a user message on another server
+      // triggers our graceful degradation (interrupt + teardown).
+      _startLockWatch(cs)
+    } else {
+      cs.readOnly = true
+      cs.lockHolder = result.holder
+      cs._lockHeld = false
+      console.warn(
+        `[claude:lock] ${sessionKey}: session ${cs.claudeSessionId} is hosted by ` +
+        `:${result.holder?.port} (pid ${result.holder?.pid}). Read-only mode.`
+      )
+    }
+  }
+
+  // Headless session start: the same state + lock steps a WS attach
+  // runs, without a browser. After a server restart a tab only re-entered
+  // claudeSessions (= GET /api/sessions, the table POST /api/sessions/:id/inject
+  // routes on) when a browser websocket attached; this lets the restart guard and
+  // the new-secretary script bring a tab back from the server side. No client is
+  // registered, so nothing is released on close; a later browser attach finds the
+  // cs and joins it exactly like a reload does today.
+  async function ensureClaudeSession({ projectId, tabId, project }) {
+    if (!claudeUsesStreamJson()) return { ok: false, error: "renderMode=terminal: claude tabs run as raw PTY" }
+    const sessionKey = sessionKeyFor(projectId, tabId)
+    let cs = claudeSessions.get(sessionKey)
+    const created = !cs
+    if (!cs) cs = await _getOrCreateClaudeSessionState(projectId, tabId, project)
+    await _acquireHostLock(cs)
+    console.log(`[claude:ensure] ${sessionKey}: ${created ? "created" : "already live"} session=${cs.claudeSessionId} readOnly=${!!cs.readOnly}`)
+    return {
+      ok: true,
+      created,
+      sessionKey,
+      claudeSessionId: cs.claudeSessionId || null,
+      readOnly: !!cs.readOnly,
+      lockHolderPort: cs.lockHolder?.port ?? null,
+    }
+  }
+
+  // Whether a claude tab is served by the stream-json bridge (attachClaudeSession)
+  // or a raw PTY. Server default MUST match the client default (state.js: 'block').
+  function claudeUsesStreamJson() {
+    return (store.getSetting('renderMode') || 'block') !== 'terminal'
+  }
+
+  async function attachClaudeSession(ws, { projectId, tabId, project }) {
+    const sessionKey = sessionKeyFor(projectId, tabId)
+    let cs = claudeSessions.get(sessionKey)
+
+    // ── Register WS listeners FIRST, synchronously, before any `await` below ──
+    // The session-lock acquire further down is async now (fs/promises on
+    // /jfs can genuinely take time — that is the whole point of this patch).
+    // A fast client that sends 'claude-input' or disconnects right after
+    // 'attach' used to be safe only because the old synchronous handler body
+    // ran start-to-finish — including the real `ws.on('message', onMsg)` call
+    // — inside the SAME tick as the 'attach' message, before the event loop
+    // could deliver any other event. Now that the lock-acquire is awaited,
+    // the real handlers (defined later, after that await, as `onMsg` /
+    // `_onCloseReal`) aren't even ASSIGNED yet when a same-tick 'close' can
+    // arrive (reproduced with the synchronous-emit MockWs in
+    // claude-session-cross-project-twin.test.js; plausible for a real
+    // low-latency client too). A plain forward-if-ready shim still drops that
+    // event — "ready" flips true strictly after the event already fired. So:
+    // queue events that arrive before the real handlers are wired up, and
+    // replay them (in order) the moment `_wsReady` flips true. No event since
+    // 'attach' can be lost, and queued-then-replayed is observably the same
+    // as "processed a little later" — never "never processed".
+    let _onMsgReal = null
+    let _onCloseReal = null
+    let _wsReady = false
+    const _pendingWsEvents = []
+    function _runMsg(raw) {
+      // onMsg is async; a rejection from an EventEmitter listener is never
+      // caught by the emitter itself, so catch it here explicitly.
+      Promise.resolve(_onMsgReal(raw)).catch((err) => {
+        console.error(`[claude:ws-message] ${sessionKey}: message handler failed: ${err?.message || err}`)
+      })
+    }
+    const _onMsgEarly = (raw) => {
+      if (_wsReady) _runMsg(raw)
+      else _pendingWsEvents.push(['message', raw])
+    }
+    const _onCloseEarly = () => {
+      if (_wsReady) _onCloseReal()
+      else _pendingWsEvents.push(['close', undefined])
+    }
+    ws.on('message', _onMsgEarly)
+    ws.on('close', _onCloseEarly)
+
+    if (!cs) cs = await _getOrCreateClaudeSessionState(projectId, tabId, project)
 
     // ── Session singleton lock ──────────────────────────────────────────────
     // Prevent two nanocode servers from simultaneously owning the same Claude
@@ -1438,31 +1679,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     // enters read-only follow mode (can see output, cannot send input).
     // The lock is released when the last client on this server disconnects,
     // so a read-only server can promote on its next attach.
-    if (!cs._lockHeld) {
-      const lockOpts = { pid: process.pid, port }
-      const result = acquireSessionLock(cs.claudeSessionId, lockOpts, home)
-      if (result.acquired) {
-        cs._lockHeld = true
-        cs._lockSessionId = cs.claudeSessionId
-        if (cs.readOnly) {
-          cs.readOnly = false
-          cs.lockHolder = null
-          cs._justPromoted = true
-          console.log(`[claude:lock] ${sessionKey}: promoted to host for session ${cs.claudeSessionId}`)
-        }
-        // Start watching for steals so a user message on another server
-        // triggers our graceful degradation (interrupt + teardown).
-        _startLockWatch(cs)
-      } else {
-        cs.readOnly = true
-        cs.lockHolder = result.holder
-        cs._lockHeld = false
-        console.warn(
-          `[claude:lock] ${sessionKey}: session ${cs.claudeSessionId} is hosted by ` +
-          `:${result.holder?.port} (pid ${result.holder?.pid}). Read-only mode.`
-        )
-      }
-    }
+    await _acquireHostLock(cs)
 
     for (const event of cs.history) {
       if (ws.readyState === 1) {
@@ -1491,6 +1708,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
           text: `会话已迁移到「${cs._displacedBy.tabLabel || '新 tab'}」，本 tab 转为只读模式`,
           _readonly: true,
           _displacedTo: cs._displacedBy,
+        }
+      } else if (cs._lockPending) {
+        bannerEvent = {
+          type: 'system',
+          subtype: 'info',
+          text: '会话锁目录响应慢，暂为只读；拿到锁后自动恢复可编辑',
+          _readonly: true,
         }
       } else {
         const holderPort = cs.lockHolder?.port
@@ -1523,7 +1747,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
     }
 
-    const onMsg = (raw) => {
+    const onMsg = async (raw) => {
       let msg
       try { msg = JSON.parse(raw) } catch { return }
       if (msg.type === 'claude-dialog-response' && typeof msg.dialogId === 'string') {
@@ -1558,7 +1782,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // without manually reconnecting to the host. If the steal fails (rare
         // filesystem error), fall back to the read-only block banner.
         if (cs.readOnly) {
-          if (!_stealLockForUserMessage(cs)) {
+          if (!(await _stealLockForUserMessage(cs))) {
             try { ws.send(JSON.stringify({ type: 'claude-event', event: { type: 'result', subtype: 'success' } })) } catch {}
             try {
               ws.send(JSON.stringify({
@@ -1691,27 +1915,56 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
     }
 
-    ws.on('message', onMsg)
-    ws.on('close', () => {
-      ws.removeListener('message', onMsg)
-      cs.clients.delete(ws)
-      // Release the session singleton lock when the last client disconnects,
-      // so another server can promote from read-only to host.
-      if (cs.clients.size === 0 && cs._lockHeld) {
-        const lockSid = cs._lockSessionId || cs.claudeSessionId
-        releaseSessionLock(lockSid, { pid: process.pid, port }, home)
-        cs._lockHeld = false
-        cs._lockSessionId = null
-        _stopLockWatch(cs)
+    // Wire the real handlers (registered at the top of this function, before
+    // any await, via _onMsgEarly/_onCloseEarly) and flip _wsReady so any
+    // event queued while we were still awaiting the lock-acquire above
+    // replays now, in the order it actually arrived.
+    _onMsgReal = onMsg
+    _onCloseReal = async () => {
+      // Every exported session-lock.js call is async now; a thrown/rejected
+      // promise from an EventEmitter listener is NOT caught by the emitter —
+      // it becomes an unhandled rejection that can crash the process. This
+      // handler must never let that happen.
+      try {
+        ws.removeListener('message', _onMsgEarly)
+        cs.clients.delete(ws)
+        // Release the session singleton lock when the last client disconnects,
+        // so another server can promote from read-only to host.
+        if (cs.clients.size === 0 && cs._lockHeld) {
+          const lockSid = cs._lockSessionId || cs.claudeSessionId
+          // Bounded so a stalled lock dir cannot keep the ownership hand-off
+          // below from running; the release itself still completes later.
+          const bounded = await boundLockOp(releaseSessionLock(lockSid, { pid: process.pid, port }, home), LOCK_OP_TIMEOUT)
+          if (bounded.timedOut) {
+            console.warn(`[claude:lock] ${sessionKey}: release for session ${lockSid} still pending after ${LOCK_OP_TIMEOUT}ms — continuing close`)
+            bounded.late.catch(() => {})
+          }
+          cs._lockHeld = false
+          cs._lockSessionId = null
+          _stopLockWatch(cs)
+        }
+        // Release in-process ownership when the last client disconnects, so a
+        // displaced tab can promote back to host on its next attach. Without
+        // this, a host tab that is closed would leave the session permanently
+        // ownerless and the displaced tab stuck in read-only forever.
+        if (cs.clients.size === 0) {
+          await releaseClaudeSessionOwnership(cs, sessionKey)
+        }
+      } catch (err) {
+        console.error(`[claude:ws-close] ${sessionKey}: close handler failed: ${err?.message || err}`)
       }
-      // Release in-process ownership when the last client disconnects, so a
-      // displaced tab can promote back to host on its next attach. Without
-      // this, a host tab that is closed would leave the session permanently
-      // ownerless and the displaced tab stuck in read-only forever.
-      if (cs.clients.size === 0) {
-        releaseClaudeSessionOwnership(cs, sessionKey)
-      }
-    })
+    }
+    _wsReady = true
+    // Replay strictly in arrival order, each fully awaited before the next
+    // starts — otherwise a queued message and a queued close (both arrived
+    // before we were ready) would run concurrently instead of in sequence.
+    while (_pendingWsEvents.length) {
+      const [kind, raw] = _pendingWsEvents.shift()
+      if (kind === 'message') await Promise.resolve(_onMsgReal(raw)).catch((err) => {
+        console.error(`[claude:ws-message] ${sessionKey}: message handler failed: ${err?.message || err}`)
+      })
+      else await _onCloseReal()
+    }
   }
 
   function attachCodexSession(ws, { projectId, tabId, project }) {
@@ -1866,9 +2119,15 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // framed instruction to the user prompt every turn — keeping the persona
         // active across reconnects/resumes (mirrors claude's per-turn re-inject).
         persona: tab?.persona || null,
-        personaPrompt: tab?.persona ? framePersonaPrompt(resolvePersonaPrompt(home, tab.persona)) : '',
+        personaPrompt: '',
       }
       opencodeBlockSessions.set(sessionKey, cs)
+      // The persona file sits under the shared home: read it async (this attach
+      // is synchronous) and fill it in when it lands.
+      if (cs.persona) {
+        const created = cs
+        resolvePersonaPrompt(home, created.persona).then((text) => { created.personaPrompt = framePersonaPrompt(text) })
+      }
     }
 
     // Replay history to the newly-attached client (claude-event WS msgs).
@@ -2096,6 +2355,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   }
 
   function handleTerminalWs(ws) {
+    // Wait for the FIRST 'attach', not the first message. The block renderers
+    // start their 5 s ping on ws open but send 'attach' only after the /history
+    // fetch resolves; when that fetch is slow (restart burst, stalled /jfs,
+    // starved libuv pool delaying gzip) a ping arrives first. A `ws.once`
+    // listener consumed that ping and the later attach was never handled —
+    // the WS stays open, the client never reconnects, the tab is gone until a
+    // page reload (e.g. the main-agent tab after a server restart).
     const once = (raw) => {
       let msg
       try {
@@ -2104,6 +2370,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         return
       }
       if (msg.type !== 'attach') return
+      ws.removeListener('message', once)
 
       const { projectId, sessionType, cols, rows } = msg
       const tabId = msg.tabId || randomUUID().slice(0, 8)
@@ -2141,12 +2408,13 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
         // If they diverge, the browser opens a TerminalPane (PTY-protocol JSON
         // frames) but the server routes the WS to attachClaudeSession (stream-json
         // events) — protocol mismatch → tab looks "stuck" with both ends alive.
-        const renderMode = store.getSetting('renderMode') || 'block'
-        if (renderMode === 'terminal') {
+        if (!claudeUsesStreamJson()) {
           console.log(`[ws:attach] routing claude to PTY raw (renderMode=terminal)`)
         } else {
           console.log(`[ws:attach] routing to claude stream-json bridge`)
-          attachClaudeSession(ws, { projectId, tabId, project })
+          attachClaudeSession(ws, { projectId, tabId, project }).catch((err) => {
+            console.error(`[ws:attach] attachClaudeSession failed: ${err?.message || err}`)
+          })
           return
         }
       }
@@ -2255,7 +2523,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       session.attach(ws, Math.max(1, cols || 80), Math.max(1, rows || 24))
     }
 
-    ws.once('message', once)
+    ws.on('message', once)
   }
 
   // Server-shutdown teardown: kill every in-process SDK streaming session so
@@ -2268,10 +2536,15 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     for (const cs of claudeSessions.values()) {
       _stopLockWatch(cs)
       try { sdkDriver.teardownStreamingSession(cs) } catch {}
-      // Release the session singleton lock on shutdown.
+      // Release the session singleton lock on shutdown. Fire-and-forget: the
+      // caller (store.js registerCloseHook) does not await, same as before —
+      // blocking process shutdown on a potentially-stuck /jfs write would
+      // reintroduce the exact hang this task fixes. A lock left behind here
+      // is still safe: its pid dies with this process, so the next
+      // acquire/getLockHolder on either machine sees it as stale and reclaims it.
       if (cs._lockHeld) {
         const lockSid = cs._lockSessionId || cs.claudeSessionId
-        try { releaseSessionLock(lockSid, { pid: process.pid, port }, home) } catch {}
+        releaseSessionLock(lockSid, { pid: process.pid, port }, home).catch(() => {})
       }
     }
     claudeSessions.clear()
@@ -2295,5 +2568,6 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     injectClaudeMessage,
     injectCodexMessage,
     resetCodexThread,
+    ensureClaudeSession,
   }
 }

@@ -23,7 +23,7 @@
 import { Router } from 'express'
 import { execFile } from 'node:child_process'
 import { promisify } from 'util'
-import { readdirSync, statSync, existsSync } from 'node:fs'
+import { readdirSafe, statSafe } from './bounded-scan.js'
 import { resolve, relative, sep, join } from 'node:path'
 import { homedir } from 'node:os'
 import { computeDiff, isValidRef } from './git-compare.js'
@@ -68,16 +68,14 @@ export { isValidRef }
  */
 export async function scanRepos(codeRoot, { exec = execFileAsync } = {}) {
   const out = []
-  let entries = []
-  try { entries = readdirSync(codeRoot) } catch { return out }
-  for (const name of entries) {
+  for (const name of await readdirSafe(codeRoot)) {
     if (name.startsWith('.')) continue
     const dir = join(codeRoot, name)
-    let st
-    try { st = statSync(dir) } catch { continue }
-    if (!st.isDirectory()) continue
+    const st = await statSafe(dir)
+    if (!st || !st.isDirectory()) continue
     // Quick fs check: .git must exist (file for worktrees, dir for repos).
-    if (!existsSync(join(dir, '.git'))) continue
+    const gitSt = await statSafe(join(dir, '.git'))
+    if (!gitSt) continue
     try {
       const branchOut = await exec('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], {
         timeout: GIT_TIMEOUT_MS,
@@ -92,7 +90,7 @@ export async function scanRepos(codeRoot, { exec = execFileAsync } = {}) {
       // .git is a file (not a dir). We approximate via toplevel !== dir for
       // bare-checkout edge cases; for the common case (wt-* under ~/code)
       // toplevel === dir so use the .git-file signal.
-      const isWorktree = existsSync(join(dir, '.git')) && !statSync(join(dir, '.git')).isDirectory()
+      const isWorktree = !gitSt.isDirectory()
       out.push({ name, path: dir, branch, isWorktree, toplevel })
     } catch {
       // not a usable git repo (e.g. .git is a broken pointer) → skip
@@ -140,8 +138,9 @@ export function createReposRoutes({ home, codeRoot } = {}) {
   const router = Router()
   const root = codeRoot || join(home || homedir(), 'code')
 
+  // `-C` instead of a spawn cwd (~/code is on the shared /jfs): see compare.js git().
   async function git(args, cwd, timeout = GIT_TIMEOUT_MS) {
-    return execFileAsync('git', args, { cwd, maxBuffer: GIT_MAX_BUFFER, timeout })
+    return execFileAsync('git', ['-C', cwd, ...args], { maxBuffer: GIT_MAX_BUFFER, timeout })
   }
 
   // GET /api/repos — list git repos/worktrees under ~/code

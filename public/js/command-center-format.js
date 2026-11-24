@@ -55,6 +55,18 @@ export function downBlock(title, s) {
   return `<div class="cc-block-down"><span class="service-dot down"></span> ${esc(title)}<div class="cc-sub">${esc(t('plugin.cc.lastSuccess'))}: ${esc(last)}</div>${s?.error ? `<div class="cc-sub cc-err">${esc(s.error)}</div>` : ''}</div>`
 }
 
+/**
+ * A degraded source on the cockpit main page: one quiet line, not an alert
+ * box. PRD P0-8 (each source degrades alone, the rest of the page still
+ * renders) still applies — only the visual weight changes, because a
+ * full-width red block for "one of several sources is behind" reads as a
+ * bigger emergency than it is and used to dominate the first screen.
+ */
+export function degradeLineHtml(title, s) {
+  const last = s?.lastOkAt ? `${fmtTime(s.lastOkAt)}（${fmtAgo(s.lastOkAt)}）` : t('plugin.cc.never')
+  return `<div class="cc-degrade-line"><span class="service-dot degraded"></span>${esc(title)} · ${esc(t('plugin.cc.lastSuccess'))} ${esc(last)}${s?.error ? ` · ${esc(s.error)}` : ''}</div>`
+}
+
 /** <a> only for http(s); anything else is plain text (review P1). */
 export function linkHtml(url, label, cls = '') {
   const safe = safeHttpUrl(url)

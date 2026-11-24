@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createScanCache, mapLimit, readTailLines } from '../../terminal/bounded-scan.js'
+import { spawnSync } from 'node:child_process'
+import { createScanCache, mapLimit, readTailLines, withFsSlot, timedFs, _setSlowFsForTesting, HOME_FS_CONCURRENCY } from '../../terminal/bounded-scan.js'
 
 const tick = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -137,5 +138,63 @@ describe('bounded-scan', () => {
       const missing = await readTailLines(join(dir, 'nope.jsonl'), 50)
       assert.equal(missing.ok, false)
     } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('bounded-scan: home-fs slot budget + slow-call log', () => {
+  it('withFsSlot never runs more than HOME_FS_CONCURRENCY sequences at once', async () => {
+    let active = 0
+    let peak = 0
+    const release = []
+    const tasks = Array.from({ length: 6 }, () => withFsSlot(async () => {
+      active++
+      peak = Math.max(peak, active)
+      await new Promise((r) => release.push(r))
+      active--
+    }))
+    await new Promise((r) => setTimeout(r, 20))
+    assert.equal(active, HOME_FS_CONCURRENCY, 'extra sequences wait in JS, not in the libuv pool')
+    while (release.length || active) {
+      release.splice(0).forEach((r) => r())
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    await Promise.all(tasks)
+    assert.equal(peak, HOME_FS_CONCURRENCY)
+  })
+
+  it('logs a still-pending line and a settled line for a slow call', { skip: spawnSync('mkfifo', ['--version'], { stdio: 'ignore' }).status !== 0 && 'mkfifo not available' }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bscan-slow-'))
+    const fifo = join(dir, 'stalled')
+    assert.equal(spawnSync('mkfifo', [fifo]).status, 0)
+    const lines = []
+    _setSlowFsForTesting({ slowMs: 30, log: (l) => lines.push(l) })
+    try {
+      // readFile on a FIFO blocks in open() until a writer appears — a real stalled syscall.
+      const pending = timedFs.readFile(fifo, 'utf8')
+      await new Promise((r) => setTimeout(r, 120))
+      assert.equal(lines.length, 1)
+      assert.match(lines[0], /^\[fs-slow\] readFile .*stalled still pending after 30ms$/)
+      writeFileSync(fifo, 'unstuck') // opens the writer side → the read completes
+      assert.equal(await pending, 'unstuck')
+      assert.equal(lines.length, 2)
+      assert.match(lines[1], /^\[fs-slow\] readFile .*stalled settled after \d+ms$/)
+    } finally {
+      _setSlowFsForTesting()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a fast call logs nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bscan-fast-'))
+    const lines = []
+    _setSlowFsForTesting({ slowMs: 2000, log: (l) => lines.push(l) })
+    try {
+      writeFileSync(join(dir, 'f'), 'x')
+      assert.equal(await timedFs.readFile(join(dir, 'f'), 'utf8'), 'x')
+      assert.deepEqual(lines, [])
+    } finally {
+      _setSlowFsForTesting()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

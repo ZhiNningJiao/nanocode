@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nanocode 连不上 — 找入口</title>
+<style>
+  body { font: 16px/1.6 system-ui, sans-serif; margin: 0; padding: 24px; background: #111; color: #ddd; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  ul { padding: 0; list-style: none; }
+  li { margin: 10px 0; }
+  li a { display: inline-block; padding: 10px 14px; border-radius: 8px; background: #234; color: #9cf; text-decoration: none; word-break: break-all; }
+  li.down a { background: #222; color: #888; }
+  li span { margin-left: 8px; color: #888; }
+  button { margin-top: 8px; padding: 8px 16px; border-radius: 8px; border: 1px solid #555; background: #222; color: #ddd; }
+</style>
+</head>
+<body>
+  <h1>这个入口现在连不上 Nanocode</h1>
+  <p id="reach-status">正在读中转机上的地址簿…</p>
+  <ul id="reach-list"></ul>
+  <button id="reach-retry" type="button">重新查找</button>
+  <script src="/js/reach-finder.js"></script>
+</body>
+</html>

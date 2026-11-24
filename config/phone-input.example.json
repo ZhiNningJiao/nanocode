@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy to config/phone-input.local.json (gitignored) for tools/phone-input/phone-input.mjs. chatId = the group that only the owner and the bot are in; ownerOpenId = the owner's open_id (only their text messages are pasted). keyFile holds the shared loopback key (>= 32 chars, chmod 600) — the Windows client keeps a copy of the same key. Everything below chatId/ownerOpenId is optional; the values shown are the defaults. reactions: chat emoji_type put on a message once the Windows side acked it (pasted / not pasted); an empty string turns that reaction off.",
+  "chatId": "oc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "ownerOpenId": "ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "larkCli": "lark-cli",
+  "keyFile": "~/.config/phone-input/key",
+  "stateFile": "~/.local/state/phone-input/state.json",
+  "port": 9497,
+  "pollMs": 800,
+  "maxGapMs": 120000,
+  "queueMaxAgeMs": 60000,
+  "reactions": { "pasted": "CheckMark", "notPasted": "CrossMark" }
+}

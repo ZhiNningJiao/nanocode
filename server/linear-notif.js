@@ -7,8 +7,8 @@
  * comments or state changes.
  *
  * Security:
- *   - Linear API key lives only in plugins/monitor/config.json (gitignored) or
- *     the host 'linear_api_key' setting, exactly like plugins/monitor.
+ *   - The Linear API key comes from server/linear-key.js (personal config) — the
+ *     same resolver the command-center big-event source uses.
  *   - ntfy URL/topic is read server-side from the store and never logged.
  *   - No key or ntfy config is ever sent to the browser or written to Linear.
  */
@@ -18,10 +18,10 @@ import { dirname, join, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { pushNtfy, isRecentImportantPush } from './qa-watcher.js'
+import { resolveLinearApiKey } from './linear-key.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const LANES_PATH = join(__dirname, '..', 'plugins', 'monitor', 'lanes.json')
-const CONFIG_PATH = join(__dirname, '..', 'plugins', 'monitor', 'config.json')
 const STATE_PATH = join(__dirname, '..', 'data', 'linear-notif-state.json')
 
 const DEFAULT_POLL_MINUTES = 5
@@ -38,23 +38,6 @@ export function stopLinearNotifier() {
     _timer = null
   }
   _running = false
-}
-
-function loadLocalConfig(path = CONFIG_PATH) {
-  try {
-    if (!existsSync(path)) return {}
-    return JSON.parse(readFileSync(path, 'utf8'))
-  } catch (err) {
-    console.warn('[linear-notif] failed to load local config:', err.message)
-    return {}
-  }
-}
-
-function resolveLinearApiKey() {
-  const local = loadLocalConfig()
-  const fromFile = local?.linearApiKey || null
-  const fromStore = _store?.getSetting?.('linear_api_key') || null
-  return fromFile || fromStore || null
 }
 
 function getPollMinutes() {
@@ -256,10 +239,31 @@ export async function pushNtfyTest() {
   return { pushed: result.ok, error: result.ok ? undefined : result.error }
 }
 
+/**
+ * 9475/9476 share one data dir (data/linear-notif-state.json) and one plugin
+ * switch, so if both start the poller they'd each push every new comment —
+ * the owner would get it twice. Pick ONE designated instance (by port) to
+ * actually run it; the other stays silent. Simple + explicit beats a
+ * distributed lock here: no timer, no network call, just a port comparison.
+ * Default designated port is 9475 (the primary instance); override with
+ * NANOCODE_LINEAR_PUSH_PORT if a deployment's primary runs elsewhere.
+ */
+export function isDesignatedLinearPushInstance(port, env = process.env) {
+  const designated = env.NANOCODE_LINEAR_PUSH_PORT || '9475'
+  return String(port) === String(designated)
+}
+
 export function startLinearNotifier({ store }) {
   if (_running) return
-  _running = true
   _store = store
+  // No key → no timer: a notifier without a key used to wake every 5 minutes
+  // just to log "skipping poll" (on both instances). Adding a key needs a
+  // restart, said once here.
+  if (!resolveLinearApiKey()) {
+    console.log('[linear-notif] no Linear key (personal config) — notifier not started; restart after adding one')
+    return
+  }
+  _running = true
 
   // One immediate poll, then recurring every N minutes.
   runLinearPoll().catch((err) => console.warn('[linear-notif] initial poll failed:', err.message))

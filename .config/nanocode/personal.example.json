@@ -4,17 +4,18 @@
     "linear.apiKey": "Linear API key (lin_xxx). Used by Linear helpers. Optional — falls back to ~/.config/linear-api.key.",
     "aigw.base": "LiteLLM gateway base URL. Optional — defaults to https://aigw.meshy.team.",
     "aigw.key": "AIGW virtual LLM key. Optional — falls back to ~/.config/meshy-aigw.key.",
-    "aigw.budgetUsd": "Local monthly budget in USD (key-side max_budget is null for virtual keys). Defaults to 1000.",
+    "aigw.budgetKeyFile": "PATH of the key file whose spend / cap the usage panel's AIGW card shows (one 1-token call, read from the x-litellm-key-spend / x-litellm-key-max-budget response headers). Optional — defaults to ~/.config/meshy-aigw.key. The key stays in that file.",
+    "aigw.budgetProbeModel": "Model for that 1-token call. Optional — defaults to sglang-glm-5.3-flash.",
     "remote.machines": "Read-only SSH dev-machine seeds merged ahead of the address book. Each: {alias, type:'ssh', host, user, port?, key, note?}. The key is a PATH (never content); sshPassword (if used) is server-side only. Optional — null/absent = no personal machines.",
     "claude.teams": "Extra Claude team config dirs beyond the auto-discovered ~/.claude + ~/.claude-team*. null = auto-discover only.",
     "ntfy.url": "ntfy notification topic URL. Optional — null disables notifications.",
-    "akari.serverUrl": "akari dispatch server URL. Optional — defaults to http://10.18.8.55:9481 (env AKARI_SERVER_URL). Not a secret.",
-    "akari.lensUrl": "akari lens dashboard URL for the one-click jump button. Optional — defaults to http://10.18.8.55:9482 (env AKARI_LENS_URL)."
+    "akari.serverUrl": "akari dispatch server URL. Optional — defaults to http://127.0.0.1:9481 (env AKARI_SERVER_URL). Not a secret.",
+    "akari.lensUrl": "akari lens dashboard URL for the one-click jump button. Optional — defaults to http://127.0.0.1:9482 (env AKARI_LENS_URL)."
   },
   "_permissions": {
     "_comment": "Permission gate (MES-13824): a plugin receives a field ONLY if its manifest declares the matching 'personal.*' permission. Secrets (linear.apiKey / aigw.key) are never sent to the frontend in plaintext — only masked (lin_…xxxx) + hasKey. Real values are server-side only (resolvePluginSecrets).",
     "personal.linear": "unlocks linear (masked) — for a Linear plugin/helper",
-    "personal.aigw": "unlocks aigw (base/budget + masked key) — declared by the usage plugin",
+    "personal.aigw": "unlocks aigw (base + masked key) — declared by the usage plugin",
     "personal.remote": "unlocks remote.machines (host/user/port/key-path, no secrets) — declared by the remote plugin",
     "personal.claude": "unlocks claude.teams",
     "personal.ntfy": "unlocks ntfy.url",
@@ -26,23 +27,23 @@
   "aigw": {
     "base": "https://aigw.meshy.team",
     "key": "REPLACE_ME_AIGW_KEY",
-    "budgetUsd": 1000
+    "budgetKeyFile": "~/.config/meshy-aigw.key"
   },
   "remote": {
     "machines": [
       {
-        "alias": "win-212",
+        "alias": "win-box",
         "type": "ssh",
-        "host": "172.30.20.212",
+        "host": "203.0.113.21",
         "user": "Administrator",
         "port": 22,
         "key": "~/.ssh/id_cluster",
-        "note": "Windows dev box (NAT: local 172.16.0.1 behind 212)"
+        "note": "Windows dev box (example)"
       },
       {
         "alias": "dev-box",
         "type": "ssh",
-        "host": "10.18.8.55",
+        "host": "203.0.113.55",
         "user": "REPLACE_ME",
         "port": 22,
         "key": "~/.ssh/id_cluster",
@@ -60,7 +61,7 @@
     "url": null
   },
   "akari": {
-    "serverUrl": "http://10.18.8.55:9481",
-    "lensUrl": "http://10.18.8.55:9482"
+    "serverUrl": "http://127.0.0.1:9481",
+    "lensUrl": "http://127.0.0.1:9482"
   }
 }

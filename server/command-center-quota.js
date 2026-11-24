@@ -17,13 +17,16 @@
  *   - a reading older than staleSec (default 15 min) is marked stale ("旧");
  *   - the stored file is never rewritten — expiry is decided at read time.
  *
- * mapQuotaReading / buildQuotaView are pure; createQuotaSource does the IO.
+ * mapQuotaReading / buildQuotaView are pure; createQuotaSource does the IO;
+ * createQuotaSnapshotSource (bottom of file) caches createQuotaSource's scan
+ * so the HTTP route never blocks on it (REPORT_nanoquota_1340.md).
  */
 
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { timedFs } from '../terminal/bounded-scan.js'
+const { readdir, readFile, stat } = timedFs // home fs: slot budget + slow-call log
 import { join } from 'node:path'
 import { str } from './command-center-fields.js'
-import { readdirSafe, statSafe, readTailLines, mapLimit, DEFAULT_SCAN_CONCURRENCY } from '../terminal/bounded-scan.js'
+import { readdirSafe, statSafe, readTailLines, mapLimit, DEFAULT_SCAN_CONCURRENCY, createScanCache } from '../terminal/bounded-scan.js'
 
 export const DEFAULT_QUOTA_STALE_SEC = 15 * 60
 const TIGHTEST_SHOWN = 2
@@ -55,7 +58,9 @@ const DISPATCH_LOG_MAX_FILES_PER_DIR = 15
 // polling every few seconds should not re-tail-read every log file each time.
 const LOG_SCAN_CACHE_MS = 20_000
 
-const USAGE_SNAP_LINE_RE = /^(\d{2})-(\d{2}) (\d{2}):(\d{2}) \.claude-team(\w+): 5h=([\d.]+)% 7d=([\d.]+)%.*?reset5h=(\S*) reset7d=(\S*) .*?src=(\S+)\s*$/
+// The trailing ` src=` tag is optional: some snapshot lines (e.g. ones the
+// usage-API path wrote) end right after `extra=`; their numbers are just as real.
+const USAGE_SNAP_LINE_RE = /^(\d{2})-(\d{2}) (\d{2}):(\d{2}) \.claude-team(\w+): 5h=([\d.]+)% 7d=([\d.]+)%.*?reset5h=(\S*) reset7d=(\S*)/
 const USAGE_SNAP_RESET_RE = /^(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
 const QUOTA_HDR_LINE_RE = /QUOTA_HDR stage=\w+ pool=(T\w+) (\{.*\})\s*$/
 
@@ -161,9 +166,14 @@ export function mapQuotaReading(raw, { name, nowMs, staleSec = DEFAULT_QUOTA_STA
   const fetchedMs = parseReadingTime(raw?.fetched_at)
   const ageSec = fetchedMs != null ? Math.max(0, Math.round((nowMs - fetchedMs) / 1000)) : null
   const error = str(raw?.error)
-  let loggedIn = null // unknown
+  let loggedIn = null // unknown (no reading at all, or a non-auth error — can't tell)
   if (error && LOGGED_OUT_RX.test(error)) loggedIn = false
-  else if (!error && fetchedMs != null && str(raw?.status)) loggedIn = true
+  // A clean reading proves the pool is logged in regardless of which source
+  // produced it — usage_snap / quota_hdr_dispatch_log readings never carry a
+  // `status` field (that's an official_headers-only extra), so requiring it
+  // here used to mislabel every non-cache-file reading "login unknown" even
+  // when the numbers were fresh and error-free.
+  else if (!error && fetchedMs != null) loggedIn = true
   return {
     pool,
     source,
@@ -328,4 +338,64 @@ export function createQuotaSource({ now = () => Date.now() } = {}) {
       return { ok: true, notConnected: false, checkedAt, lastOkAt, error: null, data: buildQuotaView(pools) }
     },
   }
+}
+
+// ─── Snapshot cache for the HTTP route (nanoquota_1340) ────────────────────
+//
+// createQuotaSource.get() above does real IO against the shared (sshfs) home
+// fs every time it's called — correct for the unit tests above (each asserts
+// on a fresh scan), but the Command Center route used to call it inline on
+// every request, so a stalled mount turned a ~1ms endpoint into 5–30s
+// (REPORT_nanoquota_1340.md). createQuotaSnapshotSource wraps it in the same
+// single-flight + stale-while-revalidate cache bounded-scan.js already
+// provides for session/usage listings (terminal/recent-agents.js,
+// terminal/routes.js usageScans): get() always returns the last complete
+// snapshot immediately — even past ttlMs, just labelled source.stale-ish via
+// its own checkedAt/lastOkAt — while a bounded, non-reentrant background scan
+// (single-flight: a hung scan is never started twice) refreshes it. Only
+// before the very first scan ever completes does it have nothing to show;
+// that case returns a `pending` row instead of waiting.
+export const QUOTA_SNAPSHOT_TTL_MS = 10_000
+// Deliberately large: createScanCache replaces the cached result with an
+// empty one when a scan exceeds scanTimeoutMs (see bounded-scan.js), and a
+// quota reading going blank because the mount hung for a while is worse than
+// it staying old — the per-pool `stale` flag already tells that story.
+export const QUOTA_SNAPSHOT_SCAN_TIMEOUT_MS = 24 * 60 * 60 * 1000
+export const QUOTA_SNAPSHOT_POLL_MS = 10_000
+
+export function createQuotaSnapshotSource({
+  quotaSource = createQuotaSource(),
+  now = () => Date.now(),
+  ttlMs = QUOTA_SNAPSHOT_TTL_MS,
+  scanTimeoutMs = QUOTA_SNAPSHOT_SCAN_TIMEOUT_MS,
+} = {}) {
+  let latestArgs = { dir: null, staleSec: DEFAULT_QUOTA_STALE_SEC, extra: {} }
+  const cache = createScanCache({
+    ttlMs,
+    scanTimeoutMs,
+    now,
+    scan: async (_key, progress) => {
+      progress.items.push(await quotaSource.get(latestArgs.dir, latestArgs.staleSec, latestArgs.extra))
+    },
+  })
+
+  /**
+   * Never blocks on disk: resolves to the last snapshot (or a `pending` row
+   * before the first scan has ever completed) while bounded-scan.js keeps a
+   * single background scan refreshing it.
+   */
+  async function get(dir, staleSec, extra = {}) {
+    latestArgs = { dir, staleSec, extra }
+    const r = await cache.get('quota', { deadlineMs: 0 })
+    if (!r.items.length) {
+      const checkedAt = new Date(now()).toISOString()
+      return {
+        ok: false, notConnected: false, checkedAt, lastOkAt: null,
+        error: r.partialReason ? `quota scan ${r.partialReason}` : 'quota reading in progress', data: null, pending: true,
+      }
+    }
+    return r.items[0]
+  }
+
+  return { get }
 }

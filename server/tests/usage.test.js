@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty, readClaudeOAuthCredentials, mapClaudeOAuthToWindows, computeBurnRate, projectHitAt, estimateClaudeWindowsFromTimeline, attachBurnAndProjection, streamJsonlTimeline, mapAigwSpendResponse, buildUsageSummary, fetchAigwKeyInfo, fetchAigwSpendLogs, buildAigwSourceSummary, computeAigwBudgetTier, computeBudgetDaysLeft, mapAigwBudgetResponse, fetchAigwBudget, AIGW_BUDGET_ADVICE } from '../../terminal/usage.js'
+import { aggregateJsonlUsage, scanClaudeUsage, effectiveClaudeConfigDir, claudeProjectsDir, listTeams, aggregateOpencodeSessions, parseOpencodeModel, resolveOpencodeDbPaths, scanOpencodeUsage, opencodeUsageEmpty, readClaudeOAuthCredentials, mapClaudeOAuthToWindows, computeBurnRate, projectHitAt, estimateClaudeWindowsFromTimeline, attachBurnAndProjection, streamJsonlTimeline, buildUsageSummary, computeAigwBudgetTier, computeBudgetDaysLeft, mapAigwKeyBudgetHeaders, fetchAigwBudget, AIGW_BUDGET_ADVICE } from '../../terminal/usage.js'
 import { loadPersonalConfig, resetPersonalConfigCache } from '../../terminal/personal-config.js'
 import { createStore } from '../store.js'
 
@@ -230,7 +230,7 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-opc-')) })
   afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-  it('resolveOpencodeDbPaths honours OPENCODE_DB_PATH override and filters missing', () => {
+  it('resolveOpencodeDbPaths honours OPENCODE_DB_PATH override and filters missing', async () => {
     const dbPath = join(tmp, 'opencode.db')
     writeFileSync(dbPath, 'x') // non-empty placeholder so existsSync+size passes
     // Isolate BOTH env vars: on machines where XDG_DATA_HOME points at a real
@@ -244,7 +244,7 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
     process.env.XDG_DATA_HOME = join(tmp, 'fake-home', '.local', 'share')
     delete process.env.GLM_XDG_DATA_HOME
     try {
-      const paths = resolveOpencodeDbPaths(join(tmp, 'fake-home'))
+      const paths = await resolveOpencodeDbPaths(join(tmp, 'fake-home'))
       assert.deepEqual(paths, [dbPath])
     } finally {
       if (prevDb === undefined) delete process.env.OPENCODE_DB_PATH
@@ -264,7 +264,7 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
     assert.deepEqual(e.totals.input, 0)
   })
 
-  itSqlite('scanOpencodeUsage reads a temp SQLite DB and aggregates tokens', () => {
+  itSqlite('scanOpencodeUsage reads a temp SQLite DB and aggregates tokens', async () => {
     const dbPath = join(tmp, 'opencode.db')
     const db = new _DatabaseSync(dbPath)
     db.exec(`
@@ -283,7 +283,7 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
     ins.run('s2', '{"id":"litellm/claude-fable-5"}', 0, 500, 50, 0, 0, 0, ms, ms, '/home/me/proj')
     db.close()
 
-    const r = scanOpencodeUsage(dbPath)
+    const r = await scanOpencodeUsage(dbPath)
     assert.equal(r.error, undefined)
     assert.equal(r.sessionCount, 2)
     assert.equal(r.totals.input, 1500)
@@ -298,8 +298,8 @@ describe('usage: scanOpencodeUsage / resolveOpencodeDbPaths', () => {
     assert.ok(ids.includes('litellm/claude-fable-5'))
   })
 
-  itSqlite('scanOpencodeUsage returns error for a missing DB path', () => {
-    const r = scanOpencodeUsage(join(tmp, 'nope.db'))
+  itSqlite('scanOpencodeUsage returns error for a missing DB path', async () => {
+    const r = await scanOpencodeUsage(join(tmp, 'nope.db'))
     assert.ok(r.error)
     assert.equal(r.sessionCount, 0)
   })
@@ -465,53 +465,28 @@ describe('usage: streamJsonlTimeline + readClaudeOAuthCredentials', () => {
     assert.equal(rows[0].ts, Date.parse(newTs))
   })
 
-  it('readClaudeOAuthCredentials reads accessToken + tier from a tmp credentials file', () => {
+  it('readClaudeOAuthCredentials reads accessToken + tier from a tmp credentials file', async () => {
     const cfgDir = join(tmp, '.claude')
     mkdirSync(cfgDir, { recursive: true })
     writeFileSync(join(cfgDir, '.credentials.json'), JSON.stringify({
       claudeAiOauth: { accessToken: 'sk-ant-oat01-test', expiresAt: NOW + 999999, subscriptionType: 'team', rateLimitTier: 'default_claude_max_5x', scopes: ['user:profile'] },
     }))
-    const c = readClaudeOAuthCredentials(cfgDir)
+    const c = await readClaudeOAuthCredentials(cfgDir)
     assert.equal(c.accessToken, 'sk-ant-oat01-test')
     assert.equal(c.subscriptionType, 'team')
     assert.equal(c.rateLimitTier, 'default_claude_max_5x')
     assert.ok(c.scopes.includes('user:profile'))
   })
 
-  it('readClaudeOAuthCredentials returns null for missing / malformed file', () => {
-    assert.equal(readClaudeOAuthCredentials(join(tmp, 'nope')), null)
+  it('readClaudeOAuthCredentials returns null for missing / malformed file', async () => {
+    assert.equal(await readClaudeOAuthCredentials(join(tmp, 'nope')), null)
     writeFileSync(join(tmp, '.credentials.json'), '{not json')
-    assert.equal(readClaudeOAuthCredentials(tmp), null)
+    assert.equal(await readClaudeOAuthCredentials(tmp), null)
     writeFileSync(join(tmp, '.credentials2.json'), '{}')
     const cfgDir2 = join(tmp, 'sub')
     mkdirSync(cfgDir2, { recursive: true })
     writeFileSync(join(cfgDir2, '.credentials.json'), JSON.stringify({ other: 1 }))
-    assert.equal(readClaudeOAuthCredentials(cfgDir2), null)
-  })
-})
-
-describe('usage: mapAigwSpendResponse (pure)', () => {
-  it('maps /key/info soft_budget + spend into a monthly usd window', () => {
-    const r = mapAigwSpendResponse('/key/info', { soft_budget: 100, spend: 12.5 }, { tried: [{ endpoint: '/key/info', status: 200 }] })
-    assert.equal(r.available, true)
-    assert.equal(r.windows[0].used, 12.5)
-    assert.equal(r.windows[0].limit, 100)
-    assert.equal(r.windows[0].remaining, 87.5)
-    assert.equal(r.windows[0].unit, 'usd')
-    assert.equal(r.windows[0].windowType, 'monthly')
-  })
-
-  it('maps /global/spend total_spend into a spend-only window (limit null, no fabrication)', () => {
-    const r = mapAigwSpendResponse('/global/spend', { total_spend: 42.1 }, { tried: [] })
-    assert.equal(r.available, true)
-    assert.equal(r.windows[0].used, 42.1)
-    assert.equal(r.windows[0].limit, null)
-  })
-
-  it('returns unavailable for an unparseable / empty body', () => {
-    const r = mapAigwSpendResponse('/key/info', null, { tried: [] })
-    assert.equal(r.available, false)
-    assert.ok(r.error)
+    assert.equal(await readClaudeOAuthCredentials(cfgDir2), null)
   })
 })
 
@@ -578,89 +553,77 @@ describe('usage: computeBudgetDaysLeft (pure)', () => {
   })
 })
 
-describe('usage: mapAigwBudgetResponse (pure)', () => {
-  const REAL_USER_INFO = {
-    user_id: 'b3a432ba', user_email: 'zhiningjiao@meshy.ai',
-    max_budget: 1000.0, spend: 197.8257218000002,
-    budget_duration: '30d', budget_reset_at: '2026-08-01T00:00:00Z',
-  }
-  // NOW = 2026-07-06T06:00:00Z -> 25.75 days to reset -> floor 25
-  it('maps a real /user/info body into remaining/pct/tier/days_left', () => {
-    const r = mapAigwBudgetResponse({ user_info: REAL_USER_INFO }, { now: NOW })
+function hdrs(obj) { return { get: (n) => (n in obj ? obj[n] : null) } }
+
+describe('usage: mapAigwKeyBudgetHeaders (pure)', () => {
+  it('maps the two key-budget headers into remaining / pct / tier (no reset → days_left null)', () => {
+    const r = mapAigwKeyBudgetHeaders(hdrs({ 'x-litellm-key-spend': '30.5', 'x-litellm-key-max-budget': '500.0' }))
     assert.equal(r.available, true)
-    assert.equal(r.max_budget, 1000)
-    assert.equal(r.spend, 197.82572) // rounded to 5 dp
-    assert.equal(r.remaining, 802.17) // rounded to 2 dp
-    assert.equal(r.pct_remaining, 80.2)
-    assert.equal(r.pct_used, 19.8)
-    assert.equal(r.reset_at, '2026-08-01T00:00:00Z')
-    assert.equal(r.days_left, 25)
-    assert.equal(r.budget_duration, '30d')
-    assert.equal(r.user_email, 'zhiningjiao@meshy.ai')
-    // 80.2% remaining, 25 days to reset -> SPEND_PAID
-    assert.equal(r.tier, 'SPEND_PAID')
+    assert.equal(r.max_budget, 500)
+    assert.equal(r.spend, 30.5)
+    assert.equal(r.remaining, 469.5)
+    assert.equal(r.pct_remaining, 93.9)
+    assert.equal(r.pct_used, 6.1)
+    assert.equal(r.reset_at, null)
+    assert.equal(r.days_left, null)
+    assert.equal(r.tier, 'SPEND_PAID') // >40% left, reset unknown → never BURN
     assert.equal(r.advice, AIGW_BUDGET_ADVICE.SPEND_PAID)
+    assert.ok(!('user_email' in r))
   })
-  it('classifies BURN when reset is soon and remaining is high', () => {
-    const ui = { ...REAL_USER_INFO, spend: 300, budget_reset_at: new Date(NOW + 3 * 86400_000).toISOString() }
-    // remaining = 700 -> 70% > 25%, days_left = 3 <= 4 -> BURN
-    const r = mapAigwBudgetResponse({ user_info: ui }, { now: NOW })
-    assert.equal(r.tier, 'BURN')
-    assert.equal(r.days_left, 3)
-    assert.equal(r.advice, AIGW_BUDGET_ADVICE.BURN)
-  })
-  it('classifies FREE_ONLY when nearly exhausted', () => {
-    const ui = { ...REAL_USER_INFO, spend: 960 } // remaining 40 -> 4% < 10%
-    const r = mapAigwBudgetResponse({ user_info: ui }, { now: NOW })
+  it('FREE_ONLY when nearly spent', () => {
+    const r = mapAigwKeyBudgetHeaders(hdrs({ 'x-litellm-key-spend': '480', 'x-litellm-key-max-budget': '500' }))
     assert.equal(r.tier, 'FREE_ONLY')
     assert.equal(r.pct_remaining, 4)
   })
-  it('returns limit=null + pct=null when max_budget is missing/zero', () => {
-    const ui = { ...REAL_USER_INFO, max_budget: 0, spend: 12.3 }
-    const r = mapAigwBudgetResponse({ user_info: ui }, { now: NOW })
+  it('no cap header → limit/pct null', () => {
+    const r = mapAigwKeyBudgetHeaders(hdrs({ 'x-litellm-key-spend': '12.3' }))
     assert.equal(r.available, true)
     assert.equal(r.max_budget, null)
     assert.equal(r.remaining, null)
-    assert.equal(r.pct_remaining, null)
     assert.equal(r.pct_used, null)
-    // pct_remaining null -> computeAigwBudgetTier gets -1 (<10) -> FREE_ONLY
-    assert.equal(r.tier, 'FREE_ONLY')
   })
-  it('returns unavailable when user_info is missing / not an object', () => {
-    assert.equal(mapAigwBudgetResponse(null, { now: NOW }).available, false)
-    assert.equal(mapAigwBudgetResponse({}, { now: NOW }).available, false)
-    assert.equal(mapAigwBudgetResponse({ user_info: 'x' }, { now: NOW }).available, false)
-  })
-  it('returns unavailable when spend is not a number', () => {
-    const r = mapAigwBudgetResponse({ user_info: { ...REAL_USER_INFO, spend: 'oops' } }, { now: NOW })
-    assert.equal(r.available, false)
-    assert.ok(r.error)
-  })
-  it('days_left is null when budget_reset_at is absent (BURN unreachable)', () => {
-    const ui = { ...REAL_USER_INFO, budget_reset_at: null }
-    const r = mapAigwBudgetResponse({ user_info: ui }, { now: NOW })
-    assert.equal(r.days_left, null)
-    assert.equal(r.reset_at, null)
-    // 80% remaining, no reset -> SPEND_PAID (not BURN)
-    assert.equal(r.tier, 'SPEND_PAID')
+  it('no spend header → unavailable with a reason (never a made-up 0)', () => {
+    for (const h of [hdrs({}), hdrs({ 'x-litellm-key-spend': '' }), hdrs({ 'x-litellm-key-spend': 'oops' }), null]) {
+      const r = mapAigwKeyBudgetHeaders(h)
+      assert.equal(r.available, false)
+      assert.match(r.error, /x-litellm-key-spend/)
+    }
   })
 })
 
 describe('usage: fetchAigwBudget (fetchImpl injection, no live network)', () => {
-  it('returns the mapped budget when /user/info is 200', async () => {
-    const fetchStub = async (url) => {
-      assert.ok(String(url).endsWith('/user/info'), 'hits /user/info')
-      return {
-        ok: true, status: 200,
-        json: async () => ({ user_info: { max_budget: 1000, spend: 197.83, budget_reset_at: '2026-08-01T00:00:00Z', budget_duration: '30d', user_email: 'zhiningjiao@meshy.ai' } }),
-      }
+  it('one minimal chat call; reads the key-budget headers', async () => {
+    let seen = null
+    const fetchStub = async (url, opts) => {
+      seen = { url: String(url), opts }
+      return { ok: true, status: 200, headers: hdrs({ 'x-litellm-key-spend': '30.88', 'x-litellm-key-max-budget': '500.0' }), text: async () => '{}' }
     }
     const r = await fetchAigwBudget({ key: 'stub-key', fetchImpl: fetchStub, now: NOW })
+    assert.ok(seen.url.endsWith('/v1/chat/completions'))
+    assert.equal(seen.opts.method, 'POST')
+    const body = JSON.parse(seen.opts.body)
+    assert.equal(body.max_tokens, 1)
+    assert.ok(body.model)
+    assert.equal(seen.opts.headers.Authorization, 'Bearer stub-key')
     assert.equal(r.available, true)
     assert.equal(r.keyPresent, true)
-    assert.equal(r.max_budget, 1000)
-    assert.equal(r.tier, 'SPEND_PAID')
-    assert.equal(r.days_left, 25)
+    assert.equal(r.max_budget, 500)
+    assert.equal(r.remaining, 469.12)
+  })
+  it('the key comes from the budget key FILE in the given home', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'nano-budget-'))
+    try {
+      mkdirSync(join(home, '.config'), { recursive: true })
+      writeFileSync(join(home, '.config', 'meshy-aigw.key'), 'file-key\n')
+      resetPersonalConfigCache()
+      let auth = null
+      const r = await fetchAigwBudget({ home, fetchImpl: async (_u, o) => { auth = o.headers.Authorization; return { ok: true, status: 200, headers: hdrs({ 'x-litellm-key-spend': '1' }) } } })
+      assert.equal(auth, 'Bearer file-key')
+      assert.equal(r.available, true)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+      resetPersonalConfigCache()
+    }
   })
   it('returns unavailable with keyPresent=false when no key', async () => {
     const r = await fetchAigwBudget({ key: '', fetchImpl: async () => { throw new Error('should not be called') } })
@@ -668,12 +631,12 @@ describe('usage: fetchAigwBudget (fetchImpl injection, no live network)', () => 
     assert.equal(r.keyPresent, false)
     assert.ok(r.error)
   })
-  it('returns unavailable on a non-ok response', async () => {
-    const fetchStub = async () => ({ ok: false, status: 403, json: async () => ({ detail: ' forbidden' }) })
+  it('a dead key (401 token_not_found_in_db) is reported, not shown as $0', async () => {
+    const fetchStub = async () => ({ ok: false, status: 401, json: async () => ({ error: { message: 'Authentication Error', type: 'token_not_found_in_db' } }) })
     const r = await fetchAigwBudget({ key: 'stub-key', fetchImpl: fetchStub, now: NOW })
     assert.equal(r.available, false)
     assert.equal(r.keyPresent, true)
-    assert.ok(r.error)
+    assert.match(r.error, /401.*token_not_found_in_db/)
   })
   it('returns unavailable when fetch throws', async () => {
     const fetchStub = async () => { throw new Error('network down') }
@@ -700,7 +663,7 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
     process.env.XDG_DATA_HOME = join(tmp, 'xdg')
     delete process.env.GLM_XDG_DATA_HOME
     // no AIGW key in the fake home: readAigwKey still reads the real file, so
-    // probeAigwSpend will try the real gateway and get 403 -> unavailable.
+    // the gateway sources get 403 from the stub -> unavailable.
     // That's honest and the shape is what we assert.
     try {
       const sum = await buildUsageSummary({ home: tmp, store, now: NOW })
@@ -715,11 +678,12 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
         assert.ok(['5h', 'weekly', 'monthly'].includes(e.windowType))
         assert.ok(typeof e.estimated === 'boolean')
       }
-      // AIGW source is present and (with the LLM-only key) unavailable
-      const aigw = sum.sources.find((s) => s.source === 'aigw-litellm')
-      assert.ok(aigw, 'aigw source present')
+      // one AIGW source (key budget); the fake home has no key file → unavailable with a reason
+      assert.equal(sum.sources.filter((s) => s.source.startsWith('aigw')).length, 1)
+      const aigw = sum.sources.find((s) => s.source === 'aigw-budget')
+      assert.ok(aigw, 'aigw-budget source present')
       assert.equal(aigw.available, false)
-      assert.ok(aigw.error)
+      assert.equal(sum.sources.find((s) => s.source === 'aigw-litellm'), undefined)
     } finally {
       if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
       else process.env.XDG_DATA_HOME = prevXdg
@@ -730,19 +694,25 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
 
   it('includes the aigw-budget source via injected fetchImpl (MES-13788 延续)', async () => {
     mkdirSync(join(tmp, '.claude', 'projects'), { recursive: true })
+    // The key is resolved from the summary's home (not the real one) — give the
+    // fake home a budget key file so the stubbed chat call is reached.
+    mkdirSync(join(tmp, '.config', 'nanocode'), { recursive: true })
+    writeFileSync(join(tmp, '.config', 'budget.key'), 'test-key')
+    writeFileSync(join(tmp, '.config', 'nanocode', 'personal.json'), JSON.stringify({ aigw: { key: 'dead-personal-key', budgetKeyFile: join(tmp, '.config', 'budget.key') } }))
+    resetPersonalConfigCache()
     const store = createStore(':memory:')
     store.setSetting('claude_config_dir', join(tmp, '.claude'))
     const prevXdg = process.env.XDG_DATA_HOME
     const prevGlm = process.env.GLM_XDG_DATA_HOME
     process.env.XDG_DATA_HOME = join(tmp, 'xdg')
     delete process.env.GLM_XDG_DATA_HOME
-    // fetch stub: /user/info returns a real-shaped body; /key/info 403.
-    const fetchStub = async (url) => {
+    // fetch stub: the chat call (budget key) answers with the key-budget headers; /key/info 403.
+    const fetchStub = async (url, opts) => {
       const u = String(url)
-      if (u.endsWith('/user/info')) {
-        return { ok: true, status: 200, json: async () => ({ user_info: { max_budget: 1000, spend: 197.83, budget_reset_at: '2026-08-01T00:00:00Z', budget_duration: '30d', user_email: 'zhiningjiao@meshy.ai', user_id: 'b3a432ba' } }) }
+      if (u.endsWith('/v1/chat/completions')) {
+        assert.equal(opts.headers.Authorization, 'Bearer test-key') // the budget key file, not personal.aigw.key
+        return { ok: true, status: 200, headers: hdrs({ 'x-litellm-key-spend': '197.83', 'x-litellm-key-max-budget': '1000' }), text: async () => '{}' }
       }
-      // /key/info -> 403 to keep aigw-litellm unavailable (shape-only)
       return { ok: false, status: 403, json: async () => ({ detail: 'forbidden' }) }
     }
     try {
@@ -754,8 +724,9 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
       assert.equal(budget.spend, 197.83)
       assert.equal(budget.remaining, 802.17)
       assert.equal(budget.tier, 'SPEND_PAID')
-      assert.equal(budget.days_left, 25)
-      assert.equal(budget.reset_at, '2026-08-01T00:00:00Z')
+      assert.equal(budget.days_left, null)
+      assert.equal(budget.reset_at, null)
+      assert.ok(!('user_email' in budget))
       assert.ok(typeof budget.advice === 'string' && budget.advice.length > 0)
       // flat entries include a monthly window for the budget source
       const monthly = sum.entries.find((e) => e.source === 'aigw-budget' && e.windowType === 'monthly')
@@ -763,6 +734,8 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
       assert.equal(monthly.limit, 1000)
       assert.equal(monthly.used, 197.83)
     } finally {
+      rmSync(join(tmp, '.config', 'nanocode', 'personal.json'), { force: true })
+      resetPersonalConfigCache()
       if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
       else process.env.XDG_DATA_HOME = prevXdg
       if (prevGlm === undefined) delete process.env.GLM_XDG_DATA_HOME
@@ -771,60 +744,37 @@ describe('usage: buildUsageSummary shape (integration, no live network)', () => 
   })
 })
 
-// ── AIGW spend source (personal-config loader + /key/info + /spend/logs/v2) ────
+// ── personal-config loader (AIGW key / base / budget key file) ───────────────
 
-// Mock fetch for the AIGW /key/info + /spend/logs/v2 endpoints. Returns a
-// controlled Response-ish object (ok/status/json/headers.get) so the source
-// can be exercised hermetically without hitting the real gateway.
-function mockAigwFetch({ spend = 426.34, alias = 'test@meshy.ai', maxBudget = null, logs = [] } = {}) {
-  return async (url) => {
-    const u = String(url)
-    if (u.includes('/key/info')) {
-      return {
-        ok: true, status: 200,
-        json: async () => ({ info: { spend, max_budget: maxBudget, key_alias: alias, budget_duration: null, budget_reset_at: null } }),
-        headers: { get: () => null },
-      }
-    }
-    if (u.includes('/spend/logs/v2')) {
-      return {
-        ok: true, status: 200,
-        json: async () => ({ data: logs, total: logs.length, page: 1, page_size: 100, total_pages: 1 }),
-        headers: { get: () => null },
-      }
-    }
-    return { ok: false, status: 404, json: async () => ({}), headers: { get: () => null } }
-  }
-}
-
-describe('usage: personal-config loader (AIGW key/base/budgetUsd fallback)', () => {
+describe('usage: personal-config loader (AIGW key/base/budget key file fallback)', () => {
   let tmp
   beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-pcfg-')); resetPersonalConfigCache() })
   afterEach(() => { rmSync(tmp, { recursive: true, force: true }); resetPersonalConfigCache() })
 
-  it('falls back to ~/.config/meshy-aigw.key + default base + default budget when personal.json absent', () => {
+  it('falls back to ~/.config/meshy-aigw.key + default base + default budget key file when personal.json absent', () => {
     // write a fake meshy-aigw.key under the fake home
     mkdirSync(join(tmp, '.config'), { recursive: true })
     writeFileSync(join(tmp, '.config', 'meshy-aigw.key'), 'fake-scattered-key\n')
     const cfg = loadPersonalConfig({ home: tmp })
     assert.equal(cfg.aigw.key, 'fake-scattered-key')
     assert.equal(cfg.aigw.base, 'https://aigw.meshy.team')
-    assert.equal(cfg.aigw.budgetUsd, 1000)
+    assert.equal(cfg.aigw.budgetKeyFile, join(tmp, '.config', 'meshy-aigw.key'))
+    assert.ok(cfg.aigw.budgetProbeModel)
     assert.equal(cfg._source.personalFileExists, false)
   })
 
-  it('reads aigw.key/base/budgetUsd + linear.apiKey + claude.teams from personal.json', () => {
+  it('reads aigw.key/base/budgetKeyFile + linear.apiKey + claude.teams from personal.json', () => {
     mkdirSync(join(tmp, '.config', 'nanocode'), { recursive: true })
     writeFileSync(join(tmp, '.config', 'nanocode', 'personal.json'), JSON.stringify({
       linear: { apiKey: 'lin_fake' },
-      aigw: { base: 'https://aigw.test', key: 'aigw_fake', budgetUsd: 500 },
+      aigw: { base: 'https://aigw.test', key: 'aigw_fake', budgetKeyFile: '~/keys/dispatch.key' },
       claude: { teams: [{ name: 'Custom', configDir: join(tmp, '.claude-x') }] },
       ntfy: { url: 'http://ntfy.test/topic' },
     }))
     const cfg = loadPersonalConfig({ home: tmp })
     assert.equal(cfg.aigw.key, 'aigw_fake')
     assert.equal(cfg.aigw.base, 'https://aigw.test')
-    assert.equal(cfg.aigw.budgetUsd, 500)
+    assert.equal(cfg.aigw.budgetKeyFile, join(tmp, 'keys', 'dispatch.key')) // ~/ expands to the home
     assert.equal(cfg.linear.apiKey, 'lin_fake')
     assert.equal(cfg.ntfy.url, 'http://ntfy.test/topic')
     assert.equal(cfg.claude.teams.length, 1)
@@ -844,155 +794,5 @@ describe('usage: personal-config loader (AIGW key/base/budgetUsd fallback)', () 
   })
 })
 
-describe('usage: fetchAigwKeyInfo + fetchAigwSpendLogs (mocked)', () => {
-  it('fetchAigwKeyInfo parses nested info.spend + alias + max_budget', async () => {
-    const f = mockAigwFetch({ spend: 426.34, alias: 'zhiningjiao@meshy.ai', maxBudget: null })
-    const r = await fetchAigwKeyInfo({ key: 'k', base: 'https://aigw.test', fetchImpl: f })
-    assert.equal(r.spend, 426.34)
-    assert.equal(r.alias, 'zhiningjiao@meshy.ai')
-    assert.equal(r.maxBudget, null)
-    assert.equal(r.budgetResetAt, null)
-  })
 
-  it('fetchAigwKeyInfo returns { error } on HTTP failure (no throw)', async () => {
-    const f = async () => ({ ok: false, status: 403, json: async () => ({ detail: 'not allowed' }), headers: { get: () => null } })
-    const r = await fetchAigwKeyInfo({ key: 'k', base: 'https://aigw.test', fetchImpl: f })
-    assert.ok(r.error)
-    assert.equal(r.spend, undefined)
-  })
 
-  it('fetchAigwKeyInfo returns { error } when key is empty', async () => {
-    const r = await fetchAigwKeyInfo({ key: '', base: 'https://aigw.test', fetchImpl: mockAigwFetch() })
-    assert.ok(r.error)
-  })
-
-  it('fetchAigwSpendLogs aggregates window tokens + burn from data[]', async () => {
-    const baseTs = Date.parse('2026-07-06T05:00:00Z')
-    const logs = [
-      { startTime: '2026-07-06T05:00:00.000+00:00', total_tokens: 100000, model_group: 'litellm/SGLang-GLM-5.2' },
-      { startTime: '2026-07-06T05:20:00.000+00:00', total_tokens: 50000, model_group: 'litellm/SGLang-GLM-5.2' },
-    ]
-    const f = mockAigwFetch({ logs })
-    const r = await fetchAigwSpendLogs({ key: 'k', base: 'https://aigw.test', fetchImpl: f, now: baseTs + 60000 })
-    assert.equal(r.tokensWindow, 150000)
-    // span 20 min -> 150000/20 = 7500 per min
-    assert.equal(r.burnPerMin, 7500)
-    assert.equal(r.sampled, 2)
-    assert.equal(r.totalEntries, 2)
-  })
-
-  it('fetchAigwSpendLogs returns { error } on HTTP failure (no throw)', async () => {
-    const f = async () => ({ ok: false, status: 500, json: async () => ({}), headers: { get: () => null } })
-    const r = await fetchAigwSpendLogs({ key: 'k', base: 'https://aigw.test', fetchImpl: f })
-    assert.ok(r.error)
-  })
-})
-
-describe('usage: buildAigwSourceSummary (available path, mocked)', () => {
-  let tmp
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-aigw-')); resetPersonalConfigCache() })
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); resetPersonalConfigCache() })
-
-  function writePersonalConfig(home, aigw) {
-    mkdirSync(join(home, '.config', 'nanocode'), { recursive: true })
-    writeFileSync(join(home, '.config', 'nanocode', 'personal.json'), JSON.stringify({ aigw }))
-  }
-
-  it('returns available:true with real spend + local budgetUsd + burn (estimated)', async () => {
-    writePersonalConfig(tmp, { base: 'https://aigw.test', key: 'fake-test-key', budgetUsd: 500 })
-    const logs = [
-      { startTime: '2026-07-06T05:00:00.000+00:00', total_tokens: 100000, model_group: 'litellm/x' },
-      { startTime: '2026-07-06T05:20:00.000+00:00', total_tokens: 50000, model_group: 'litellm/x' },
-    ]
-    const f = mockAigwFetch({ spend: 426.34, alias: 'test@meshy.ai', maxBudget: null, logs })
-    const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: f, now: Date.parse('2026-07-06T06:00:00Z') })
-    assert.equal(src.available, true)
-    assert.equal(src.source, 'aigw-litellm')
-    assert.equal(src.alias, 'test@meshy.ai')
-    const w = src.windows[0]
-    assert.equal(w.used, 426.34)
-    assert.equal(w.limit, 500)            // local budgetUsd (key max_budget is null)
-    assert.equal(w.remaining, 500 - 426.34)
-    assert.equal(w.unit, 'usd')
-    assert.equal(w.estimated, true)       // budget is local
-    assert.equal(w.used_usd, 426.34)      // task unified-schema fields
-    assert.equal(w.budget_usd, 500)
-    assert.equal(w.remaining_usd, 500 - 426.34)
-    assert.equal(w.tokens_window, 150000)
-    assert.equal(w.burn_per_min, 7500)
-    assert.ok(w.note.includes('spend $426.34'))
-  })
-
-  it('uses key-side max_budget when it is non-null (>0)', async () => {
-    writePersonalConfig(tmp, { base: 'https://aigw.test', key: 'fake-test-key', budgetUsd: 500 })
-    const f = mockAigwFetch({ spend: 12.5, maxBudget: 100, logs: [] })
-    const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: f })
-    const w = src.windows[0]
-    assert.equal(w.used, 12.5)
-    assert.equal(w.limit, 100)            // key-side max_budget wins
-    assert.equal(w.remaining, 87.5)
-    assert.equal(w.budget_usd, 100)
-  })
-
-  it('degrades to unavailable when the key is absent (fake home, no files)', async () => {
-    const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: mockAigwFetch() })
-    assert.equal(src.available, false)
-    assert.ok(src.error)
-    assert.equal(src.windows[0].used, null)
-  })
-
-  it('degrades to unavailable when /key/info fails (key present but gateway 403)', async () => {
-    writePersonalConfig(tmp, { base: 'https://aigw.test', key: 'fake-test-key', budgetUsd: 500 })
-    const f = async () => ({ ok: false, status: 403, json: async () => ({ detail: 'not allowed' }), headers: { get: () => null } })
-    const src = await buildAigwSourceSummary({ home: tmp, fetchImpl: f })
-    assert.equal(src.available, false)
-    assert.ok(src.error.includes('/key/info'))
-    assert.equal(src.windows[0].used, null)
-  })
-})
-
-describe('usage: buildUsageSummary AIGW-available path (mocked, hermetic)', () => {
-  let tmp
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'nano-sum2-')); resetPersonalConfigCache() })
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); resetPersonalConfigCache() })
-
-  it('emits Team1 + AIGW with real spend/remaining when personal.json + fetchImpl are provided', async () => {
-    // fake home with .claude (no credentials -> jsonl degrade) + personal.json
-    mkdirSync(join(tmp, '.claude', 'projects'), { recursive: true })
-    mkdirSync(join(tmp, '.config', 'nanocode'), { recursive: true })
-    writeFileSync(join(tmp, '.config', 'nanocode', 'personal.json'), JSON.stringify({
-      aigw: { base: 'https://aigw.test', key: 'fake-test-key', budgetUsd: 1000 },
-    }))
-    const store = createStore(':memory:')
-    store.setSetting('claude_config_dir', join(tmp, '.claude'))
-    // isolate XDG so no real opencode DB leaks
-    const prevXdg = process.env.XDG_DATA_HOME
-    const prevGlm = process.env.GLM_XDG_DATA_HOME
-    process.env.XDG_DATA_HOME = join(tmp, 'xdg')
-    delete process.env.GLM_XDG_DATA_HOME
-    try {
-      const f = mockAigwFetch({ spend: 426.3456, alias: 'zhiningjiao@meshy.ai', maxBudget: null, logs: [] })
-      const sum = await buildUsageSummary({ home: tmp, store, now: NOW, fetchImpl: f })
-      assert.equal(sum.schemaVersion, 1)
-      // three sources: Team1 (Claude) + AIGW (Team2 ~/.claude-team2 absent in fake home)
-      const aigw = sum.sources.find((s) => s.source === 'aigw-litellm')
-      assert.ok(aigw, 'aigw source present')
-      assert.equal(aigw.available, true)
-      assert.equal(aigw.alias, 'zhiningjiao@meshy.ai')
-      const w = aigw.windows[0]
-      assert.equal(w.used, 426.3456)
-      assert.equal(w.budget_usd, 1000)
-      assert.equal(w.remaining_usd, 1000 - 426.3456)
-      assert.equal(w.estimated, true)
-      // the flat entries include the AIGW window with the unified-schema fields
-      const aigwEntry = sum.entries.find((e) => e.source === 'aigw-litellm')
-      assert.ok(aigwEntry)
-      assert.equal(aigwEntry.used_usd, 426.3456)
-    } finally {
-      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
-      else process.env.XDG_DATA_HOME = prevXdg
-      if (prevGlm === undefined) delete process.env.GLM_XDG_DATA_HOME
-      else process.env.GLM_XDG_DATA_HOME = prevGlm
-    }
-  })
-})

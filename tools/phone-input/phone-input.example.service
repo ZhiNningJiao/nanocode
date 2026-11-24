@@ -1,0 +1,32 @@
+# phone-input.example.service — systemd USER unit for the WSL half of the
+# phone input board (tools/phone-input/phone-input.mjs). Copy to
+# ~/.config/systemd/user/phone-input.service, fix the paths, then
+#   systemctl --user daemon-reload && systemctl --user enable --now phone-input
+# Start with --dry-run (logs only, hands nothing to Windows); drop the flag
+# once the log looks right. Logs: journalctl --user -u phone-input
+#
+# Only message ids, lengths, timings and results are logged — never text.
+
+[Unit]
+Description=Phone input board (chat group -> loopback paste queue)
+# Pin it to the one machine whose desktop should receive the text:
+# ConditionHost=<your-wsl-hostname>
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/phone-input/nanocode
+# lark-cli must find its config the same way your other bot processes do, e.g.
+# Environment=LARKSUITE_CLI_CONFIG_DIR=/var/tmp/lark-cli-cfg-%U
+ExecStart=/usr/bin/node tools/phone-input/phone-input.mjs --config config/phone-input.local.json --dry-run
+Restart=always
+RestartSec=5
+# Small footprint: one node process plus a short lark-cli call per poll.
+CPUQuota=30%
+MemoryMax=256M
+MemorySwapMax=0
+TasksMax=32
+Nice=5
+
+[Install]
+WantedBy=default.target

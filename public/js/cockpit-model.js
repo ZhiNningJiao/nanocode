@@ -5,15 +5,20 @@
  *    plugin's enabled flag is the module's only on/off switch (no second flag);
  *  - the layout setting stored on the server (`cockpit_layout`: order + off),
  *    normalised here (unknown ids dropped, new modules appended, never throws);
- *  - per-device UI memory (main view = cockpit | workspace, cockpit view =
- *    list | gantt | graph) normalisation;
- *  - swimlane rows for the gantt view (one lane per big event, cars folded);
- *  - node-graph coordinates (event = big node with progress ring, cars =
- *    satellites);
+ *  - per-device UI memory (main view = cockpit | workspace, cockpit page =
+ *    home | quota) normalisation;
+ *  - swimlane rows for the home gantt (one lane per big event, cars folded),
+ *    the gantt's column widths (label column + plot width — the one place
+ *    they are decided, so the axis and every row share one plot width);
+ *  - the 大事记流 (milestone feed) next to the gantt: every car milestone,
+ *    newest first, grouped by day → big event; feed items and gantt points
+ *    share one id (`pid`) so a click on either side finds the other;
  *  - the plain-text "quote into chat" line for an event / a car.
  */
 
 /** Cockpit modules in default order. `area` decides where the cockpit puts it. */
+import { groupLabel } from './issue-group-label.js'
+
 export const COCKPIT_MODULES = [
   { id: 'events', plugin: 'command-center', area: 'main' },
   { id: 'waiting', plugin: 'cc-waiting', area: 'side' },
@@ -22,8 +27,9 @@ export const COCKPIT_MODULES = [
   { id: 'chat', plugin: 'cc-chat', area: 'float' },
 ]
 export const COCKPIT_SETTING_KEY = 'cockpit_layout'
-export const COCKPIT_VIEWS = ['list', 'gantt', 'graph']
 export const MAIN_VIEWS = ['cockpit', 'workspace']
+/** Cockpit pages (icon rail): home = gantt + feed + waiting + machines; quota = the curve large + per-pool detail. */
+export const COCKPIT_PAGES = ['home', 'quota']
 /** Gantt time window choices (hours; 0 = everything in the export). */
 export const GANTT_SPANS = [24, 72, 0]
 export function normalizeSpan(v) {
@@ -94,25 +100,59 @@ export function modulesIn(layout, area) {
   return layout.order.map(moduleById).filter((m) => m && m.area === area && isModuleOn(layout, m.id))
 }
 
-export function normalizeView(v) { return COCKPIT_VIEWS.includes(v) ? v : 'list' }
+export function normalizePage(v) { return COCKPIT_PAGES.includes(v) ? v : 'home' }
 export function normalizeMainView(v) { return MAIN_VIEWS.includes(v) ? v : 'cockpit' }
 
 // ─── big events ─────────────────────────────────────────────────────────────
 
-const ATTENTION_STATES = new Set(['running', 'waiting_human', 'blocked', 'failed', 'timeout'])
+// 'running' is the expected steady state of a healthy event, not an attention
+// state — including it here used to auto-expand almost every event (most big
+// events have a car running most of the time), turning the main view into a
+// wall of car rows. Only states that actually need a human's eyes start open.
+const ATTENTION_STATES = new Set(['waiting_human', 'blocked', 'failed', 'timeout'])
 
 /** PRD §6.1: an event that is all green and nobody waits on starts folded. */
 export function startsExpanded(e) {
   return !!(e && (e.waitingCount > 0 || ATTENTION_STATES.has(e.state)))
 }
 
-/** Events + the "unassigned" group (only when it has cars or the car source is down). */
+/**
+ * Events + daily/misc (dailycat_0955: own lanes, shown only when they carry a
+ * car) + the "unassigned" group (only when it has cars or the car source is
+ * down).
+ */
 export function eventGroups(data) {
   if (!data || !Array.isArray(data.events)) return []
   const out = [...data.events]
+  for (const g of [data.daily, data.misc]) {
+    if (g && g.cars && g.cars.length) out.push({ ...g })
+  }
   const un = data.unassigned
   if (un && ((un.cars && un.cars.length) || !data.sources?.cars?.ok)) out.push({ ...un, key: '_none', unassigned: true })
   return out
+}
+
+/** Summary span over some cars: first start → last end (open if any car is), every milestone as a point. */
+function carsSpan(id, cars) {
+  let start = null
+  let end = null
+  let endOpen = false
+  let eta = null
+  let startMs = Infinity
+  let endMs = -Infinity
+  const points = []
+  for (const c of cars) {
+    const s = Date.parse(c.start)
+    if (Number.isFinite(s) && s < startMs) { startMs = s; start = c.start }
+    if (c.endOpen) {
+      endOpen = true
+      if (c.eta && (!eta || Date.parse(c.eta) > Date.parse(eta))) eta = c.eta
+    }
+    const en = Date.parse(c.end)
+    if (Number.isFinite(en) && en > endMs) { endMs = en; end = c.end }
+    for (const p of carPoints(c)) points.push({ ...p, label: `${c.car} · ${p.label || ''}` })
+  }
+  return { id, start, end: end || start, endOpen, eta, points }
 }
 
 /**
@@ -124,81 +164,131 @@ export function eventGroups(data) {
 export function buildSwimlanes(data, expanded) {
   return eventGroups(data).map((e) => {
     const cars = Array.isArray(e.cars) ? e.cars : []
-    let start = null
-    let end = null
-    let endOpen = false
-    let startMs = Infinity
-    let endMs = -Infinity
-    const points = []
-    for (const c of cars) {
-      const s = Date.parse(c.start)
-      if (Number.isFinite(s) && s < startMs) { startMs = s; start = c.start }
-      if (c.endOpen) endOpen = true
-      const en = Date.parse(c.end)
-      if (Number.isFinite(en) && en > endMs) { endMs = en; end = c.end }
-      for (const p of c.points || []) points.push({ ...p, label: `${c.car} · ${p.label || ''}` })
-    }
     return {
       key: e.key,
       event: e,
       unassigned: !!e.unassigned,
-      summary: { id: e.key, start, end: end || start, endOpen, points },
+      summary: carsSpan(e.key, cars),
       cars,
       expanded: !!expanded(e.key, e),
     }
   })
 }
 
-/** Flatten lanes into the row list layoutGantt() takes (summary rows + visible car rows). */
+/**
+ * Sub-rows inside one expanded lane. A tracker lane groups its cars by
+ * `car.sub` (the nearest 【named】 issue on the car's parent chain, chosen by
+ * the server): cars filed straight under the category come first with no
+ * header, then one group per sub — header label 「<category name> › <sub>」.
+ * The unassigned lane groups by `unassignedReason` (header carries `reason`
+ * for the view to word). Groups keep the cars' order of first appearance.
+ * → [{ key, label, reason, cars }] where key null = no header row.
+ */
+export function laneSubgroups(lane) {
+  const groups = new Map()
+  const catName = lane.unassigned ? null : (groupLabel(lane.event?.title) || lane.event?.title || lane.key)
+  for (const c of lane.cars) {
+    let key = null
+    let label = null
+    let reason = null
+    if (lane.unassigned) {
+      reason = c.unassignedReason || 'no_issue'
+      key = `reason:${reason}`
+    } else if (c.sub && c.sub.key) {
+      key = c.sub.key
+      label = `${catName} › ${c.sub.label}`
+    }
+    if (!groups.has(key)) groups.set(key, { key, label, reason, cars: [] })
+    groups.get(key).cars.push(c)
+  }
+  const out = [...groups.values()]
+  return [...out.filter((g) => g.key == null), ...out.filter((g) => g.key != null)]
+}
+
+/** Flatten lanes into the row list layoutGantt() takes (summary rows + sub-group header rows + visible car rows). */
 export function swimlaneRows(lanes) {
   const rows = []
   for (const lane of lanes) {
     rows.push({ kind: 'lane', lane, ...lane.summary })
     if (!lane.expanded) continue
-    for (const c of lane.cars) rows.push({ kind: 'car', lane, car: c, id: c.traceId, start: c.start, end: c.end, endOpen: c.endOpen, points: c.points })
+    for (const g of laneSubgroups(lane)) {
+      if (g.key != null) rows.push({ kind: 'sub', lane, group: g, ...carsSpan(`${lane.key}/${g.key}`, g.cars) })
+      for (const c of g.cars) rows.push({ kind: 'car', lane, car: c, id: c.traceId, start: c.start, end: c.end, endOpen: c.endOpen, eta: c.eta, points: carPoints(c) })
+    }
   }
   return rows
 }
 
-// ─── node graph ─────────────────────────────────────────────────────────────
+/** Stable id of one car milestone — shared by the gantt point and the feed item. */
+export function pointId(traceId, index) { return `${traceId}#${index}` }
 
-const LABEL_ROOM_PX = 34
-const CAR_STATE_ORDER = ['waiting_human', 'blocked', 'failed', 'timeout', 'running', 'queued', 'unknown', 'delivered', 'done']
-
-/**
- * Node-graph coordinates. Events sit on a grid of cells; each event is a big
- * node with its cars as satellites on a ring around it (the most urgent
- * states first). At most `maxSatellites` cars are drawn; the rest is counted.
- * Every coordinate is finite and inside [0, width] × [0, height].
- */
-export function layoutGraph(groups, { width, cell = 220, maxSatellites = 16 } = {}) {
-  if (!Number.isFinite(width) || width <= 0) throw new Error('layoutGraph: width must be a positive number')
-  const cols = Math.max(1, Math.floor(width / cell))
-  const cw = width / cols
-  const ch = cell + LABEL_ROOM_PX // room under the satellite ring for the title line
-  const r = Math.max(18, Math.min(cw, cell) * 0.16)
-  const ring = Math.min(cw, cell) * 0.34
-  const nodes = groups.map((e, i) => {
-    const cx = cw * (i % cols) + cw / 2
-    const cy = ch * Math.floor(i / cols) + cell / 2
-    const cars = [...(Array.isArray(e.cars) ? e.cars : [])]
-      .sort((a, b) => rank(a.state) - rank(b.state))
-    const shown = cars.slice(0, maxSatellites)
-    const sats = shown.map((c, k) => {
-      const ang = -Math.PI / 2 + (2 * Math.PI * k) / Math.max(shown.length, 1)
-      return { car: c, x: cx + ring * Math.cos(ang), y: cy + ring * Math.sin(ang) }
-    })
-    const p = e.progress
-    const frac = p && p.total > 0 ? Math.min(1, Math.max(0, p.done / p.total)) : null
-    return { event: e, x: cx, y: cy, r, ring, progress: frac, satellites: sats, hidden: cars.length - shown.length }
-  })
-  const rows = Math.max(1, Math.ceil(groups.length / cols))
-  return { width, height: rows * ch, nodes }
+/** A car's milestones, each carrying its `pid`. */
+export function carPoints(c) {
+  return (Array.isArray(c?.points) ? c.points : []).map((p, i) => ({ ...p, pid: pointId(c.traceId, i) }))
 }
 
-function rank(st) {
-  const i = CAR_STATE_ORDER.indexOf(st)
-  return i < 0 ? CAR_STATE_ORDER.length : i
+// ─── gantt columns ──────────────────────────────────────────────────────────
+
+export const GANTT_LABEL_PX = 220
+export const GANTT_LABEL_NARROW_PX = 128
+export const GANTT_GUTTER_PX = 18
+export const GANTT_MIN_PLOT_PX = 460
+const GANTT_NARROW_BELOW_PX = 640
+
+/**
+ * Container width → { labelPx, plotW, scroll }. The axis row and every lane /
+ * car row use exactly these two numbers (no flex, no second width), so a time
+ * maps to the same x on every row. On narrow screens the plot keeps a minimum
+ * width and the gantt scrolls sideways (lane names stay pinned).
+ */
+export function ganttColumns(width) {
+  const w = Number.isFinite(width) && width > 0 ? width : 800
+  const labelPx = w < GANTT_NARROW_BELOW_PX ? GANTT_LABEL_NARROW_PX : GANTT_LABEL_PX
+  const fit = w - labelPx - GANTT_GUTTER_PX
+  const plotW = Math.max(GANTT_MIN_PLOT_PX, fit)
+  return { labelPx, plotW, scroll: fit < GANTT_MIN_PLOT_PX }
+}
+
+// ─── 大事记流 (milestone feed) ───────────────────────────────────────────────
+
+function localDay(ms) {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * Every car milestone at or after `fromMs`, newest first, grouped by local
+ * day, then by big event (in order of each event's newest item that day).
+ * At most `limit` items in total (the newest). Items carry the gantt `pid`.
+ * → [{ day, events: [{ key, title, unassigned, items: [{ pid, t, kind, label, car, traceId, state }] }] }]
+ */
+export function buildFeed(data, { fromMs = -Infinity, limit = 120 } = {}) {
+  const all = []
+  for (const e of eventGroups(data)) {
+    for (const c of e.cars || []) {
+      for (const p of carPoints(c)) {
+        const ms = Date.parse(p.t)
+        if (!Number.isFinite(ms) || ms < fromMs) continue
+        all.push({ ms, eventKey: e.key, event: e, item: { pid: p.pid, t: p.t, kind: p.kind, label: p.label || '', car: c.car, traceId: c.traceId, state: c.state } })
+      }
+    }
+  }
+  all.sort((a, b) => b.ms - a.ms || a.item.pid.localeCompare(b.item.pid))
+  const days = []
+  for (const x of all.slice(0, limit)) {
+    const day = localDay(x.ms)
+    let d = days[days.length - 1]
+    if (!d || d.day !== day) { d = { day, events: [], byKey: new Map() }; days.push(d) }
+    let g = d.byKey.get(x.eventKey)
+    if (!g) { g = { key: x.eventKey, title: x.event.title || null, unassigned: !!x.event.unassigned, items: [] }; d.byKey.set(x.eventKey, g); d.events.push(g) }
+    g.items.push(x.item)
+  }
+  return days.map(({ day, events }) => ({ day, events }))
+}
+
+/** Big events somebody is waiting on (the 等你 chips above the gantt), most waiting first. */
+export function waitingEvents(data) {
+  return eventGroups(data).filter((e) => e.waitingCount > 0).sort((a, b) => b.waitingCount - a.waitingCount)
 }
 
 // ─── quote into chat (PRD P0-6) ─────────────────────────────────────────────

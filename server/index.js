@@ -5,7 +5,7 @@ import { createConnection } from 'net'
 import { fileURLToPath } from 'url'
 import path from 'path'
 import os from 'os'
-import { readFileSync, statSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync } from 'fs'
 import { execFile, execSync } from 'child_process'
 import { promisify } from 'util'
 const execFileAsync = promisify(execFile)
@@ -15,14 +15,18 @@ import { createTerminalRoutes } from '../terminal/routes.js'
 import { createFileRoutes } from '../terminal/files.js'
 import { seedRemoteDefaults } from '../terminal/remote.js'
 import { startQaWatcher, setNtfyStore, pushNtfyTurnComplete, pushNtfyMessage, isNtfyConfigured, pushNtfyLinearImportant } from './qa-watcher.js'
-import { startLinearNotifier, stopLinearNotifier, pushNtfyTest, runLinearPoll } from './linear-notif.js'
+import { startLinearNotifier, stopLinearNotifier, pushNtfyTest, runLinearPoll, isDesignatedLinearPushInstance } from './linear-notif.js'
 import { createAgentHealthMonitor } from '../terminal/agent-health-monitor.js'
 import { loadPersonalConfig } from '../terminal/personal-config.js'
+import { timedFs } from '../terminal/bounded-scan.js'
 import { getAkariUrls, fetchAkariState, checkAkariReachable, getAkariServiceEntry } from './akari-proxy.js'
 import { readArmyStatus, readWakerLogTail, getWakerHealth, collectBriefing } from './historian.js'
 import { startWaker, stopWaker, restartWaker, getWakerControlState, setInterval as setWakerInterval } from './waker-control.js'
 import { loadMachinesConfig, collectAllMachines, recommendHeavyWorkloadTarget } from './machines.js'
+import { PLUGINS_SETTING_KEY, isPluginEnabled } from './plugins-state.js'
 import { createCommandCenterRoutes } from './command-center.js'
+import { isSystemModeEnabled } from './system-mode-flag.js'
+import { AUTH_SETTING_KEY, LOGIN_PATH, LOGIN_API_PATH, createTokenAuth, markRemoteEntrySocket } from './token-auth.js'
 
 // ── P0: Process-level exception guards ───────────────────────────────────────
 // TTS failures (fetch timeout, connection refused, bad response, stream errors)
@@ -63,11 +67,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
 const PORT = process.env.PORT || 9475
 const HOST = process.env.HOST || '0.0.0.0'
+// Remote entry: optional second listener, bound to 127.0.0.1 only,
+// where every request needs the token — the landing point for an ssh reverse
+// tunnel (see server/token-auth.js). Unset = not opened.
+const REMOTE_PORT = parseRemotePort(process.env.NANOCODE_REMOTE_PORT, PORT)
+
+function parseRemotePort(raw, mainPort) {
+  if (raw === undefined || raw === '') return null
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 65535 || n === Number(mainPort)) {
+    console.error(`[remote-entry] invalid NANOCODE_REMOTE_PORT=${raw} (needs 1-65535, != PORT)`)
+    process.exit(1)
+  }
+  return n
+}
 
 // System mode: this process becomes the router. Workers are spawned
 // per-user by `nanocode login` (via the setuid helper) and reach us via
 // the control socket. See docs/system-mode-design.md.
-if (process.env.NANOCODE_SYSTEM === '1') {
+// isSystemModeEnabled() is the one explicit, default-off switch (README
+// "Deployment"): off, router-mode.js is never imported — nothing below this
+// branch exists for a single-user install.
+if (isSystemModeEnabled()) {
   const { startRouterMode } = await import('./router-mode.js')
   startRouterMode({ host: HOST, port: Number(PORT) })
   // Skip single-user setup below — the import above defines its own server.
@@ -106,22 +127,21 @@ function getVersionedIndexHtml() {
     .replace(/(src="\/js\/([^"?]+\.js))(")/g, `$1?v=${ASSET_VERSION}$3`)
 }
 
-app.get('/', (_req, res) => {
-  res.setHeader('Cache-Control', 'no-store')
-  res.setHeader('Content-Type', 'text/html; charset=utf-8')
-  res.send(getVersionedIndexHtml())
-})
-
 // Dev-mode: no-store for all /js/* and /style.css so browser never caches JS/CSS
 app.use((req, res, next) => {
   const url = req.path
-  if (url === '/style.css' || url.startsWith('/js/') || url === '/manifest.json') {
+  if (url === '/style.css' || url.startsWith('/js/') || url === '/manifest.json' || url === '/sw.js') {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
   }
   next()
 })
 
-app.use(express.static(path.join(root, 'public')))
+// /api/* never goes through express.static: serve-static fs.stat()s every
+// request it sees on a libuv pool worker, so while a stalled /jfs held the pool
+// even /api/health and /api/sessions queued behind it (REPORT_nanolock_0730.md).
+// '/' is the app shell: served by the versioned route below, behind the token gate.
+const servePublic = express.static(path.join(root, 'public'))
+app.use((req, res, next) => (req.path.startsWith('/api/') || req.path === '/' ? next() : servePublic(req, res, next)))
 
 const vendorOpts = { maxAge: '365d', immutable: true }
 const vendorMap = {
@@ -139,6 +159,11 @@ for (const [route, dir] of Object.entries(vendorMap)) {
 const store = getStore()
 store.migrateProjectsJson(path.join(root, 'terminal', 'projects.json'))
 store.ensureStarterProject()
+// Prime the personal-config cache before listen(): loadPersonalConfig() reads
+// ~/.config/nanocode/personal.json + key files synchronously, once per path,
+// then serves from memory. Primed here, no request ever pays that sync read on
+// the shared /jfs home (REPORT_nanolock_0730.md).
+loadPersonalConfig()
 // 需求16: seed the master's resident secretary favorites + life assistant
 // into the home project (cwd === os.homedir()). Idempotent one-time reconcile
 // gated by `secretary_favorites_seeded_v1` — see store.seedSecretaryFavorites.
@@ -158,32 +183,28 @@ const {
   handleRemoteSshWs,
 } = createTerminalRoutes(store, { port: PORT })
 
-// ─── Token auth middleware ─────────────────────────────────────────────────
-// Setting: nanocode_auth_token (string). Default '' = auth disabled.
-// When non-empty, all /api/* requests must supply a matching token via:
-//   - Header:      X-Nanocode-Token: <token>
-//   - Query param: ?token=<token>
-// WebSocket upgrades are also checked via the ?token= query param.
-// /api/health is intentionally exempt so monitors can check liveness.
+// ─── Token auth gate ───────────────────────────────────────────
+// One trust rule for HTTP and WebSocket — server/token-auth.js. Mounted after
+// the static/vendor middleware, so assets (login page, manifest, sw.js, icons,
+// js, css) stay public and every route registered below is gated. /api/health
+// and the login endpoints are exempt.
+const tokenAuth = createTokenAuth({
+  getToken: () => store.getSetting(AUTH_SETTING_KEY) || '',
+  setToken: (token) => store.setSetting(AUTH_SETTING_KEY, token),
+})
+app.use(tokenAuth.httpGate)
 
-function getAuthToken() {
-  return store.getSetting('nanocode_auth_token') || ''
-}
+app.get(LOGIN_PATH, (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.sendFile(path.join(root, 'public', 'token-login.html'))
+})
+app.post(LOGIN_API_PATH, tokenAuth.loginHandler)
+app.post('/api/auth/token', tokenAuth.setTokenHandler)
 
-function checkApiToken(req, res, next) {
-  const expected = getAuthToken()
-  if (!expected) return next()  // auth disabled
-  const provided = req.headers['x-nanocode-token'] || req.query.token || ''
-  if (provided !== expected) {
-    return res.status(401).json({ error: 'Unauthorized: invalid or missing token' })
-  }
-  next()
-}
-
-// Apply token check to all /api/* except /api/health
-app.use('/api', (req, res, next) => {
-  if (req.path === '/health') return next()
-  checkApiToken(req, res, next)
+app.get('/', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Content-Type', 'text/html; charset=utf-8')
+  res.send(getVersionedIndexHtml())
 })
 
 app.use(terminalRouter)
@@ -261,7 +282,8 @@ app.post('/api/notify/linear-poll', asyncWrap(async (_req, res) => {
 const VALID_CLI_PROVIDERS = new Set(['claude', 'agent', 'opencode', 'codex', 'meshy-aigw', 'fable5'])
 
 app.get('/api/settings', (_req, res) => {
-  res.json(store.getAllSettings())
+  const { [AUTH_SETTING_KEY]: _token, ...settings } = store.getAllSettings()
+  res.json(settings)
 })
 
 app.put('/api/settings', (req, res) => {
@@ -272,43 +294,13 @@ app.put('/api/settings', (req, res) => {
   if (key === 'cli_provider' && !VALID_CLI_PROVIDERS.has(value)) {
     return res.status(400).json({ error: `Invalid cli_provider: ${value}` })
   }
+  if (key === AUTH_SETTING_KEY) {
+    return res.status(400).json({ error: 'the auth token is set only from the local machine: tools/set-auth-token.mjs' })
+  }
   store.setSetting(key, value)
+  if (key === PLUGINS_SETTING_KEY) syncPluginBackgroundWork()
   res.json({ ok: true })
 })
-
-// ─── Auth status (P1-4) ────────────────────────────────────────────────────
-
-let _authStatusCache = null
-let _authStatusCacheAt = 0
-const AUTH_CACHE_MS = 60_000  // 60 seconds
-
-app.get('/api/auth/status', asyncWrap(async (_req, res) => {
-  const now = Date.now()
-  if (_authStatusCache && now - _authStatusCacheAt < AUTH_CACHE_MS) {
-    return res.json(_authStatusCache)
-  }
-  try {
-    const result = await new Promise((resolve, reject) => {
-      execFile('claude', ['auth', 'status', '--json'], { timeout: 5000 }, (err, stdout, stderr) => {
-        if (err) {
-          // Return a graceful not-logged-in response if claude auth status fails
-          resolve({ loggedIn: false, error: err.message })
-        } else {
-          try {
-            resolve(JSON.parse(stdout.trim()))
-          } catch {
-            resolve({ loggedIn: false, error: 'parse error', raw: stdout.slice(0, 200) })
-          }
-        }
-      })
-    })
-    _authStatusCache = result
-    _authStatusCacheAt = now
-    res.json(result)
-  } catch (err) {
-    res.status(500).json({ loggedIn: false, error: err.message })
-  }
-}))
 
 // ─── TTS proxy — forwards text to a local GPT-SoVITS v3 service ──────────
 
@@ -345,7 +337,9 @@ const TTS_CB = {
 function getTtsConfig() {
   const s = store.getAllSettings()
   return {
-    ref_audio_path: s.tts_ref_audio || '/storage/home/zhiningjiao/code/GPT-SoVITS/ref_audio.wav',
+    // No universal default reference-audio path exists (it's a per-install
+    // GPT-SoVITS asset) — unset means "not configured yet", not a guess.
+    ref_audio_path: s.tts_ref_audio || '',
     prompt_text: s.tts_prompt_text || '这是猫娘秘书的声音喵，主人你好呀',
     prompt_lang: s.tts_prompt_lang || 'zh',
     text_lang: s.tts_text_lang || 'en',
@@ -551,17 +545,24 @@ app.get('/api/tts/status', asyncWrap(async (_req, res) => {
 
 // ─── Service port health checker ─────────────────────────────────────────────
 
+// Deployment-specific service hosts (internal addresses) never belong in the
+// tracked default — see services-config.json (neutral, localhost-only). A
+// site adds its own services by dropping a services-config.local.json next
+// to it (gitignored); that file wins when present.
+const SERVICES_CONFIG_LOCAL_PATH = path.join(__dirname, 'services-config.local.json')
 const SERVICES_CONFIG_PATH = path.join(__dirname, 'services-config.json')
 const DEFAULT_SERVICES = [
-  { name: 'mblend',      host: '10.18.8.55', port: 5050 },
-  { name: 'dccpipeline', host: '10.18.8.55', port: 8765 },
-  { name: 'regression',  host: '10.18.8.55', port: 8000 },
-  { name: 'nanocode',    host: 'localhost',  port: 9475 },
-  { name: 'TTS',         host: 'localhost',  port: 9880 },
+  { name: 'nanocode', host: 'localhost', port: 9475 },
+  { name: 'TTS',      host: 'localhost', port: 9880 },
 ]
 
 let watchedServices = DEFAULT_SERVICES
-try { watchedServices = JSON.parse(readFileSync(SERVICES_CONFIG_PATH, 'utf8')) } catch {}
+try {
+  watchedServices = JSON.parse(readFileSync(SERVICES_CONFIG_LOCAL_PATH, 'utf8'))
+} catch {
+  try { watchedServices = JSON.parse(readFileSync(SERVICES_CONFIG_PATH, 'utf8')) }
+  catch { console.warn(`[services-config] no local or tracked config readable, using built-in default (${DEFAULT_SERVICES.length} services)`) }
+}
 
 const SERVICE_CHECK_MS = 30_000
 const serviceStatus = {}
@@ -569,7 +570,7 @@ for (const s of watchedServices) serviceStatus[s.name] = { status: 'unknown', ch
 
 // ─── akari dispatch server (MES-14049) ───────────────────────────────────────
 // The akari server URL is personal-config driven (personal.akari.serverUrl /
-// AKARI_SERVER_URL, default http://10.18.8.55:9481). Re-read on each call so an
+// AKARI_SERVER_URL, default http://127.0.0.1:9481). Re-read on each call so an
 // operator URL change propagates without a server restart. The akari row in the
 // Port Health grid is a MANAGED entry (up/down via the real /api/health HTTP
 // probe, not a bare TCP connect) — injected into /api/services-config fresh on
@@ -579,9 +580,14 @@ serviceStatus['akari'] = { status: 'unknown', checkedAt: null }
 
 // ─── Agent manager ───────────────────────────────────────────────────────────
 
+// Same local-override convention as services-config above: a site's real
+// agent roster goes in agents-config.local.json (gitignored); the tracked
+// file stays an empty placeholder.
+const AGENTS_CONFIG_LOCAL_PATH = path.join(__dirname, 'agents-config.local.json')
 const AGENTS_CONFIG_PATH = path.join(__dirname, 'agents-config.json')
 let agentsConfig = []
-try { agentsConfig = JSON.parse(readFileSync(AGENTS_CONFIG_PATH, 'utf8')) } catch {}
+try { agentsConfig = JSON.parse(readFileSync(AGENTS_CONFIG_LOCAL_PATH, 'utf8')) }
+catch { try { agentsConfig = JSON.parse(readFileSync(AGENTS_CONFIG_PATH, 'utf8')) } catch {} }
 
 async function checkTmuxWindow(target) {
   if (!target) return 'unknown'
@@ -658,6 +664,11 @@ app.get('/api/services-config', (_req, res) => {
 // lens URL for the one-click jump button) and /api/akari/state bundles health +
 // concurrency + workers + lanes for a single gentle poll (≥10s in the panel).
 
+// Relay where.json URLs for the PWA offline page (tools/reach/, public/sw.js).
+app.get('/api/reach', (_req, res) => {
+  res.json({ where: loadPersonalConfig().reach.where })
+})
+
 app.get('/api/akari/config', (_req, res) => {
   const { serverUrl, lensUrl } = akariUrls()
   res.json({ serverUrl, lensUrl })
@@ -729,8 +740,40 @@ app.get('/api/machines', (_req, res) => {
 // ─── Command Center (指挥舱 phase 1) — see server/command-center.js ─────────
 app.use(createCommandCenterRoutes())
 
-setTimeout(() => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }, 2000)
-setInterval(() => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }, MACHINES_POLL_MS)
+// The machine board is an optional plugin (default off): its SSH poll runs
+// only while the plugin is switched on (plugins_enabled), not "whether or not
+// anyone looks" as before.
+let machinesTimer = null
+function syncMachinesPoll() {
+  const on = isPluginEnabled(store, 'machines')
+  if (on && !machinesTimer) {
+    const tick = () => { pollMachines().catch((e) => console.error('[machines] poll failed:', e.message)) }
+    setTimeout(tick, 2000)
+    machinesTimer = setInterval(tick, MACHINES_POLL_MS)
+  } else if (!on && machinesTimer) {
+    clearInterval(machinesTimer)
+    machinesTimer = null
+    machinesSnapshot = { machines: [], checkedAt: null, recommended: null }
+  }
+}
+
+// The services (Port Health) grid is an optional plugin (default off): its TCP
+// poll runs only while the plugin is switched on, same gating as the machine
+// board above (owner 2026-11-22: he doesn't watch port liveness himself, doesn't
+// want it running "whether or not anyone looks"; asking the agent covers the rare check).
+let servicesTimer = null
+function syncServicesPoll() {
+  const on = isPluginEnabled(store, 'services')
+  if (on && !servicesTimer) {
+    const tick = () => { runServiceChecks(broadcastNotify).catch((e) => console.error('[services] check failed:', e.message)) }
+    setTimeout(tick, 5000)
+    servicesTimer = setInterval(tick, SERVICE_CHECK_MS)
+  } else if (!on && servicesTimer) {
+    clearInterval(servicesTimer)
+    servicesTimer = null
+    for (const name of Object.keys(serviceStatus)) serviceStatus[name] = { status: 'unknown', checkedAt: null }
+  }
+}
 
 app.post('/api/historian/waker/start', asyncWrap(async (req, res) => {
   const { live } = req.body || {}
@@ -768,11 +811,11 @@ app.get('/api/historian/waker/control', asyncWrap(async (_req, res) => {
 
 const DUTY_STATUS_PATH = path.join(os.homedir(), 'code', 'duty-status.json')
 
-app.get('/api/duty', (_req, res) => {
+app.get('/api/duty', async (_req, res) => {
   let raw, mtimeMs
   try {
-    mtimeMs = statSync(DUTY_STATUS_PATH).mtimeMs
-    raw = readFileSync(DUTY_STATUS_PATH, 'utf8')
+    mtimeMs = (await timedFs.stat(DUTY_STATUS_PATH)).mtimeMs
+    raw = await timedFs.readFile(DUTY_STATUS_PATH, 'utf8')
   } catch (err) {
     return res.status(503).json({ ok: false, error: `duty status file unreadable (${DUTY_STATUS_PATH}): ${err.message}` })
   }
@@ -959,19 +1002,16 @@ const remoteSshWss = new WebSocketServer({
   perMessageDeflate: deflateOpts,
 })
 
-server.on('upgrade', (req, socket, head) => {
-  const parsed = new URL(req.url, `http://${req.headers.host}`)
-  const { pathname, searchParams } = parsed
+function handleUpgrade(req, socket, head) {
+  const { pathname } = new URL(req.url, 'http://nanocode.invalid')
 
-  // WebSocket token auth: if auth is enabled, check ?token= query param
-  const expectedWsToken = getAuthToken()
-  if (expectedWsToken) {
-    const provided = searchParams.get('token') || req.headers['x-nanocode-token'] || ''
-    if (provided !== expectedWsToken) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\nUnauthorized')
-      socket.destroy()
-      return
-    }
+  // Same trust rule as HTTP: cookie / ?token= / header, loopback on main port free.
+  const decision = tokenAuth.checkUpgrade(req)
+  if (!decision.ok) {
+    const reason = decision.status === 403 ? 'Forbidden' : 'Unauthorized'
+    socket.write(`HTTP/1.1 ${decision.status} ${reason}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${decision.code}`)
+    socket.destroy()
+    return
   }
 
   if (pathname === '/ws/terminal') {
@@ -993,7 +1033,8 @@ server.on('upgrade', (req, socket, head) => {
   } else {
     socket.destroy()
   }
-})
+}
+server.on('upgrade', handleUpgrade)
 
 terminalWss.on('connection', (ws) => handleTerminalWs(ws))
 tabsWss.on('connection', (ws) => handleTabsWs(ws))
@@ -1023,11 +1064,22 @@ startQaWatcher(broadcastNotify)
 // Start the Linear → ntfy polling bridge (no webhook, all keys server-side).
 // Reads poll interval and API key from the store; gracefully degrades if
 // Linear key or lanes.json is unavailable.
-startLinearNotifier({ store, broadcastNotify })
-
-// Run initial check after startup, then every 30s
-setTimeout(() => runServiceChecks(broadcastNotify), 5000)
-setInterval(() => runServiceChecks(broadcastNotify), SERVICE_CHECK_MS)
+// Background work of optional plugins follows the one plugin switch: machine
+// board SSH poll ('machines'), Linear → ntfy notifier ('linear-mobile-push';
+// also needs a Linear key, and only the designated instance runs it so two
+// nanocode processes sharing a data dir don't each push the same event —
+// see isDesignatedLinearPushInstance). Re-synced whenever the browser saves
+// plugins_enabled.
+function syncPluginBackgroundWork() {
+  syncMachinesPoll()
+  syncServicesPoll()
+  if (isPluginEnabled(store, 'linear-mobile-push') && isDesignatedLinearPushInstance(PORT)) {
+    startLinearNotifier({ store, broadcastNotify })
+  } else {
+    stopLinearNotifier()
+  }
+}
+syncPluginBackgroundWork()
 
 // P2 兜底 error middleware（必须在所有 route 之后）— 接住 asyncWrap .catch(next) 传出的 rejection，
 // 统一 log + 返回 500，绝不让路由层错误冒泡成 unhandledRejection 把进程 crash。Express 靠 4 个参数识别 error handler。
@@ -1039,5 +1091,17 @@ app.use((err, req, res, _next) => {
 server.listen(PORT, HOST, () => {
   console.log(`Nanocode running on http://${HOST}:${PORT}`)
 })
+
+if (REMOTE_PORT) {
+  const remoteServer = createServer(app)
+  remoteServer.on('connection', markRemoteEntrySocket)
+  remoteServer.on('upgrade', handleUpgrade)
+  remoteServer.on('error', (err) => {
+    console.error(`[remote-entry] FAILED on 127.0.0.1:${REMOTE_PORT}: ${err?.message || err} — remote entry is DOWN`)
+  })
+  remoteServer.listen(REMOTE_PORT, '127.0.0.1', () => {
+    console.log(`Nanocode remote entry (token always required) on http://127.0.0.1:${REMOTE_PORT}`)
+  })
+}
 
 } // end startSingleUserMode

@@ -1,0 +1,25 @@
+{
+  "_comment": "One dispatch form = one car. Fill, then: node tools/dispatch/dispatch.mjs <this file> --dry-run; drop --dry-run to dispatch. Field reference: tools/dispatch/form.mjs header.",
+  "topic": "ikbody",
+  "line": "ik",
+  "issue": "ALGO-31",
+  "model": "opus",
+  "effort": "high",
+  "hardCapHours": 3,
+  "deadlineNote": "最好 16:30 前出第一块板",
+  "titleNotes": ["只做原型、不推泳道"],
+  "title": "IK 碰撞 ① 碰撞体：每个部位一个实心体跟自己的骨走",
+  "why": ["owner 原话：「它的手臂实际上是一个很纤细的圆柱……」"],
+  "readFirst": [
+    { "path": "/path/to/work/IK_DIRECTIONS.md", "note": "全文" },
+    "/path/to/work/REPORT_previous.md"
+  ],
+  "todo": ["**研究树**：……", "**量**：……"],
+  "deliverExtra": ["数表", "两块板的完整链接", "本工区提交 SHA"],
+  "siblings": [],
+  "boardDir": "ikbody_1430",
+  "redlinesExtra": ["只做原型：不推泳道、不开 PR。"],
+  "plainLines": 8,
+  "plainAudience": "给 owner 的",
+  "heavyUnits": 1
+}

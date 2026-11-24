@@ -207,10 +207,10 @@ describe('remote machines (MES-13740 需求10)', () => {
 
   describe('sanitizeMachine (ssh type)', () => {
     it('accepts a minimal ssh machine with key auth', () => {
-      const r = sanitizeMachine({ type: 'ssh', alias: 'dev-212', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' })
+      const r = sanitizeMachine({ type: 'ssh', alias: 'example-dev-box', host: '203.0.113.21', user: 'Administrator', key: '~/.ssh/id_cluster' })
       assert.ok(r.ok, r.errors.join('; '))
       assert.equal(r.machine.type, 'ssh')
-      assert.equal(r.machine.host, '172.30.20.212')
+      assert.equal(r.machine.host, '203.0.113.21')
       assert.equal(r.machine.user, 'Administrator')
       assert.equal(r.machine.port, 22)
       assert.equal(r.machine.key, '~/.ssh/id_cluster')
@@ -282,12 +282,12 @@ describe('remote machines (MES-13740 需求10)', () => {
     afterEach(() => { try { rmSync(tmpDir, { recursive: true, force: true }) } catch {} })
 
     it('builds an ssh command with key auth', () => {
-      const r = buildSshCommand({ type: 'ssh', host: '172.30.20.212', user: 'Administrator', port: 22, key: keyPath })
+      const r = buildSshCommand({ type: 'ssh', host: '203.0.113.21', user: 'Administrator', port: 22, key: keyPath })
       assert.ok(r.ok, r.error)
       assert.equal(r.command, 'ssh')
       assert.deepEqual(r.args.slice(0, 2), ['-i', keyPath])
       assert.ok(r.args.includes('-tt'))
-      assert.ok(r.args.includes('Administrator@172.30.20.212'))
+      assert.ok(r.args.includes('Administrator@203.0.113.21'))
       assert.ok(r.args.some((a, i) => a === '-o' && r.args[i + 1] === 'StrictHostKeyChecking=accept-new'))
       assert.deepEqual(r.env, {})
       assert.ok(!r.logSummary.includes(keyPath), 'logSummary must not leak the key path')
@@ -351,15 +351,15 @@ describe('remote machines (MES-13740 需求10)', () => {
     it('merges read-only personal machines ahead of the store list', () => {
       addMachine(store, { alias: 'gpu1', peerId: '111' })
       const personal = [
-        { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster' },
+        { alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster' },
       ]
       const merged = mergePersonalMachines(listMachines(store), personal)
       assert.equal(merged.length, 2)
-      assert.equal(merged[0].alias, 'win-212')
-      assert.equal(merged[0].id, 'personal:win-212')
+      assert.equal(merged[0].alias, 'win-box')
+      assert.equal(merged[0].id, 'personal:win-box')
       assert.equal(merged[0].personal, true)
       assert.equal(merged[0].readOnly, true)
-      assert.equal(merged[0].host, '172.30.20.212')
+      assert.equal(merged[0].host, '203.0.113.21')
       // store machine follows
       assert.equal(merged[1].alias, 'gpu1')
     })
@@ -368,11 +368,11 @@ describe('remote machines (MES-13740 需求10)', () => {
       addMachine(store, { alias: 'gpu1', peerId: '111' })
       const personal = [
         { alias: 'bad', type: 'ssh', host: '1.2.3.4', user: 'r' }, // no key, no password
-        { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' },
+        { alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', key: '~/.ssh/id_cluster' },
       ]
       const merged = mergePersonalMachines(listMachines(store), personal)
       assert.equal(merged.length, 2) // 1 valid personal + 1 store
-      assert.equal(merged[0].alias, 'win-212')
+      assert.equal(merged[0].alias, 'win-box')
     })
 
     it('returns the store list unchanged when personalMachines is null/empty', () => {
@@ -385,7 +385,7 @@ describe('remote machines (MES-13740 需求10)', () => {
       addMachine(store, { alias: 'gpu1', peerId: '111' })
       const before = listMachines(store).length
       mergePersonalMachines(listMachines(store), [
-        { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' },
+        { alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', key: '~/.ssh/id_cluster' },
       ])
       assert.equal(listMachines(store).length, before, 'store must be untouched')
     })
@@ -394,24 +394,24 @@ describe('remote machines (MES-13740 需求10)', () => {
   describe('getMachine (personal dev machines, MES-13824)', () => {
     it('resolves a personal: machine from the personalMachines list', () => {
       const personal = [
-        { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' },
+        { alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', key: '~/.ssh/id_cluster' },
       ]
-      const m = getMachine(store, 'personal:win-212', personal)
+      const m = getMachine(store, 'personal:win-box', personal)
       assert.ok(m, 'personal machine must resolve')
-      assert.equal(m.host, '172.30.20.212')
+      assert.equal(m.host, '203.0.113.21')
       assert.equal(m.user, 'Administrator')
       assert.equal(m.personal, true)
       assert.equal(m.readOnly, true)
-      assert.equal(m.id, 'personal:win-212')
+      assert.equal(m.id, 'personal:win-box')
     })
 
     it('returns null for an unknown personal: id (no match in the list)', () => {
-      const m = getMachine(store, 'personal:nope', [{ alias: 'win-212', type: 'ssh', host: '1.2.3.4', user: 'r', key: '/k' }])
+      const m = getMachine(store, 'personal:nope', [{ alias: 'win-box', type: 'ssh', host: '1.2.3.4', user: 'r', key: '/k' }])
       assert.equal(m, null)
     })
 
     it('returns null for a personal: id when no personalMachines passed', () => {
-      assert.equal(getMachine(store, 'personal:win-212'), null)
+      assert.equal(getMachine(store, 'personal:win-box'), null)
     })
 
     it('still resolves store machines by id (backward compatible)', () => {

@@ -10,6 +10,7 @@
  */
 
 import { TerminalPane } from './terminal-pane.js'
+import { getEnabledTabTypes } from './tab-types.js'
 import { fetchTabs, createTab, deleteTab, patchTab, setTabFavorite } from './api.js'
 
 // Block renderers (claude-block-renderer.js ~100 KB, codex-block-renderer.js
@@ -1328,22 +1329,6 @@ const NEW_TAB_OPTIONS = [
   { type: 'tmux', label: 'Tmux Session', hint: 'attach' },
 ]
 
-const DEFAULT_ENABLED_TYPES = ['bash', 'claude', 'codex', 'agent', 'opencode', 'meshy-aigw', 'fable5', 'tmux']
-const ENABLED_TYPES_KEY = 'nanocodeEnabledTabTypes'
-
-export function getEnabledTabTypes() {
-  try {
-    const stored = localStorage.getItem(ENABLED_TYPES_KEY)
-    if (!stored) return DEFAULT_ENABLED_TYPES
-    const parsed = JSON.parse(stored)
-    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_ENABLED_TYPES
-    return parsed
-  } catch { return DEFAULT_ENABLED_TYPES }
-}
-
-export function setEnabledTabTypes(types) {
-  try { localStorage.setItem(ENABLED_TYPES_KEY, JSON.stringify(types)) } catch {}
-}
 
 const TYPE_ICON_SVG = {
   bash: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseJsonlHistory } from '../../terminal/claude-history.js'
+import { parseJsonlHistory, parseJsonlHistoryBefore } from '../../terminal/claude-history.js'
 
 const tempDirs = []
 
@@ -96,5 +96,29 @@ describe('parseJsonlHistory', () => {
 
     assert.match(events[0].replay_id, /^user:[0-9a-f]{16}:1$/)
     assert.equal(events[1].replay_id, events[0].replay_id.replace(/:1$/, ':2'))
+  })
+})
+
+describe('parseJsonlHistoryBefore (history pagination, async)', () => {
+  it('returns the events older than the given uuid, oldest first', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'nano-before-'))
+    try {
+      const file = path.join(dir, 's.jsonl')
+      const rows = []
+      for (let i = 0; i < 6; i++) {
+        rows.push(JSON.stringify({ type: 'user', uuid: `u${i}`, message: { role: 'user', content: `q${i}` } }))
+        rows.push(JSON.stringify({ type: 'assistant', uuid: `a${i}`, message: { role: 'assistant', content: [{ type: 'text', text: `r${i}` }] } }))
+      }
+      writeFileSync(file, rows.join('\n') + '\n')
+      const page = await parseJsonlHistoryBefore(file, 'u3')
+      assert.equal(page.hasMore, false)
+      const uuids = page.events.map((e) => e.uuid)
+      assert.deepEqual(uuids, ['u0', 'a0', 'u1', 'a1', 'u2', 'a2'])
+      assert.equal(page.firstUuid, 'u0')
+      assert.deepEqual(await parseJsonlHistoryBefore(file, 'nope'), { events: [], hasMore: false })
+      assert.deepEqual(await parseJsonlHistoryBefore(path.join(dir, 'missing.jsonl'), 'u3'), { events: [], hasMore: false })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

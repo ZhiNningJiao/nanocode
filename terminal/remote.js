@@ -339,8 +339,8 @@ export function seedRemoteDefaults(store) {
     const seed = {
       id: randomUUID(),
       type: 'ssh',
-      alias: 'dev-212',
-      host: '172.30.20.212',
+      alias: 'example-dev-box',
+      host: '203.0.113.21',
       user: 'Administrator',
       port: 22,
       key: '~/.ssh/id_cluster',

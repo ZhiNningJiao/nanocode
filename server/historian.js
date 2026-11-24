@@ -9,9 +9,11 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { readdir, readFile, stat } from 'fs/promises'
+import { timedFs } from '../terminal/bounded-scan.js'
+const { readdir, readFile, stat } = timedFs // home fs: slot budget + slow-call log
 import path from 'path'
 import os from 'os'
+import { classifySignalName } from '../tools/command-center/export-cars.mjs'
 
 const execFileAsync = promisify(execFile)
 const HOME = os.homedir()
@@ -221,15 +223,18 @@ async function scanLoopLogs() {
 }
 
 /**
- * Scan ~/codex_work for FLAG_* and FAILSIG_* files.
+ * Scan ~/codex_work for FLAG_* and FAILSIG_* files. Which FLAG counts as a new
+ * signal is the command center's rule (classifySignalName): an accepted
+ * FLAG_<tag>.accepted-HHMM is not new — one rule for "waiting", not two.
  */
-async function scanSignals() {
+export async function scanSignals(dir = CODEX_WORK) {
   const flags = []
   const failsigs = []
   try {
-    const files = await readdir(CODEX_WORK)
+    const files = await readdir(dir)
     for (const f of files) {
-      if (f.startsWith('FLAG_')) flags.push(f.replace('FLAG_', ''))
+      const sig = classifySignalName(f)
+      if (sig?.kind === 'flag') flags.push(sig.tag)
       if (f.startsWith('FAILSIG_')) failsigs.push(f.replace('FAILSIG_', ''))
     }
   } catch { /* ok */ }

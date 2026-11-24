@@ -55,18 +55,18 @@ describe('personal-config: remote.machines loading', () => {
     writePersonal(tmp, {
       remote: {
         machines: [
-          { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster', note: 'win dev box' },
-          { alias: 'dev-box', type: 'ssh', host: '10.18.8.55', user: 'zhining', port: 22, key: '~/.ssh/id_cluster' },
+          { alias: 'win-box', type: 'ssh', host: '198.51.100.21', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster', note: 'win dev box' },
+          { alias: 'dev-box', type: 'ssh', host: '198.51.100.55', user: 'devuser', port: 22, key: '~/.ssh/id_cluster' },
         ],
       },
     })
     const cfg = loadPersonalConfig({ home: tmp })
     assert.equal(cfg.remote.machines.length, 2)
-    assert.equal(cfg.remote.machines[0].alias, 'win-212')
-    assert.equal(cfg.remote.machines[0].host, '172.30.20.212')
+    assert.equal(cfg.remote.machines[0].alias, 'win-box')
+    assert.equal(cfg.remote.machines[0].host, '198.51.100.21')
     assert.equal(cfg.remote.machines[0].user, 'Administrator')
     assert.equal(cfg.remote.machines[0].key, '~/.ssh/id_cluster')
-    assert.equal(cfg.remote.machines[1].host, '10.18.8.55')
+    assert.equal(cfg.remote.machines[1].host, '198.51.100.55')
   })
 
   it('drops entries missing alias/host/user', () => {
@@ -128,10 +128,10 @@ describe('personal-config: projectForPlugin (masked, frontend-safe)', () => {
     tmp = fakeHome(); resetPersonalConfigCache()
     writePersonal(tmp, {
       linear: { apiKey: 'lin_SUPERSECRET_value_7f3a' },
-      aigw: { base: 'https://aigw.test', key: 'aigw_SUPERSECRET_k3y9', budgetUsd: 500 },
+      aigw: { base: 'https://aigw.test', key: 'aigw_SUPERSECRET_k3y9' },
       remote: {
         machines: [
-          { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster', note: 'win' },
+          { alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', port: 22, key: '~/.ssh/id_cluster', note: 'win' },
           { alias: 'pw-box', type: 'ssh', host: '10.0.0.9', user: 'root', port: 22, sshPassword: 'pw_SUPERSECRET_99' },
         ],
       },
@@ -160,10 +160,10 @@ describe('personal-config: projectForPlugin (masked, frontend-safe)', () => {
     assert.ok(!json.includes('lin_SUPERSECRET_value_7f3a'), 'projection must not contain the full key')
   })
 
-  it('masks the aigw key + exposes base/budget (non-secret) for personal.aigw', () => {
+  it('masks the aigw key + exposes base (non-secret) for personal.aigw', () => {
     const proj = projectForPlugin(cfg, { name: 'usage', permissions: ['fs.read', 'network', 'personal.aigw'] })
     assert.equal(proj.aigw.base, 'https://aigw.test')
-    assert.equal(proj.aigw.budgetUsd, 500)
+    assert.equal('budgetUsd' in proj.aigw, false)
     assert.equal(proj.aigw.hasKey, true)
     assert.equal(proj.aigw.keyMasked, 'aigw…k3y9')
     const json = JSON.stringify(proj)
@@ -173,13 +173,13 @@ describe('personal-config: projectForPlugin (masked, frontend-safe)', () => {
   it('projects remote machines WITHOUT sshPassword (key path only) for personal.remote', () => {
     const proj = projectForPlugin(cfg, { name: 'remote', permissions: ['network', 'personal.remote'] })
     assert.equal(proj.remote.machines.length, 2)
-    const win = proj.remote.machines.find((m) => m.alias === 'win-212')
-    assert.equal(win.host, '172.30.20.212')
+    const win = proj.remote.machines.find((m) => m.alias === 'win-box')
+    assert.equal(win.host, '203.0.113.21')
     assert.equal(win.user, 'Administrator')
     assert.equal(win.keyPath, '~/.ssh/id_cluster')
     assert.equal(win.personal, true)
     assert.equal(win.readOnly, true)
-    assert.equal(win.id, 'personal:win-212')
+    assert.equal(win.id, 'personal:win-box')
     // sshPassword must NEVER be in the frontend projection
     assert.equal(win.sshPassword, undefined)
     const pw = proj.remote.machines.find((m) => m.alias === 'pw-box')
@@ -209,10 +209,10 @@ describe('personal-config: resolvePluginSecrets (server-side real values)', () =
     tmp = fakeHome(); resetPersonalConfigCache()
     writePersonal(tmp, {
       linear: { apiKey: 'lin_REAL_key_1234' },
-      aigw: { base: 'https://aigw.test', key: 'aigw_REAL_key_9999', budgetUsd: 500 },
+      aigw: { base: 'https://aigw.test', key: 'aigw_REAL_key_9999' },
       remote: {
         machines: [
-          { alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' },
+          { alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', key: '~/.ssh/id_cluster' },
           { alias: 'pw-box', type: 'ssh', host: '10.0.0.9', user: 'root', sshPassword: 'pw_REAL_secret' },
         ],
       },
@@ -238,7 +238,7 @@ describe('personal-config: resolvePluginSecrets (server-side real values)', () =
     assert.equal(secrets.remote.machines[0].alias, 'pw-box')
     assert.equal(secrets.remote.machines[0].sshPassword, 'pw_REAL_secret')
     // key-path-only machines are NOT listed (no secret to surface)
-    assert.ok(!secrets.remote.machines.some((m) => m.alias === 'win-212'))
+    assert.ok(!secrets.remote.machines.some((m) => m.alias === 'win-box'))
   })
 
   it('returns {} for a plugin with no personal.* permissions', () => {
@@ -249,7 +249,7 @@ describe('personal-config: resolvePluginSecrets (server-side real values)', () =
   it('returns {} (no remote) when personal machines use key auth only', () => {
     const cfg2 = (() => {
       writePersonal(tmp, {
-        remote: { machines: [{ alias: 'win-212', type: 'ssh', host: '172.30.20.212', user: 'Administrator', key: '~/.ssh/id_cluster' }] },
+        remote: { machines: [{ alias: 'win-box', type: 'ssh', host: '203.0.113.21', user: 'Administrator', key: '~/.ssh/id_cluster' }] },
       })
       resetPersonalConfigCache()
       return loadPersonalConfig({ home: tmp })
@@ -315,8 +315,8 @@ describe('personal-config: akari server/lens URLs (MES-14049)', () => {
 
   it('defaults to the documented internal akari server + lens URLs when not declared', () => {
     const cfg = loadPersonalConfig({ home: tmp })
-    assert.equal(cfg.akari.serverUrl, 'http://10.18.8.55:9481')
-    assert.equal(cfg.akari.lensUrl, 'http://10.18.8.55:9482')
+    assert.equal(cfg.akari.serverUrl, 'http://127.0.0.1:9481')
+    assert.equal(cfg.akari.lensUrl, 'http://127.0.0.1:9482')
   })
 
   it('loads akari.serverUrl + akari.lensUrl from the personal file', () => {
@@ -329,8 +329,8 @@ describe('personal-config: akari server/lens URLs (MES-14049)', () => {
   it('ignores non-string / empty akari fields and falls back to the default', () => {
     writePersonal(tmp, { akari: { serverUrl: '', lensUrl: 123 } })
     const cfg = loadPersonalConfig({ home: tmp })
-    assert.equal(cfg.akari.serverUrl, 'http://10.18.8.55:9481')
-    assert.equal(cfg.akari.lensUrl, 'http://10.18.8.55:9482')
+    assert.equal(cfg.akari.serverUrl, 'http://127.0.0.1:9481')
+    assert.equal(cfg.akari.lensUrl, 'http://127.0.0.1:9482')
   })
 
   it('projects akari serverUrl + lensUrl IN FULL for personal.akari (not secrets)', () => {

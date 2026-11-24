@@ -3,13 +3,7 @@ import { state } from './state.js'
 import { fetchProjects, fetchSettings, updateSetting } from './api.js'
 import { initSidebar, renderSidebar } from './sidebar.js'
 import { initAgentDrawer } from './agents.js'
-import {
-  initTerminalView,
-  switchTerminalProject,
-  fitTerminals,
-  isInitialized,
-} from './terminal-view.js'
-import { getEnabledTabTypes, setEnabledTabTypes } from './tab-manager.js'
+import { getEnabledTabTypes, setEnabledTabTypes } from './tab-types.js'
 import { showHosts, showProjects, hideLanding } from './landing.js'
 import { slugify, hostSlug, projectSlug, projectPath, navigateTo } from './router.js'
 import { initThemeToggle } from './theme.js'
@@ -23,6 +17,35 @@ import { initCockpit, isCockpitActive, showMainView, renderCockpitSettings } fro
 import { initSkin, renderSkinSettings } from './skin.js'
 
 let workspaceReady = false
+
+// The workspace (terminal view, tab manager, explorer, xterm) loads on the
+// first entry to the workspace, not on every page: the cockpit is the main
+// page and never needs it. xterm + addons are classic scripts that must run
+// before terminal-pane builds a pane, in this order.
+const XTERM_SCRIPTS = [
+  '/vendor/xterm/lib/xterm.js',
+  '/vendor/xterm-addon-fit/lib/addon-fit.js',
+  '/vendor/xterm-addon-web-links/lib/addon-web-links.js',
+]
+let terminalView = null
+let workspaceLoading = null
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script')
+    s.src = src
+    s.onload = resolve
+    s.onerror = () => reject(new Error(`failed to load ${src}`))
+    document.head.appendChild(s)
+  })
+}
+function loadWorkspace() {
+  workspaceLoading ||= (async () => {
+    for (const src of XTERM_SCRIPTS) await loadScript(src)
+    terminalView = await import('./terminal-view.js')
+    return terminalView
+  })()
+  return workspaceLoading
+}
 
 // ─── Global mute ──────────────────────────────────────────────────────────────
 
@@ -216,9 +239,8 @@ function initNotifyWs() {
         if (document.hidden || !document.hasFocus()) _addUnread()
         console.log('[notify]', text)
       } else if (msg.type === 'service_status') {
-        updateServiceDot(msg.name, msg.status, msg.checkedAt)
-        // 需求13: services plugin pane (Ops → Port Health) listens on this event
-        // for live dot updates; legacy Settings grid keeps using updateServiceDot.
+        // services plugin pane (Ops → Port Health) is the only consumer now
+        // (lazy-loaded, listens for this event itself: services-panel.js).
         document.dispatchEvent(new CustomEvent('nanocode:service-status', {
           detail: { name: msg.name, status: msg.status, checkedAt: msg.checkedAt },
         }))
@@ -237,122 +259,6 @@ function initNotifyWs() {
     setTimeout(initNotifyWs, delay)
   }
   ws.onerror = () => {}
-}
-
-// ─── Services health ──────────────────────────────────────────────────────────
-
-let _servicesConfig = []
-
-function updateServiceDot(name, status, checkedAt) {
-  const dot = document.getElementById(`svc-dot-${name}`)
-  if (dot) {
-    dot.className = `service-dot ${status}`
-    dot.title = `${name}: ${status}${checkedAt ? ' (checked ' + checkedAt.slice(11, 16) + ' UTC)' : ''}`
-  }
-}
-
-function _renderServicesGrid(services, status) {
-  const grid = document.getElementById('services-grid')
-  if (!grid) return
-  grid.innerHTML = ''
-  for (const svc of services) {
-    const info = status[svc.name] || { status: 'unknown' }
-    const row = document.createElement('div')
-    row.className = 'service-item'
-    row.dataset.svc = svc.name
-    row.innerHTML = `
-      <span class="service-dot ${info.status}" id="svc-dot-${svc.name}" title="${svc.name}: ${info.status}"></span>
-      <span class="service-name">${svc.name} <span class="service-port">${svc.host}:${svc.port}</span></span>
-      <span class="service-actions">
-        <button type="button" class="svc-btn svc-edit-btn" data-name="${svc.name}" title="Edit">&#9998;</button>
-        <button type="button" class="svc-btn svc-del-btn" data-name="${svc.name}" title="Delete">&#10005;</button>
-      </span>`
-    grid.appendChild(row)
-  }
-
-  grid.querySelectorAll('.svc-del-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      _servicesConfig = _servicesConfig.filter(s => s.name !== btn.dataset.name)
-      await _saveServicesConfig()
-    })
-  })
-
-  grid.querySelectorAll('.svc-edit-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const name = btn.dataset.name
-      const svc = _servicesConfig.find(s => s.name === name)
-      if (!svc) return
-      const row = btn.closest('.service-item')
-      const dotStatus = (status[name] || {}).status || 'unknown'
-      row.innerHTML = `
-        <span class="service-dot ${dotStatus}" id="svc-dot-${name}"></span>
-        <input type="text" class="settings-input svc-edit-name" value="${svc.name}" style="width:90px" />
-        <input type="text" class="settings-input svc-edit-host" value="${svc.host}" style="width:120px" />
-        <input type="number" class="settings-input svc-edit-port" value="${svc.port}" min="1" max="65535" style="width:60px" />
-        <button type="button" class="btn btn-primary svc-save-btn" style="padding:2px 8px;font-size:12px">Save</button>
-        <button type="button" class="svc-btn svc-cancel-btn">&#10005;</button>`
-      row.querySelector('.svc-save-btn').addEventListener('click', async () => {
-        const newName = row.querySelector('.svc-edit-name').value.trim()
-        const newHost = row.querySelector('.svc-edit-host').value.trim()
-        const newPort = parseInt(row.querySelector('.svc-edit-port').value, 10)
-        if (!newName || !newHost || !newPort) return
-        const idx = _servicesConfig.findIndex(s => s.name === name)
-        if (idx >= 0) _servicesConfig[idx] = { name: newName, host: newHost, port: newPort }
-        await _saveServicesConfig()
-      })
-      row.querySelector('.svc-cancel-btn').addEventListener('click', () => loadServices())
-    })
-  })
-}
-
-async function _saveServicesConfig() {
-  try {
-    await fetch('/api/services-config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ services: _servicesConfig }),
-    })
-    await loadServices()
-  } catch {}
-}
-
-async function loadServices() {
-  try {
-    const [cfgRes, statusRes] = await Promise.all([
-      fetch('/api/services-config').then(r => r.json()),
-      fetch('/api/services').then(r => r.json()),
-    ])
-    _servicesConfig = cfgRes.services || []
-
-    const ipEl = document.getElementById('services-local-ip')
-    if (ipEl && cfgRes.localIPs?.length) ipEl.textContent = `Local: ${cfgRes.localIPs.join(', ')}`
-
-    _renderServicesGrid(_servicesConfig, statusRes)
-
-    let lastChecked = null
-    for (const info of Object.values(statusRes)) {
-      if (info.checkedAt && (!lastChecked || info.checkedAt > lastChecked)) lastChecked = info.checkedAt
-    }
-    const el = document.getElementById('services-checked-at')
-    if (el && lastChecked) el.textContent = `Last checked: ${lastChecked.slice(0, 16).replace('T', ' ')} UTC`
-  } catch {}
-}
-
-// Wire Add service form
-const _svcAddForm = document.getElementById('services-add-form')
-if (_svcAddForm) {
-  _svcAddForm.addEventListener('submit', async (e) => {
-    e.preventDefault()
-    const name = document.getElementById('svc-add-name').value.trim()
-    const host = document.getElementById('svc-add-host').value.trim()
-    const port = parseInt(document.getElementById('svc-add-port').value, 10)
-    if (!name || !host || !port) return
-    _servicesConfig = [..._servicesConfig, { name, host, port }]
-    await _saveServicesConfig()
-    document.getElementById('svc-add-name').value = ''
-    document.getElementById('svc-add-host').value = ''
-    document.getElementById('svc-add-port').value = ''
-  })
 }
 
 // ─── Notification Sounds ──────────────────────────────────────────────────────
@@ -442,61 +348,8 @@ function playNotifySound(eventType) {
 
 export { isGlobalMuted }
 
-function loadNotifySoundSettings() {
-  const prefs = getNotifySoundPrefs()
-  const enabledEl = document.getElementById('notify-sound-enabled')
-  const volEl = document.getElementById('notify-sound-volume')
-  const volVal = document.getElementById('notify-sound-volume-value')
-  if (enabledEl) enabledEl.checked = prefs.enabled !== false
-  if (volEl) {
-    volEl.value = prefs.volume ?? 0.7
-    if (volVal) volVal.textContent = Math.round((prefs.volume ?? 0.7) * 100) + '%'
-  }
-  for (const type of ['done', 'blocked', 'qa']) {
-    const sel = document.getElementById(`notify-sound-${type}`)
-    if (sel) sel.value = prefs[type + '_sound'] ?? _defaultSounds[type]
-  }
-}
-
-const _notifySoundVolEl = document.getElementById('notify-sound-volume')
-const _notifySoundVolVal = document.getElementById('notify-sound-volume-value')
-if (_notifySoundVolEl) {
-  _notifySoundVolEl.addEventListener('input', () => {
-    if (_notifySoundVolVal) _notifySoundVolVal.textContent = Math.round(_notifySoundVolEl.value * 100) + '%'
-  })
-}
-
-const _notifySoundSaveBtn = document.getElementById('notify-sound-save-btn')
-if (_notifySoundSaveBtn) {
-  _notifySoundSaveBtn.addEventListener('click', () => {
-    const prefs = {
-      enabled: document.getElementById('notify-sound-enabled')?.checked ?? true,
-      volume: parseFloat(document.getElementById('notify-sound-volume')?.value ?? 0.7),
-      done_sound: document.getElementById('notify-sound-done')?.value ?? 'bamboo',
-      blocked_sound: document.getElementById('notify-sound-blocked')?.value ?? 'thud',
-      qa_sound: document.getElementById('notify-sound-qa')?.value ?? 'ding',
-    }
-    localStorage.setItem(NOTIFY_SOUND_KEY, JSON.stringify(prefs))
-    const statusEl = document.getElementById('notify-sound-status')
-    if (statusEl) {
-      statusEl.textContent = 'Saved'
-      statusEl.className = 'settings-status success'
-      setTimeout(() => { statusEl.textContent = '' }, 3000)
-    }
-  })
-}
-
-for (const type of ['done', 'blocked', 'qa']) {
-  const btn = document.getElementById(`notify-test-${type}`)
-  if (btn) {
-    btn.addEventListener('click', () => {
-      const key = document.getElementById(`notify-sound-${type}`)?.value ?? _defaultSounds[type]
-      const vol = parseFloat(document.getElementById('notify-sound-volume')?.value ?? 0.7)
-      const fn = _soundFns[key]
-      if (fn) try { fn(vol) } catch {}
-    })
-  }
-}
+// The sound settings UI lives in the notify plugin (notify-panel.js); app.js
+// only plays sounds (playNotifySound) with the prefs that panel saves.
 
 // ─── Settings panel (font size + ntfy + renderMode + codexRenderMode) ──
 
@@ -548,9 +401,6 @@ function loadSettings(serverSettings) {
     fontSizeRange.value = state.fontSize
     if (fontSizeValue) fontSizeValue.textContent = state.fontSize + 'px'
   }
-  loadNotifySoundSettings()
-  loadTurnNotifySettings()
-  loadNtfySettings()
   loadToolFoldSettings()
   loadAutoResumeSettings()
   loadSubagentVisSettings()
@@ -739,90 +589,6 @@ if (fontSizeSaveBtn) {
   })
 }
 
-// ─── ntfy settings ────────────────────────────────────────────────────────────
-
-async function loadNtfySettings() {
-  try {
-    const s = await fetchSettings()
-    const urlEl = document.getElementById('ntfy-url')
-    const topicEl = document.getElementById('ntfy-topic')
-    // Apply defaults only when empty
-    const ntfyUrl = s.ntfy_url || ''
-    const ntfyTopic = s.ntfy_topic || ''
-    if (urlEl) urlEl.value = ntfyUrl
-    if (topicEl) topicEl.value = ntfyTopic
-    // Set defaults if not yet configured
-    if (!ntfyUrl) {
-      if (urlEl) urlEl.placeholder = 'http://localhost'
-      try { await updateSetting('ntfy_url', 'http://localhost') } catch {}
-    }
-    if (!ntfyTopic) {
-      if (topicEl) topicEl.placeholder = 'yourname'
-      // Do not auto-set a default topic — leave blank until the user fills it
-    }
-  } catch {}
-}
-
-const _ntfySaveBtn = document.getElementById('ntfy-save-btn')
-if (_ntfySaveBtn) {
-  _ntfySaveBtn.addEventListener('click', async () => {
-    const url = document.getElementById('ntfy-url')?.value.trim() || ''
-    const topic = document.getElementById('ntfy-topic')?.value.trim() || ''
-    const statusEl = document.getElementById('ntfy-status')
-    try {
-      await updateSetting('ntfy_url', url)
-      await updateSetting('ntfy_topic', topic)
-      if (statusEl) {
-        statusEl.textContent = 'Saved'
-        statusEl.className = 'settings-status success'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = err.message
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    }
-  })
-}
-
-const _ntfyTestBtn = document.getElementById('ntfy-test-btn')
-if (_ntfyTestBtn) {
-  _ntfyTestBtn.addEventListener('click', async () => {
-    const url = document.getElementById('ntfy-url')?.value.trim() || ''
-    const topic = document.getElementById('ntfy-topic')?.value.trim() || ''
-    const statusEl = document.getElementById('ntfy-status')
-    if (!url || !topic) {
-      if (statusEl) {
-        statusEl.textContent = 'Fill in URL and topic first'
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-      return
-    }
-    try {
-      const endpoint = url.replace(/\/$/, '') + '/' + topic
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Title': 'Nanocode test', 'Tags': 'tada', 'Priority': '3', 'Content-Type': 'text/plain' },
-        body: 'Nanocode ntfy test notification',
-      })
-      if (statusEl) {
-        statusEl.textContent = resp.ok ? 'Sent!' : `HTTP ${resp.status}`
-        statusEl.className = resp.ok ? 'settings-status success' : 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = err.message
-        statusEl.className = 'settings-status error'
-        setTimeout(() => { statusEl.textContent = '' }, 3000)
-      }
-    }
-  })
-}
-
 // ─── Turn-complete notification ───────────────────────────────────────────────
 // When a claude tab turn finishes after exceeding the threshold, we:
 //   1. Play the 'done' sound (respects global mute)
@@ -849,29 +615,7 @@ export function getTurnNotifyNtfy() {
   return p.ntfy !== false
 }
 
-function loadTurnNotifySettings() {
-  const p = getTurnNotifyPrefs()
-  const threshEl = document.getElementById('turn-notify-threshold')
-  const ntfyEl = document.getElementById('turn-notify-ntfy')
-  if (threshEl) threshEl.value = p.threshold ?? 10
-  if (ntfyEl) ntfyEl.checked = p.ntfy !== false
-}
-
-const _turnNotifySaveBtn = document.getElementById('turn-notify-save-btn')
-if (_turnNotifySaveBtn) {
-  _turnNotifySaveBtn.addEventListener('click', () => {
-    const threshold = parseFloat(document.getElementById('turn-notify-threshold')?.value ?? 10)
-    const ntfy = document.getElementById('turn-notify-ntfy')?.checked ?? true
-    const prefs = { threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 10, ntfy }
-    localStorage.setItem(TURN_NOTIFY_KEY, JSON.stringify(prefs))
-    const statusEl = document.getElementById('turn-notify-status')
-    if (statusEl) {
-      statusEl.textContent = 'Saved'
-      statusEl.className = 'settings-status success'
-      setTimeout(() => { statusEl.textContent = '' }, 3000)
-    }
-  })
-}
+// The turn-notify settings UI lives in the notify plugin (notify-panel.js).
 
 /** Called by the nanocode:turn-complete CustomEvent dispatched by ClaudeBlockRenderer. */
 function _onTurnComplete(evt) {
@@ -1025,31 +769,6 @@ if (autoResumeSaveBtn) {
 // Queue auto-flush on interrupt: UI removed, always enabled (default behavior).
 // Backend reads auto_flush_queue_on_interrupt setting; not '0' means enabled.
 
-// ─── P1-4: Auth status ───────────────────────────────────────────────────────
-
-async function loadAuthStatus() {
-  const el = document.getElementById('auth-status-display')
-  if (!el) return
-  try {
-    const resp = await fetch('/api/auth/status')
-    const data = await resp.json()
-    if (data.loggedIn) {
-      const parts = []
-      if (data.email) parts.push(data.email)
-      if (data.authMethod) parts.push(`(${data.authMethod})`)
-      if (data.orgName) parts.push(`/ ${data.orgName}`)
-      el.textContent = (parts.join(' ') || 'Logged in')
-      el.style.color = 'var(--text-success, #4caf50)'
-    } else {
-      el.textContent = 'Not logged in — run: claude auth login'
-      el.style.color = 'var(--text-error, #f44336)'
-    }
-  } catch {
-    el.textContent = 'Cannot fetch account status'
-    el.style.color = 'var(--text-secondary, #aaa)'
-  }
-}
-
 // ─── P1-3: Model + Effort selectors — migrated to team-model plugin (MES-13740 R2).
 // The Claude model (--model), Codex model, and effort-level selectors now live in
 // the Team & Model pane (Session domain → team-model tab). Storage keys are
@@ -1172,8 +891,6 @@ async function openSettingsPanel() {
   loadSettings(serverSettings)
   renderCockpitSettings(document.getElementById('cockpit-settings'))
   renderSkinSettings(document.getElementById('skin-settings'))
-  loadServices()
-  loadAuthStatus()  // P1-4: refresh auth status on each open
   // Dynamic model options (init-snapshot / codex config) now load inside the
   // team-model plugin pane when it renders — not here. MES-13740 R2.
 }
@@ -1253,12 +970,13 @@ async function enterWorkspace(projectId) {
   agentDrawerBackdrop?.classList.remove('open')
   agentDrawerToggle?.classList.remove('active')
   renderSidebar()
+  const tv = await loadWorkspace()
   if (!workspaceReady) {
     workspaceReady = true
-    await initTerminalView(projectId)
+    await tv.initTerminalView(projectId)
   } else {
-    switchTerminalProject(projectId)
-    if (isInitialized()) fitTerminals()
+    tv.switchTerminalProject(projectId)
+    if (tv.isInitialized()) tv.fitTerminals()
   }
 }
 
@@ -1345,8 +1063,8 @@ async function init() {
         routed = true
         routePending = false
         await onHashChange()
-      } else if (isInitialized()) {
-        fitTerminals()
+      } else if (terminalView?.isInitialized()) {
+        terminalView.fitTerminals()
       }
     },
   })

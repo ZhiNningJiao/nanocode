@@ -67,9 +67,16 @@ export function validateManifest(m) {
 
 // Built-in plugins. `render` is wired by right-panel.js (by name) to keep this
 // module DOM-free and unit-testable. All built-ins target apiVersion '1.0'.
+// The one plugin switch is stored on the server under this setting (the full
+// enabled list); server/plugins-state.js reads it to gate background work.
+export const PLUGINS_SETTING_KEY = 'plugins_enabled'
+
+// `defaultOn: true` marks the kernel set — what a fresh install shows. Every
+// other plugin is optional and starts off (no tab, no global chip, no poll).
 export const BUILTIN_PLUGINS = [
   {
     name: 'team-model',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'work',
@@ -80,6 +87,7 @@ export const BUILTIN_PLUGINS = [
   },
   {
     name: 'usage',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'monitor',
@@ -135,6 +143,7 @@ export const BUILTIN_PLUGINS = [
     // (~/.claude/projects) sessions newest-first, shows a tail excerpt, and
     // lets the user fork a previous session into a new tab. Read-only.
     name: 'sessions',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'work',
@@ -208,6 +217,9 @@ export const BUILTIN_PLUGINS = [
     // the plugin manager. Storage keys are unchanged from the old Settings UI
     // (ntfy_url/ntfy_topic server-side; notifySoundPrefs / nanocodeTurnNotify
     // in localStorage) so existing configs carry over with no migration step.
+    // Linear notifications are NOT part of this plugin — see
+    // 'linear-mobile-push' below (owner 2026-11-22 point 4: split out, own
+    // default-off switch; Feishu/another channel remains the main one).
     name: 'notify',
     version: '1.0.0',
     apiVersion: '1.0',
@@ -215,6 +227,26 @@ export const BUILTIN_PLUGINS = [
     permissions: ['network'],
     labelKey: 'plugin.notify.label',
     descriptionKey: 'plugin.notify.desc',
+    builtin: true,
+  },
+  {
+    // owner 2026-11-22 point 4 — Linear → mobile push, split out of 'notify'
+    // into its own plugin so it has its own default-off switch (most owners
+    // already watch Linear through another channel; this is an opt-in extra).
+    // Settings-only plugin (no tab). Gates server/linear-notif.js's poller —
+    // see server/index.js syncPluginBackgroundWork(). Only ONE nanocode
+    // instance pushes when multiple share a data dir (NANOCODE_LINEAR_PUSH_PORT,
+    // default the lowest/primary port) so turning this on doesn't double-push.
+    name: 'linear-mobile-push',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    permissions: ['network', 'personal.linear'],
+    labelKey: 'plugin.linearMobilePush.label',
+    descriptionKey: 'plugin.linearMobilePush.desc',
+    // Settings-only (no tab) but still needs a real enable/disable toggle in
+    // the plugin manager — see right-panel.js's togglable exception.
+    togglable: true,
     builtin: true,
   },
   {
@@ -286,7 +318,13 @@ export const BUILTIN_PLUGINS = [
     // hosts). Placed in monitor (watching external resources), alongside
     // services/remote. Replaces the ad-hoc resource-guard cron (owner
     // 2026-11-21: once this ships, that cron gets retired).
+    // defaultOn (owner 2026-11-23): the kernel-only-defaults pass the next day
+    // (6fdfcbc) made every non-kernel plugin start off, which silently took
+    // this one — added the day before and never marked defaultOn — out of
+    // view. It belongs in the kernel set alongside the other cockpit side
+    // modules (cc-waiting/cc-quota/command-center).
     name: 'machines',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'monitor',
@@ -302,6 +340,7 @@ export const BUILTIN_PLUGINS = [
     // per-car gantt bound to the car trace export. Monitor group (watching
     // all agents). The tracker key stays server-side (personal.linear).
     name: 'command-center',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'monitor',
@@ -316,6 +355,7 @@ export const BUILTIN_PLUGINS = [
     // (from the cars export) + owner decisions (a secretary-kept file).
     // Tab + an app-header chip with the count (right-panel `global` mount).
     name: 'cc-waiting',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'monitor',
@@ -329,6 +369,7 @@ export const BUILTIN_PLUGINS = [
     // Command Center P0-5 — quota per pool from the on-disk header cache
     // (never calls a model API). Tab + header chip with the tightest pools.
     name: 'cc-quota',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'monitor',
@@ -342,6 +383,7 @@ export const BUILTIN_PLUGINS = [
     // Command Center P0-6 — chat drawer: a floating button that attaches to
     // the duty secretary's existing agent tab (no new session, no tab here).
     name: 'cc-chat',
+    defaultOn: true,
     version: '1.0.0',
     apiVersion: '1.0',
     group: 'monitor',
@@ -351,6 +393,10 @@ export const BUILTIN_PLUGINS = [
     builtin: true,
   },
 ]
+
+export function defaultEnabledPlugins() {
+  return BUILTIN_PLUGINS.filter((p) => p.defaultOn).map((p) => p.name)
+}
 
 export function builtinPlugin(name) {
   return BUILTIN_PLUGINS.find((p) => p.name === name) || null

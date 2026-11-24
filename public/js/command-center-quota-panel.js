@@ -9,15 +9,14 @@
  *     "旧"; a window past its reset time shows "已重置，读数作废" instead of a %.
  */
 import { t } from './i18n.js'
+import { quotaSeverity } from './quota-levels.js'
 import { ensureCss, esc, fmtTime, fmtAgo, downBlock, headerChip, removeHeaderChip, openPluginTab } from './command-center-format.js'
 
 const POLL_MS = 60_000
 const CHIP = 'quota'
 const TAB_ID = 'cc-quota'
-const WARN_PCT = 80
-const HOT_PCT = 95
 
-const views = new Set() // right-panel tab + cockpit block
+const views = new Set() // right-panel tab + the cockpit 额度 page's per-pool detail
 let chipOn = false
 let timer = null
 let inFlight = false
@@ -55,8 +54,8 @@ function syncTimer() {
 }
 
 function level(pct) {
-  if (pct == null) return 'none'
-  return pct >= HOT_PCT ? 'hot' : pct >= WARN_PCT ? 'warn' : 'ok'
+  const sev = quotaSeverity(pct)
+  return sev == null ? 'none' : sev === 'critical' ? 'hot' : sev === 'warning' ? 'warn' : 'ok'
 }
 
 // ─── header chip ────────────────────────────────────────────────────────────
@@ -142,10 +141,15 @@ function renderView(pane) {
     <div class="ccq-grid">${last.pools.map(poolHtml).join('')}</div>`
 }
 
+// Only one badge in this slot, and only when there is something to act on:
+// a real logged-out error outranks staleness (both can be true at once — the
+// pool stopped refreshing because it's logged out); a merely old reading
+// says so in plain words; a fresh reading (from any source) shows nothing —
+// no "login unknown" guess that used to fire on every non-cache-file source.
 function loginHtml(p) {
-  if (p.loggedIn === true) return `<span class="ccq-login ccq-login-yes">${esc(t('plugin.ccq.loggedIn'))}</span>`
-  if (p.loggedIn === false) return `<span class="ccq-login ccq-login-no">${esc(t('plugin.ccq.loggedOut'))}</span>`
-  return `<span class="ccq-login ccq-login-unknown">${esc(t('plugin.ccq.loginUnknown'))}</span>`
+  if (p.loggedIn === false) return `<span class="ccq-login ccq-login-no" title="${esc(t('plugin.ccq.loggedOutHint'))}">${esc(t('plugin.ccq.loggedOut'))}</span>`
+  if (p.stale) return `<span class="ccq-stale" title="${esc(t('plugin.ccq.staleTitle'))}">${esc(t('plugin.ccq.readingExpired'))}</span>`
+  return ''
 }
 
 function windowHtml(w) {
@@ -162,13 +166,13 @@ function windowHtml(w) {
     </div>`
 }
 
-function poolHtml(p) {
-  const stale = p.stale ? `<span class="ccq-stale" title="${esc(t('plugin.ccq.staleTitle'))}">${esc(t('plugin.ccq.stale'))}</span>` : ''
+/** One pool card's HTML; exported for the pure-render test (no DOM needed). */
+export function poolHtml(p) {
   const status = p.status ? t(`plugin.ccq.status.${p.status}`) : ''
   const statusTxt = status && !status.startsWith('plugin.') ? status : (p.status || '')
   return `
     <div class="ccq-card${p.stale ? ' ccq-card-stale' : ''}">
-      <div class="ccq-head"><span class="ccq-pool">${esc(p.pool)}</span>${loginHtml(p)}${stale}${statusTxt ? `<span class="cc-chip">${esc(statusTxt)}</span>` : ''}</div>
+      <div class="ccq-head"><span class="ccq-pool">${esc(p.pool)}</span>${loginHtml(p)}${statusTxt ? `<span class="cc-chip">${esc(statusTxt)}</span>` : ''}</div>
       ${p.error ? `<div class="cc-sub cc-err">${esc(p.error)}</div>` : ''}
       ${p.windows.map(windowHtml).join('')}
       <div class="cc-sub ccq-src">${esc(t('plugin.ccq.source'))} · ${esc(t('plugin.ccq.readAt'))} ${esc(fmtTime(p.fetchedAt))}${p.fetchedAt ? `（${esc(fmtAgo(p.fetchedAt))}）` : ''}</div>

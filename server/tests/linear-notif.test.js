@@ -7,7 +7,9 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, existsSync, copyFileSync, unlinkSync } from 'node:fs'
+import { readFileSync, existsSync, copyFileSync, unlinkSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { resetPersonalConfigCache } from '../../terminal/personal-config.js'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
@@ -25,6 +27,7 @@ import {
   stopLinearNotifier,
   runLinearPoll,
   pushNtfyTest,
+  isDesignatedLinearPushInstance,
 } from '../linear-notif.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -43,8 +46,8 @@ describe('ntfy push', () => {
 
   beforeEach(() => {
     store = createMockStore({
-      ntfy_url: 'http://10.18.8.55:80',
-      ntfy_topic: 'zhiningwork',
+      ntfy_url: 'http://ntfy.example:80',
+      ntfy_topic: 'test-topic',
     })
     setNtfyStore(store)
     originalFetch = global.fetch
@@ -63,7 +66,7 @@ describe('ntfy push', () => {
     const result = await pushNtfy({ title: 't', message: 'm' })
     assert.equal(result.ok, true)
     assert.equal(fetches.length, 1)
-    assert.equal(fetches[0].url, 'http://10.18.8.55:80/zhiningwork')
+    assert.equal(fetches[0].url, 'http://ntfy.example:80/test-topic')
     assert.equal(fetches[0].opts.method, 'POST')
     assert.equal(fetches[0].opts.headers.Title, 't')
     // URL/topic must not appear in the logged or returned data
@@ -106,6 +109,22 @@ describe('ntfy push', () => {
   })
 })
 
+describe('isDesignatedLinearPushInstance (owner 2026-11-22 point 4: single pusher when 9475/9476 share a data dir)', () => {
+  it('defaults to port 9475 as the designated pusher', () => {
+    assert.equal(isDesignatedLinearPushInstance(9475, {}), true)
+    assert.equal(isDesignatedLinearPushInstance(9476, {}), false)
+  })
+
+  it('honors NANOCODE_LINEAR_PUSH_PORT override', () => {
+    assert.equal(isDesignatedLinearPushInstance(9476, { NANOCODE_LINEAR_PUSH_PORT: '9476' }), true)
+    assert.equal(isDesignatedLinearPushInstance(9475, { NANOCODE_LINEAR_PUSH_PORT: '9476' }), false)
+  })
+
+  it('compares as strings so numeric vs string port args both work', () => {
+    assert.equal(isDesignatedLinearPushInstance('9475', {}), true)
+  })
+})
+
 describe('Linear important classification', () => {
   it('classifies keywords correctly', () => {
     assert.ok(classifyLinearImportance('验收通过，可以合并').important)
@@ -124,12 +143,22 @@ describe('Linear background poller', () => {
   let pushed
   let linearResponses
 
+  let fakeHome
+  let prevHome
+
   beforeEach(() => {
+    // The key comes from the personal config (server/linear-key.js), the same
+    // resolver the command center uses — give a fake HOME a key file.
+    prevHome = process.env.HOME
+    fakeHome = mkdtempSync(join(tmpdir(), 'nanocode-linear-home-'))
+    mkdirSync(join(fakeHome, '.config'), { recursive: true })
+    writeFileSync(join(fakeHome, '.config', 'linear-api.key'), 'lin_api_test\n')
+    process.env.HOME = fakeHome
+    resetPersonalConfigCache()
     store = createMockStore({
-      linear_api_key: 'lin_api_test',
       linear_poll_minutes: 2,
-      ntfy_url: 'http://10.18.8.55:80',
-      ntfy_topic: 'zhiningwork',
+      ntfy_url: 'http://ntfy.example:80',
+      ntfy_topic: 'test-topic',
     })
     setNtfyStore(store)
 
@@ -182,6 +211,9 @@ describe('Linear background poller', () => {
   afterEach(() => {
     global.fetch = originalFetch
     stopLinearNotifier()
+    process.env.HOME = prevHome
+    resetPersonalConfigCache()
+    rmSync(fakeHome, { recursive: true, force: true })
     if (existsSync(STATE_PATH)) unlinkSync(STATE_PATH)
     if (originalState && existsSync(originalState)) {
       copyFileSync(originalState, STATE_PATH)
@@ -256,10 +288,12 @@ describe('Linear background poller', () => {
   it('skips polling when no Linear API key is configured', async () => {
     const noKeyStore = createMockStore({
       linear_poll_minutes: 2,
-      ntfy_url: 'http://10.18.8.55:80',
-      ntfy_topic: 'zhiningwork',
+      ntfy_url: 'http://ntfy.example:80',
+      ntfy_topic: 'test-topic',
     })
-    // Ensure _store inside linear-notif.js points to the no-key store.
+    // No key anywhere in the personal config → the notifier does not start.
+    unlinkSync(join(fakeHome, '.config', 'linear-api.key'))
+    resetPersonalConfigCache()
     startLinearNotifier({ store: noKeyStore })
     stopLinearNotifier()
     const result = await runLinearPoll()

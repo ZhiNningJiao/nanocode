@@ -28,16 +28,19 @@
 
 import express from 'express'
 import { readFileSync } from 'node:fs'
-import { readFile, stat, open } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
+import { timedFs, withFsSlot } from '../terminal/bounded-scan.js'
+const { readFile, stat } = timedFs // home fs: slot budget + slow-call log
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadPersonalConfig, resolvePluginSecrets } from '../terminal/personal-config.js'
-import { builtinPlugin } from '../public/js/plugins-registry.js'
+import { resolveLinearApiKey } from './linear-key.js'
 import { CARS_EXPORT_SCHEMA, GANTT_SCHEMA } from '../tools/command-center/export-cars.mjs'
 import { safeHttpUrl } from '../public/js/command-center-url.js'
 import { str, arr, validIso } from './command-center-fields.js'
 import { mapExportWaiting, buildWaitingView, createOwnerPendingSource } from './command-center-waiting.js'
-import { DEFAULT_QUOTA_STALE_SEC, createQuotaSource } from './command-center-quota.js'
+import { DEFAULT_QUOTA_STALE_SEC, createQuotaSource, createQuotaSnapshotSource, QUOTA_SNAPSHOT_POLL_MS } from './command-center-quota.js'
+import { createQuotaSeriesSource } from './command-center-quota-series.js'
+import { createLineageSource, classifyLineage, ISSUE_KEY_RE } from './linear-lineage.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
@@ -211,6 +214,8 @@ export function mapBar(b) {
     start: validIso(b?.start),
     end: validIso(b?.end),
     endOpen: b?.end_open === true || (b?.end == null && validIso(b?.start) != null),
+    // expected finish, only when the exporter knows one (never guessed here)
+    eta: validIso(b?.eta),
     traceStatus: str(b?.status),
     state,
     reason,
@@ -320,13 +325,38 @@ function eventActivity(e) {
   return Math.max(Date.parse(e.lastProgress?.t || 0) || 0, Date.parse(e.updatedAt || 0) || 0)
 }
 
+/** Issue keys of the cars that need a parent-chain lookup (real tracker keys only). */
+export function carIssueKeys(cars) {
+  if (!cars?.ok) return []
+  return [...new Set(cars.data.cars.map((c) => c.issue).filter((k) => k && ISSUE_KEY_RE.test(k)))]
+}
+
+const MAINTENANCE_PREFIX = 'none:'
+// dailycat_0955 (owner 2026-11-24 令「不能说非得要 Linear 才能去做」): cars that were never
+// meant to carry a tracker issue — daily chores (早报/扫仓...) and one-off misc work
+// (视频...). These get their own top-level groups, same shape as a tracker event,
+// never fall into "unassigned". `none:<reason>` is the old maintenance-car spelling
+// (akari_dispatch.sh gate still accepts it so old scripts don't break) — it is no
+// longer its own category: `none:daily-*` folds into "daily", everything else `none:*`
+// folds into "misc" (replaces the retired "maintenance" unassigned-reason).
+const DAILY_PREFIX = 'daily:'
+const MISC_PREFIX = 'misc:'
+const NO_TRACKER_PREFIXES = [MAINTENANCE_PREFIX, DAILY_PREFIX, MISC_PREFIX]
+const NONE_DAILY_RE = /^daily/i
+
 /**
- * Join the two sources. When Linear is down the events fall back to the
- * issue keys the cars carry (title/state unknown, said so in the UI); when
- * the car export is down every event says "car data unreachable" instead of
- * claiming zero cars.
+ * Join the sources. Each car goes to the root's direct child (category) its
+ * issue descends from, found by walking the issue's real parent chain
+ * (`lineage`, linear-lineage.js) — any depth, any team; the car also gets
+ * `sub` = the nearest 【named】 issue below the category (「重定向质量 › IK」).
+ * Only cars that really have no issue, or whose issue is truly outside the
+ * root, land in "unassigned", each with `unassignedReason`; daily:/misc:/none:
+ * cars land in their own `daily`/`misc` groups instead (never "unassigned").
+ * When Linear is down the events fall back to the issue keys the cars carry
+ * (title/state unknown, said so in the UI); when the car export is down
+ * every event says "car data unreachable" instead of claiming zero cars.
  */
-export function buildCommandCenterView({ linear, cars }) {
+export function buildCommandCenterView({ linear, cars, lineage = null }) {
   const carsOk = !!cars?.ok
   const carList = carsOk ? cars.data.cars : []
   const linearOk = !!linear?.ok
@@ -340,17 +370,40 @@ export function buildCommandCenterView({ linear, cars }) {
       for (const k of e.subIssues.keys) issueToEvent.set(k, e.key)
     }
   } else {
-    const keys = [...new Set(carList.map((c) => c.issue).filter(Boolean))]
+    const keys = [...new Set(carList.map((c) => c.issue).filter((k) => k && !NO_TRACKER_PREFIXES.some((p) => k.startsWith(p))))]
     bases = keys.map((k) => ({ key: k, title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }))
     for (const k of keys) issueToEvent.set(k, k)
   }
+  const eventKeys = new Set(bases.map((e) => e.key))
+  const rootKey = linearOk ? linear.data.root.key : null
 
   const byEvent = new Map(bases.map((e) => [e.key, []]))
   const unassigned = []
+  const daily = []
+  const misc = []
+  const unassign = (c, reason, extra = {}) => unassigned.push({ ...c, unassignedReason: reason, ...extra })
   for (const c of carList) {
-    const ek = c.issue ? issueToEvent.get(c.issue) : null
-    if (ek) byEvent.get(ek).push(c)
-    else unassigned.push({ ...c, unassignedReason: c.issue ? 'not_under_root' : 'no_issue' })
+    if (!c.issue) { unassign(c, 'no_issue'); continue }
+    if (c.issue.startsWith(DAILY_PREFIX)) { daily.push({ ...c, categoryNote: c.issue.slice(DAILY_PREFIX.length) }); continue }
+    if (c.issue.startsWith(MISC_PREFIX)) { misc.push({ ...c, categoryNote: c.issue.slice(MISC_PREFIX.length) }); continue }
+    if (c.issue.startsWith(MAINTENANCE_PREFIX)) {
+      const note = c.issue.slice(MAINTENANCE_PREFIX.length)
+      ;(NONE_DAILY_RE.test(note) ? daily : misc).push({ ...c, categoryNote: note })
+      continue
+    }
+    const entry = linearOk ? lineage?.get?.(c.issue) : null
+    if (entry?.ok) {
+      const cls = classifyLineage(entry.data, eventKeys, rootKey)
+      if (cls.eventKey) {
+        byEvent.get(cls.eventKey).push({ ...c, sub: cls.sub, issuePath: cls.path })
+      } else {
+        unassign(c, cls.reason === 'not_found' ? 'issue_not_found' : cls.reason)
+      }
+      continue
+    }
+    const ek = issueToEvent.get(c.issue)
+    if (ek) byEvent.get(ek).push({ ...c, sub: null, issuePath: null })
+    else unassign(c, linearOk && entry ? 'lineage_unknown' : 'not_under_root', entry && !entry.ok ? { unassignedNote: entry.error } : {})
   }
 
   const events = bases.map((b) => summarizeEvent(b, byEvent.get(b.key), carsOk))
@@ -363,10 +416,19 @@ export function buildCommandCenterView({ linear, cars }) {
   })
 
   const unassignedGroup = summarizeEvent({ key: '_none', title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }, unassigned, carsOk)
+  // why each car is unassigned, counted (the UI labels the group with it)
+  unassignedGroup.reasons = {}
+  for (const c of unassigned) unassignedGroup.reasons[c.unassignedReason] = (unassignedGroup.reasons[c.unassignedReason] || 0) + 1
+  // title stays null (not a hardcoded Chinese string): the client's eventTitle() looks
+  // the daily/misc labels up by key, same i18n path as "unassigned" (public/js/command-center-render.js).
+  const dailyGroup = summarizeEvent({ key: '_daily', title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }, daily, carsOk)
+  const miscGroup = summarizeEvent({ key: '_misc', title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }, misc, carsOk)
   return {
     root: linearOk ? linear.data.root : null,
     events,
     unassigned: unassignedGroup,
+    daily: dailyGroup,
+    misc: miscGroup,
     summary: {
       events: events.length,
       cars: carsOk ? carList.filter(countsTowardGroup).length : null,
@@ -420,17 +482,12 @@ export function loadCommandCenterConfig(path = CC_CONFIG_PATH) {
 
 // ─── Sources (IO) ───────────────────────────────────────────────────────────
 
-// The key goes through the plugin permission gate (manifest declares
-// personal.linear) — server-side only, never serialized to the browser.
-function defaultLinearApiKey() {
-  return resolvePluginSecrets(loadPersonalConfig(), builtinPlugin('command-center')).linear?.apiKey || null
-}
 
 /**
  * Cached Linear reader. A failure keeps lastOkAt for the "last success" label
  * but drops the data (no silently stale numbers — PRD P0-8).
  */
-export function createLinearSource({ fetchImpl = fetch, getApiKey = defaultLinearApiKey, now = () => Date.now() } = {}) {
+export function createLinearSource({ fetchImpl = fetch, getApiKey = resolveLinearApiKey, now = () => Date.now() } = {}) {
   let snap = null
   let snapKey = null
   let lastOkAt = null
@@ -517,7 +574,11 @@ const DOCUMENT_KINDS = new Set(['task', 'step', 'report'])
  * decided by what was read, not by an earlier stat (a file growing between
  * stat and read can't push more than maxBytes into memory).
  */
-export async function readTextCapped(p, maxBytes) {
+export function readTextCapped(p, maxBytes) {
+  return withFsSlot(() => _readTextCapped(p, maxBytes)) // one home-fs slot for the open/read/close
+}
+
+async function _readTextCapped(p, maxBytes) {
   const fh = await open(p, 'r')
   try {
     if (!(await fh.stat()).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTFILE' })
@@ -537,11 +598,30 @@ export async function readTextCapped(p, maxBytes) {
 export function createCommandCenterRoutes({
   configPath = CC_CONFIG_PATH,
   linearSource = createLinearSource(),
+  lineageSource = createLineageSource(),
   carsSource = createCarsSource(),
   ownerSource = createOwnerPendingSource(),
   quotaSource = createQuotaSource(),
+  quotaSnapshotSource = createQuotaSnapshotSource({ quotaSource }),
+  quotaSeriesSource = createQuotaSeriesSource(),
 } = {}) {
   const router = express.Router()
+
+  // P0-5 quota background refresh (nanoquota_1340): independent of request
+  // traffic, so the dashboard never pays for a cold scan after a quiet
+  // stretch. Config is re-read each tick (it can be hand-edited on a live
+  // host); a missing/broken config just skips this tick, same as the route.
+  const refreshQuotaSnapshot = () => {
+    const { config, error } = loadCommandCenterConfig(configPath)
+    if (error) return
+    quotaSnapshotSource.get(config.quotaDir, config.quotaStaleSec, {
+      usageSnapLogPath: config.quotaUsageSnapLogPath,
+      dispatchLogDirs: config.quotaDispatchLogDirs,
+    }).catch(() => {})
+  }
+  refreshQuotaSnapshot()
+  const quotaRefreshTimer = setInterval(refreshQuotaSnapshot, QUOTA_SNAPSHOT_POLL_MS)
+  quotaRefreshTimer.unref?.()
 
   router.get('/api/command-center', async (_req, res, next) => {
     try {
@@ -551,7 +631,9 @@ export function createCommandCenterRoutes({
         linearSource.get(config.graphqlUrl, config.rootIssue, config.linearCacheSec),
         carsSource.get(config.carsPath, config.carsStaleSec),
       ])
-      res.json({ configured: true, ...buildCommandCenterView({ linear, cars }) })
+      // parent chains only matter when the tree itself is readable; cached per issue
+      const lineage = linear.ok ? await lineageSource.get(config.graphqlUrl, carIssueKeys(cars)) : null
+      res.json({ configured: true, ...buildCommandCenterView({ linear, cars, lineage }) })
     } catch (err) { next(err) }
   })
 
@@ -586,17 +668,31 @@ export function createCommandCenterRoutes({
 
   // P0-5 quota per pool — freshest of three readings per pool (on-disk
   // header-reading cache / usage_snap.log / dispatch-log QUOTA_HDR lines),
-  // still no model API calls from nanocode itself.
+  // still no model API calls from nanocode itself. Served from the snapshot
+  // cache above (quotaSnapshotSource) — never scans the shared disk inline,
+  // so a stalled mount cannot make this request slow (REPORT_nanoquota_1340.md).
   router.get('/api/command-center/quota', async (_req, res, next) => {
     try {
       const { config, error } = loadCommandCenterConfig(configPath)
       if (error) return res.json({ configured: false, error })
-      const q = await quotaSource.get(config.quotaDir, config.quotaStaleSec, {
+      const q = await quotaSnapshotSource.get(config.quotaDir, config.quotaStaleSec, {
         usageSnapLogPath: config.quotaUsageSnapLogPath,
         dispatchLogDirs: config.quotaDispatchLogDirs,
       })
       const { data, ...source } = q
       res.json({ configured: true, staleSec: config.quotaStaleSec, ...(data || { pools: [], tightest: [] }), source })
+    } catch (err) { next(err) }
+  })
+
+  // Six-pool available-quota curve (7 days back + the next 7 days' resets),
+  // read-only from the same usage_snap.log the per-pool block uses.
+  router.get('/api/command-center/quota/series', async (_req, res, next) => {
+    try {
+      const { config, error } = loadCommandCenterConfig(configPath)
+      if (error) return res.json({ configured: false, error })
+      const q = await quotaSeriesSource.get(config.quotaUsageSnapLogPath)
+      const { data, ...source } = q
+      res.json({ configured: true, ...(data || {}), source })
     } catch (err) { next(err) }
   })
 

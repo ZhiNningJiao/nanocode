@@ -15,6 +15,8 @@ demo-toolblocks/
 research/arch-refactor/screenshots/
 *.log
 *.png
+# PWA app icons (manifest) are the only committed PNGs
+!public/icons/*.png
 run.log
 nanocode-*.log
 server-*.log
@@ -33,3 +35,25 @@ server/tests/.fixtures-tmp/
 
 # command center — real root issue key / export path, never committed
 config/command-center.local.json
+
+# dispatch tool — real paths / issue keys / pools, never committed
+config/dispatch.local.json
+
+# phone input board — real chat id / owner id, never committed
+config/phone-input.local.json
+
+# services / agents — real internal hosts, never committed (public-repo hygiene)
+server/services-config.local.json
+server/agents-config.local.json
+.nanocode/
+# car run artifacts never go into the repo (荣耻篇 〇·3)
+/REPORT_*.md
+/HANDOFF_*.md
+/FLAG_*
+/FAILSIG_*
+/run*.log
+/qa-signal.json
+/evidence.md
+*.orig
+*.pre-*
+test-results/

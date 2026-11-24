@@ -11,30 +11,24 @@
  * Cross-project / home-root access (read-only routes only):
  *   When an absolute path is supplied, the sandbox check is expanded:
  *   1. If any project's cwd is an ancestor of the path, use that project's sandbox.
- *   2. Otherwise, fall back to HOME_ROOT (/storage/home/zhiningjiao) as the sandbox root.
+ *   2. Otherwise, fall back to HOME_ROOT (this process's home directory) as the sandbox root.
  *   3. Paths outside HOME_ROOT are always rejected (403).
  */
 
 import { Router } from 'express'
-import {
-  statSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  createReadStream,
-  createWriteStream,
-  openSync,
-  readSync,
-  closeSync,
-  unlinkSync,
-  mkdirSync,
-} from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { resolve, relative, isAbsolute, basename, dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 import Busboy from 'busboy'
+import { timedFs as fs, mapLimit, readHead, statSafe, DEFAULT_SCAN_CONCURRENCY } from './bounded-scan.js'
 
-/** Home-root sandbox for cross-project / codex_work access (single-user dev box). */
-const HOME_ROOT = resolve('/storage/home/zhiningjiao')
+/**
+ * Home-root sandbox for cross-project / home-dir access (single-user dev
+ * box). Neutral default is the OS home dir of whichever user runs the
+ * process — never a hardcoded path. Override with NANOCODE_HOME_ROOT if a
+ * deployment's sandbox root should differ from $HOME.
+ */
+const HOME_ROOT = resolve(process.env.NANOCODE_HOME_ROOT || homedir())
 
 const TEXT_SIZE_CAP = 256 * 1024 // 256 KB
 const UPLOAD_SIZE_CAP = 50 * 1024 * 1024 // 50 MB
@@ -103,7 +97,12 @@ function resolveWithFallback(project, store, inputPath) {
     throw err
   }
 
-  const input = String(inputPath || '')
+  let input = String(inputPath || '')
+  // Expand a leading ~/ (or bare ~) to HOME_ROOT server-side — the client
+  // never hardcodes a home path, it just forwards the tilde form.
+  if (input === '~' || input.startsWith('~/')) {
+    input = join(HOME_ROOT, input.slice(1))
+  }
 
   // ── Case A: not absolute → standard project sandbox ──
   if (!isAbsolute(input)) {
@@ -148,27 +147,14 @@ function resolveWithFallback(project, store, inputPath) {
 export { resolveWithFallback as _resolveWithFallback }
 
 /** Read the first 8KB of a file and look for a NUL byte (binary heuristic). */
-function isLikelyBinary(filePath) {
-  let fd
-  try {
-    fd = openSync(filePath, 'r')
-    const buf = Buffer.alloc(BINARY_PROBE_BYTES)
-    const n = readSync(fd, buf, 0, BINARY_PROBE_BYTES, 0)
-    for (let i = 0; i < n; i++) {
-      if (buf[i] === 0) return true
-    }
-    return false
-  } catch {
-    return false
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd) } catch {}
-    }
-  }
+async function isLikelyBinary(filePath) {
+  return (await readHead(filePath, BINARY_PROBE_BYTES)).includes('\0')
 }
 
 /**
- * Create the file-API router for a given store.
+ * Create the file-API router for a given store. Every route is async
+ * (bounded-scan.js timedFs): project trees usually sit under the shared /jfs
+ * home and the explorer polls the listing route.
  */
 export function createFileRoutes(store) {
   const router = Router()
@@ -183,7 +169,7 @@ export function createFileRoutes(store) {
   }
 
   /** GET /api/projects/:id/files?path= — list entries (files + dirs). */
-  router.get('/api/projects/:id/files', (req, res) => {
+  router.get('/api/projects/:id/files', async (req, res) => {
     const project = getProject(req, res)
     if (!project) return
 
@@ -197,22 +183,19 @@ export function createFileRoutes(store) {
     }
 
     try {
-      const dirents = readdirSync(target, { withFileTypes: true })
+      const dirents = await fs.readdir(target, { withFileTypes: true })
       const entries = []
-      for (const d of dirents) {
+      await mapLimit(dirents, DEFAULT_SCAN_CONCURRENCY, async (d) => {
         const childAbs = join(target, d.name)
         const isDir = d.isDirectory()
-        let size = 0
-        if (!isDir) {
-          try { size = statSync(childAbs).size } catch {}
-        }
+        const size = isDir ? 0 : ((await statSafe(childAbs))?.size || 0)
         entries.push({
           name: d.name,
           path: relative(root, childAbs).replace(/\\/g, '/'),
           type: isDir ? 'dir' : 'file',
           size,
         })
-      }
+      })
       entries.sort((a, b) => {
         if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
         // Within a type group, sort dot-entries together at the bottom,
@@ -235,7 +218,7 @@ export function createFileRoutes(store) {
   })
 
   /** GET /api/projects/:id/files/content?path= — read text content. */
-  router.get('/api/projects/:id/files/content', (req, res) => {
+  router.get('/api/projects/:id/files/content', async (req, res) => {
     const project = getProject(req, res)
     if (!project) return
 
@@ -247,7 +230,7 @@ export function createFileRoutes(store) {
     }
 
     let stat
-    try { stat = statSync(target) }
+    try { stat = await fs.stat(target) }
     catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'not found' })
       return res.status(500).json({ error: err.message })
@@ -257,12 +240,12 @@ export function createFileRoutes(store) {
     if (stat.size > TEXT_SIZE_CAP) {
       return res.json({ content: null, size: stat.size, error: 'too large' })
     }
-    if (isLikelyBinary(target)) {
+    if (await isLikelyBinary(target)) {
       return res.json({ content: null, size: stat.size, error: 'binary' })
     }
 
     try {
-      const content = readFileSync(target, 'utf-8')
+      const content = await fs.readFile(target, 'utf-8')
       res.json({ content, size: stat.size })
     } catch (err) {
       res.status(500).json({ error: err.message })
@@ -270,7 +253,7 @@ export function createFileRoutes(store) {
   })
 
   /** GET /api/projects/:id/files/raw?path= — stream raw bytes. */
-  router.get('/api/projects/:id/files/raw', (req, res) => {
+  router.get('/api/projects/:id/files/raw', async (req, res) => {
     const project = getProject(req, res)
     if (!project) return
 
@@ -282,7 +265,7 @@ export function createFileRoutes(store) {
     }
 
     let stat
-    try { stat = statSync(target) }
+    try { stat = await fs.stat(target) }
     catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'not found' })
       return res.status(500).json({ error: err.message })
@@ -307,7 +290,7 @@ export function createFileRoutes(store) {
   })
 
   /** PUT /api/projects/:id/files/content — save text content. */
-  router.put('/api/projects/:id/files/content', (req, res) => {
+  router.put('/api/projects/:id/files/content', async (req, res) => {
     const project = getProject(req, res)
     if (!project) return
 
@@ -328,9 +311,9 @@ export function createFileRoutes(store) {
 
     try {
       const tmp = target + '.tmp'
-      writeFileSync(tmp, content, 'utf-8')
-      renameSync(tmp, target)
-      const stat = statSync(target)
+      await fs.writeFile(tmp, content, 'utf-8')
+      await fs.rename(tmp, target)
+      const stat = await fs.stat(target)
       res.json({ path: relPath, size: stat.size })
     } catch (err) {
       res.status(500).json({ error: err.message })
@@ -338,7 +321,7 @@ export function createFileRoutes(store) {
   })
 
   /** POST /api/projects/:id/files/upload — multipart upload via busboy. */
-  router.post('/api/projects/:id/files/upload', (req, res) => {
+  router.post('/api/projects/:id/files/upload', async (req, res) => {
     const project = getProject(req, res)
     if (!project) return
 
@@ -350,7 +333,7 @@ export function createFileRoutes(store) {
     }
 
     let destStat
-    try { destStat = statSync(destRel) }
+    try { destStat = await fs.stat(destRel) }
     catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'destination not found' })
       return res.status(500).json({ error: err.message })
@@ -385,12 +368,12 @@ export function createFileRoutes(store) {
           tooLarge = true
           aborted = true
           out.destroy()
-          try { unlinkSync(tmpPath) } catch {}
+          fs.unlink(tmpPath).catch(() => {})
         })
-        out.on('close', () => {
+        out.on('close', async () => {
           if (aborted) return resolveP()
           try {
-            renameSync(tmpPath, fullPath)
+            await fs.rename(tmpPath, fullPath)
             const root = resolve(project.cwd)
             uploaded.push({
               path: relative(root, fullPath).replace(/\\/g, '/'),
@@ -399,13 +382,13 @@ export function createFileRoutes(store) {
             })
           } catch {
             aborted = true
-            try { unlinkSync(tmpPath) } catch {}
+            fs.unlink(tmpPath).catch(() => {})
           }
           resolveP()
         })
         out.on('error', () => {
           aborted = true
-          try { unlinkSync(tmpPath) } catch {}
+          fs.unlink(tmpPath).catch(() => {})
           resolveP()
         })
       })
@@ -430,7 +413,7 @@ export function createFileRoutes(store) {
   })
 
   /** POST /api/projects/:id/files/mkdir — create a directory. */
-  router.post('/api/projects/:id/files/mkdir', (req, res) => {
+  router.post('/api/projects/:id/files/mkdir', async (req, res) => {
     const project = getProject(req, res)
     if (!project) return
 
@@ -442,7 +425,7 @@ export function createFileRoutes(store) {
     }
 
     try {
-      mkdirSync(target, { recursive: true })
+      await fs.mkdir(target, { recursive: true })
       res.json({ path: req.body?.path })
     } catch (err) {
       res.status(500).json({ error: err.message })
@@ -456,7 +439,7 @@ export function createFileRoutes(store) {
    * `<link href="styles.css">` to `…/serve/styles.css` against this same
    * endpoint. Inline only (no attachment disposition).
    */
-  router.get('/api/projects/:id/serve/*', (req, res) => {
+  router.get('/api/projects/:id/serve/*', async (req, res) => {
     const project = getProject(req, res)
     if (!project) return
 
@@ -469,7 +452,7 @@ export function createFileRoutes(store) {
     }
 
     let stat
-    try { stat = statSync(target) }
+    try { stat = await fs.stat(target) }
     catch (err) {
       if (err.code === 'ENOENT') return res.status(404).send('not found')
       return res.status(500).send(err.message)
@@ -487,7 +470,7 @@ export function createFileRoutes(store) {
   })
 
   /** POST /api/projects/:id/files/rename — rename or move a file or directory. */
-  router.post('/api/projects/:id/files/rename', (req, res) => {
+  router.post('/api/projects/:id/files/rename', async (req, res) => {
     const project = getProject(req, res)
     if (!project) return
 
@@ -505,7 +488,7 @@ export function createFileRoutes(store) {
     }
 
     try {
-      statSync(fromTarget) // 404 if source missing
+      await fs.stat(fromTarget) // 404 if source missing
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'source not found' })
       return res.status(500).json({ error: err.message })
@@ -513,14 +496,14 @@ export function createFileRoutes(store) {
 
     // Refuse to overwrite an existing destination
     try {
-      statSync(toTarget)
+      await fs.stat(toTarget)
       return res.status(409).json({ error: 'destination already exists' })
     } catch (err) {
       if (err.code !== 'ENOENT') return res.status(500).json({ error: err.message })
     }
 
     try {
-      renameSync(fromTarget, toTarget)
+      await fs.rename(fromTarget, toTarget)
       res.json({ from, to })
     } catch (err) {
       res.status(500).json({ error: err.message })

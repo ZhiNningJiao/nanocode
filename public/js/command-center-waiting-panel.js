@@ -108,6 +108,13 @@ export async function renderWaitingPane(el, { only = null, title = null } = {}) 
   if (!el.querySelector('.ccw-root')) {
     el.innerHTML = `<div class="ccw-root cc-mod"><div class="cc-mod-head"><span class="cc-top-title">${esc(title || t('plugin.ccw.title'))}</span><span class="cc-mod-meta ccw-meta"></span><button class="rp-btn-sm ccw-refresh" title="${esc(t('plugin.cc.refresh'))}">↻</button></div><div class="ccw-body"></div></div>`
     el.querySelector('.ccw-refresh').addEventListener('click', () => poll())
+    // 批准 = put a one-line approval into the secretary chat (the owner still
+    // presses send); cockpit.js owns the chat on/off check + the toast.
+    el.addEventListener('click', (ev) => {
+      const b = ev.target.closest('.ccw-approve')
+      if (!b) return
+      document.dispatchEvent(new CustomEvent('nanocode:cockpit-quote', { detail: { text: b.dataset.text } }))
+    })
   }
   syncTimer()
   renderView(el, views.get(el))
@@ -169,9 +176,12 @@ function itemHtml(i) {
   if (i.options?.length) extra.push(`<div class="ccw-opts">${i.options.map((o) => `<span class="cc-chip">${esc(o)}</span>`).join('')}</div>`)
   if (i.deadline) extra.push(`<div class="cc-sub">${esc(t('plugin.ccw.deadline'))} ${esc(fmtTime(i.deadline))}</div>`)
   const link = i.url ? linkHtml(i.url, t('plugin.ccw.open')) : ''
+  const approve = i.waitingOn === 'owner'
+    ? `<button type="button" class="ccw-approve" data-text="${esc(t('plugin.ccw.approveText', i.title, i.id.replace(/^owner:/, '')))}" title="${esc(t('plugin.ccw.approveTitle'))}">${esc(t('plugin.ccw.approve'))}</button>`
+    : ''
   return `
     <li class="ccw-item ccw-${esc(i.kind)}">
-      <div class="ccw-top"><span class="ccw-kind">${esc(t(`plugin.ccw.kind.${i.kind}`))}</span><span class="ccw-title">${esc(i.title)}</span><span class="ccw-wait" title="${esc(fmtTime(i.since))}">${esc(t('plugin.ccw.waited', waited))}</span></div>
+      <div class="ccw-top"><span class="ccw-kind">${esc(t(`plugin.ccw.kind.${i.kind}`))}</span><span class="ccw-title">${esc(i.title)}</span><span class="ccw-wait" title="${esc(fmtTime(i.since))}">${esc(t('plugin.ccw.waited', waited))}</span>${approve}</div>
       <div class="ccw-meta">${esc(on)}${who ? ` · ${esc(who)}` : ''}${i.traceId ? ` · <code>${esc(i.traceId)}</code>` : ''}${link ? ` · ${link}` : ''}</div>
       ${i.detail ? `<div class="ccw-detail">${esc(i.detail)}</div>` : ''}
       ${extra.join('')}

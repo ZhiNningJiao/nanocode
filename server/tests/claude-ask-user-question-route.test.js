@@ -21,12 +21,20 @@ class MockWs extends EventEmitter {
   }
 }
 
+async function waitUntil(fn, timeoutMs = 3000) {
+  const start = Date.now()
+  while (!fn()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitUntil timed out')
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
 function emitJson(ws, payload) {
   ws.emit('message', JSON.stringify(payload))
 }
 
 describe('claude AskUserQuestion websocket response path', () => {
-  it('resolves a pending dialog from claude-dialog-response and broadcasts the answered event', () => {
+  it('resolves a pending dialog from claude-dialog-response and broadcasts the answered event', async () => {
     const store = createStore(':memory:')
     // This test exercises the block-bridge AskUserQuestion path, which only
     // runs when renderMode='block'. The server default is now 'terminal'
@@ -48,6 +56,9 @@ describe('claude AskUserQuestion websocket response path', () => {
     })
 
     const sessionKey = `${project.id}:claude:${tab.id}`
+    // attach is async (session-lock acquire awaits fs/promises): wait until the
+    // ws has joined the session before driving the dialog response.
+    await waitUntil(() => ws.sent.some((m) => m.type === 'busy-state'))
     const cs = controller.claudeSessions.get(sessionKey)
     assert.ok(cs, 'expected Claude session to be created on attach')
 

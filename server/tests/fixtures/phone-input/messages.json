@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "identity": "bot",
+  "data": {
+    "has_more": false,
+    "page_token": "",
+    "total": 4,
+    "messages": [
+      {
+        "message_id": "om_hist4",
+        "msg_type": "text",
+        "create_time": "2026-11-23 14:40",
+        "deleted": false,
+        "updated": false,
+        "chat_id": "oc_phonetest",
+        "sender": { "id": "cli_botapp", "id_type": "app_id", "sender_type": "app", "name": "bot" },
+        "content": "bot says hi"
+      },
+      {
+        "message_id": "om_hist3",
+        "msg_type": "image",
+        "create_time": "2026-11-23 14:39",
+        "deleted": false,
+        "updated": false,
+        "chat_id": "oc_phonetest",
+        "sender": { "id": "ou_ownertest", "id_type": "open_id", "sender_type": "user", "name": "owner" },
+        "content": "![Image](img_v3_fake)"
+      },
+      {
+        "message_id": "om_hist2",
+        "msg_type": "text",
+        "create_time": "2026-11-23 14:38",
+        "deleted": false,
+        "updated": false,
+        "chat_id": "oc_phonetest",
+        "sender": { "id": "ou_ownertest", "id_type": "open_id", "sender_type": "user", "name": "owner" },
+        "content": "history text never pasted"
+      },
+      {
+        "message_id": "om_hist1",
+        "msg_type": "system",
+        "create_time": "2026-11-23 14:37",
+        "deleted": false,
+        "updated": false,
+        "chat_id": "oc_phonetest",
+        "sender": { "id": "", "id_type": "", "sender_type": "system" },
+        "content": "owner invited bot to the group"
+      }
+    ]
+  }
+}
