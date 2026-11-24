@@ -151,10 +151,12 @@ describe('buildCommandCenterView with lineage', () => {
     assert.deepEqual(rq.cars.map((c) => [c.car, c.sub?.label]).sort(), [['ikbody_1430', 'IK'], ['ikold_1200', 'IK']])
     assert.deepEqual(rq.cars.find((c) => c.car === 'ikbody_1430').issuePath, ['ALGO-31', 'ALGO-45', 'TEAM-113', 'TEAM-109'])
     assert.deepEqual(v.events.find((e) => e.key === 'TEAM-117').cars.map((c) => c.car), ['dispatchform_1440'])
+    // dailycat_0955: none:daily-optscan folds into the "daily" group, never "unassigned".
+    assert.deepEqual(v.daily.cars.map((c) => c.car), ['optscan_x'])
+    assert.equal(v.daily.cars[0].categoryNote, 'daily-optscan')
     const un = Object.fromEntries(v.unassigned.cars.map((c) => [c.car, c.unassignedReason]))
-    assert.deepEqual(un, { optscan_x: 'maintenance', old_1100: 'no_issue', stray_1000: 'not_under_root', blind_1000: 'lineage_unknown' })
-    assert.deepEqual(v.unassigned.reasons, { maintenance: 1, no_issue: 1, not_under_root: 1, lineage_unknown: 1 })
-    assert.equal(v.unassigned.cars.find((c) => c.car === 'optscan_x').unassignedNote, 'daily-optscan')
+    assert.deepEqual(un, { old_1100: 'no_issue', stray_1000: 'not_under_root', blind_1000: 'lineage_unknown' })
+    assert.deepEqual(v.unassigned.reasons, { no_issue: 1, not_under_root: 1, lineage_unknown: 1 })
   })
 
   it('without lineage (lookup down) the shallow tree still files direct grandchildren — never worse than before', () => {
@@ -171,7 +173,9 @@ describe('buildCommandCenterView with lineage', () => {
     const rows = swimlaneRows([rq])
     assert.deepEqual(rows.map((r) => r.kind), ['lane', 'sub', 'car', 'car'])
     const un = lanes.find((l) => l.unassigned)
-    assert.deepEqual(laneSubgroups(un).map((g) => g.reason).sort(), ['lineage_unknown', 'maintenance', 'no_issue', 'not_under_root'])
+    assert.deepEqual(laneSubgroups(un).map((g) => g.reason).sort(), ['lineage_unknown', 'no_issue', 'not_under_root'])
+    const daily = lanes.find((l) => l.key === '_daily')
+    assert.deepEqual(daily.cars.map((c) => c.car), ['optscan_x'])
     const tools = lanes.find((l) => l.key === 'TEAM-117')
     assert.deepEqual(swimlaneRows([tools]).map((r) => r.kind), ['lane', 'car']) // straight under the category: no header
   })

@@ -193,3 +193,46 @@ describe('dispatch form — every refusal reason has its own code', () => {
     assert.equal(r.plan.pool, 'T5')
   })
 })
+
+// dailycat_0955 (owner 2026-11-24 令): line: daily / misc — no tracker issue needed at all.
+describe('dispatch form — daily / misc (no Linear issue)', () => {
+  it('daily:<name> plans clean, no lineage lookup, LINEAR_ISSUE passed through as-is', async () => {
+    const { r, codes: c } = await codes(form({ line: 'daily', issue: 'daily:optscan', newIssue: undefined }))
+    assert.deepEqual(c, [])
+    assert.equal(r.ok, true)
+    assert.equal(r.plan.lineParent, null)
+    assert.equal(r.plan.team, null)
+    assert.equal(r.plan.env.LINEAR_ISSUE, 'daily:optscan')
+    assert.match(r.plan.summary, /线 daily（每日，无 Linear 单）\| 单 daily:optscan/)
+  })
+
+  it('misc:<name> plans clean too', async () => {
+    const { r, codes: c } = await codes(form({ line: 'misc', issue: 'misc:video_demo', newIssue: undefined }))
+    assert.deepEqual(c, [])
+    assert.equal(r.plan.env.LINEAR_ISSUE, 'misc:video_demo')
+    assert.match(r.plan.summary, /线 misc（杂项，无 Linear 单）\| 单 misc:video_demo/)
+  })
+
+  it('never calls out to Linear for daily/misc — dispatches even while Linear is fully down', async () => {
+    const { codes: c } = await codes(form({ line: 'daily', issue: 'daily:optscan', newIssue: undefined }), deps({ lineage: { down: ['ALG-31', 'LINE-13'] } }))
+    assert.deepEqual(c, [])
+  })
+
+  it('refuses newIssue on a daily/misc line (nothing to build a child issue under)', async () => {
+    const { codes: c } = await codes(form({ line: 'daily', issue: undefined, newIssue: { title: 'x' } }))
+    assert.ok(c.includes('bad_issue'))
+  })
+
+  it('refuses when the issue is missing, empty, or the wrong prefix for the line', async () => {
+    for (const issue of [undefined, 'daily:', 'daily', 'misc:optscan', 'ALG-31']) {
+      const { codes: c } = await codes(form({ line: 'daily', issue, newIssue: undefined }))
+      assert.ok(c.includes('bad_issue'), `issue=${JSON.stringify(issue)} should be bad_issue, got ${JSON.stringify(c)}`)
+    }
+  })
+
+  it('siblings on a daily/misc line come only from the form, never auto-matched by lineage', async () => {
+    const { r, codes: c } = await codes(form({ line: 'daily', issue: 'daily:optscan', newIssue: undefined, siblings: ['ikmap_1430'] }))
+    assert.deepEqual(c, [])
+    assert.deepEqual(r.plan.siblings, ['ikmap_1430'])
+  })
+})

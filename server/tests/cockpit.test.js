@@ -104,6 +104,18 @@ describe('cockpit big events', () => {
     assert.deepEqual(eventGroups(null), [])
     assert.deepEqual(eventGroups({ configured: false }), [])
   })
+  // dailycat_0955: daily/misc are their own lanes (between tracker events and unassigned),
+  // shown only when they actually carry a car — unlike unassigned they never show empty.
+  it('daily/misc show as their own lanes (only when non-empty), ahead of unassigned, not inside it', () => {
+    const d = data()
+    d.daily = { key: '_daily', title: '每日', cars: [car('d1', 'done', '2026-11-21T07:00:00Z', '2026-11-21T07:30:00Z')] }
+    d.misc = { key: '_misc', title: '杂项', cars: [] }
+    assert.deepEqual(eventGroups(d).map((e) => e.key), ['E-1', 'E-2', 'E-3', '_daily', '_none'])
+    const dailyLane = eventGroups(d).find((e) => e.key === '_daily')
+    assert.equal(dailyLane.unassigned, undefined)
+    d.misc.cars = [car('m1', 'done', '2026-11-21T07:00:00Z', '2026-11-21T07:30:00Z')]
+    assert.deepEqual(eventGroups(d).map((e) => e.key), ['E-1', 'E-2', 'E-3', '_daily', '_misc', '_none'])
+  })
 })
 
 describe('cockpit swimlane gantt', () => {

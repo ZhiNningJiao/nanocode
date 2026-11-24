@@ -33,7 +33,7 @@ import { initPluginState, isPluginEnabled, setPluginEnabled } from './right-pane
 import {
   COCKPIT_MODULES, COCKPIT_SETTING_KEY, normalizeLayout, serializeLayout, isModuleOn,
   setModuleOn, moveModule, modulesIn, moduleById, moduleByPlugin, normalizePage, normalizeMainView,
-  startsExpanded, quoteText, normalizeSpan, buildFeed,
+  startsExpanded, quoteText, normalizeSpan, buildFeed, eventGroups,
 } from './cockpit-model.js'
 import { sourcesHtml, ganttViewHtml, feedHtml, waitingChipsHtml, findCar } from './cockpit-views.js'
 import { stateLabel } from './command-center-render.js'
@@ -462,7 +462,7 @@ function eventSig(e) {
 
 function markChanges(body) {
   const next = new Map()
-  for (const e of [...(data.events || []), { ...(data.unassigned || {}), key: '_none' }]) next.set(e.key, eventSig(e))
+  for (const e of eventGroups(data)) next.set(e.key, eventSig(e))
   if (prevSig.size) {
     body.querySelectorAll('.ck-lane[data-event]').forEach((el) => {
       const k = el.dataset.event
@@ -539,7 +539,7 @@ function onMainClick(ev) {
   }
   if (kind === 'toggle') {
     const key = act.dataset.event || act.closest('[data-event]')?.dataset.event
-    const e = data && [...(data.events || []), { ...(data.unassigned || {}), key: '_none' }].find((x) => x.key === key)
+    const e = data && eventGroups(data).find((x) => x.key === key)
     fold[key] = !ui.isExpanded(key, e)
     try { localStorage.setItem(FOLD_KEY, JSON.stringify(fold)) } catch {}
     renderMain()
@@ -675,7 +675,7 @@ async function quote(kind, key) {
   if (!data) return
   let text = null
   if (kind === 'event') {
-    const e = key === '_none' ? { ...data.unassigned, key: '_none', unassigned: true } : (data.events || []).find((x) => x.key === key)
+    const e = eventGroups(data).find((x) => x.key === key)
     if (e) text = quoteText('event', e, QUOTE_WORDS)
   } else {
     const hit = findCar(data, key)

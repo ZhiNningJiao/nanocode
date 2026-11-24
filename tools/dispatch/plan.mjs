@@ -17,7 +17,7 @@
  */
 
 import { isAbsolute } from 'node:path'
-import { normalizeForm, MODELS } from './form.mjs'
+import { normalizeForm, MODELS, CATEGORY_LINES } from './form.mjs'
 import { pickPool, bjtStamp } from './pool-pick.mjs'
 
 export { bjtStamp }
@@ -47,7 +47,8 @@ export async function planDispatch(rawForm, cfg, deps) {
   }
   const W = cfg.paths.workRoot
   const tag = form.tag
-  const line = cfg.lines[form.line]
+  const isCategory = CATEGORY_LINES.includes(form.line)
+  const line = isCategory ? null : cfg.lines[form.line]
   const model = MODELS[form.model]
 
   // ── paths the car will read ──
@@ -65,23 +66,28 @@ export async function planDispatch(rawForm, cfg, deps) {
   if ((await deps.issueMapTags()).has(tag)) errors.push(err('tag_taken', `tag ${tag} 已在派车登记表里挂过单`))
 
   // ── tracker: the line's parent must still sit under the root; the issue must sit under the line ──
+  // daily/misc (dailycat_0955): no tracker issue exists at all, so none of this applies —
+  // the whole point is these cars don't need Linear to be reachable to dispatch.
   const cars = await deps.cars()
   const openCars = (cars || []).filter((c) => c.endOpen && ALIVE_STATES.has(c.state) && c.car !== tag)
-  const keys = [line.parent, ...(form.issue ? [form.issue] : []), ...openCars.map((c) => c.issue).filter(Boolean)]
-  const lin = await deps.lineage(keys)
-  const lp = lin.get(line.parent)
-  if (!lp?.ok) errors.push(err('linear_unreachable', `Linear 查不通，没法确认线 ${form.line} 的父单 ${line.parent}：${lp?.error || '无结果'}`))
-  else if (!lp.data.found) errors.push(err('line_parent_missing', `线 ${form.line} 的父单 ${line.parent} 在 Linear 里查不到（本地配置该更新了）`))
-  else if (line.parent === cfg.rootIssue || !lineageIncludes(lp.data, cfg.rootIssue)) {
-    errors.push(err('line_not_under_root', `线 ${form.line} 的父单 ${line.parent} 现在不在根 ${cfg.rootIssue} 下面（父链：${lp.data.chain.map((n) => n.key).join(' → ')}）；owner 可能改过结构，先改本地配置的线表`))
-  }
-  if (form.issue) {
-    const li = lin.get(form.issue)
-    if (!li?.ok) errors.push(err('linear_unreachable', `Linear 查不通，没法确认单 ${form.issue}：${li?.error || '无结果'}`))
-    else if (!li.data.found) errors.push(err('issue_not_found', `单 ${form.issue} 在 Linear 里查不到`))
-    else {
-      if (li.data.closed) errors.push(err('issue_closed', `单 ${form.issue} 已关`))
-      if (!lineageIncludes(li.data, line.parent)) errors.push(err('issue_not_in_line', `单 ${form.issue} 不在线 ${form.line}（${line.parent}）下面（父链：${li.data.chain.map((n) => n.key).join(' → ')}）`))
+  let lin = new Map()
+  if (!isCategory) {
+    const keys = [line.parent, ...(form.issue ? [form.issue] : []), ...openCars.map((c) => c.issue).filter(Boolean)]
+    lin = await deps.lineage(keys)
+    const lp = lin.get(line.parent)
+    if (!lp?.ok) errors.push(err('linear_unreachable', `Linear 查不通，没法确认线 ${form.line} 的父单 ${line.parent}：${lp?.error || '无结果'}`))
+    else if (!lp.data.found) errors.push(err('line_parent_missing', `线 ${form.line} 的父单 ${line.parent} 在 Linear 里查不到（本地配置该更新了）`))
+    else if (line.parent === cfg.rootIssue || !lineageIncludes(lp.data, cfg.rootIssue)) {
+      errors.push(err('line_not_under_root', `线 ${form.line} 的父单 ${line.parent} 现在不在根 ${cfg.rootIssue} 下面（父链：${lp.data.chain.map((n) => n.key).join(' → ')}）；owner 可能改过结构，先改本地配置的线表`))
+    }
+    if (form.issue) {
+      const li = lin.get(form.issue)
+      if (!li?.ok) errors.push(err('linear_unreachable', `Linear 查不通，没法确认单 ${form.issue}：${li?.error || '无结果'}`))
+      else if (!li.data.found) errors.push(err('issue_not_found', `单 ${form.issue} 在 Linear 里查不到`))
+      else {
+        if (li.data.closed) errors.push(err('issue_closed', `单 ${form.issue} 已关`))
+        if (!lineageIncludes(li.data, line.parent)) errors.push(err('issue_not_in_line', `单 ${form.issue} 不在线 ${form.line}（${line.parent}）下面（父链：${li.data.chain.map((n) => n.key).join(' → ')}）`))
+      }
     }
   }
 
@@ -108,10 +114,13 @@ export async function planDispatch(rawForm, cfg, deps) {
   }
 
   // ── siblings: cars still running on the same line (by real parent chain) + the form's own ──
+  // daily/misc cars have no parent chain to match against — siblings are whatever the form names.
   const siblings = new Set(form.siblings)
-  for (const c of openCars) {
-    const e = c.issue ? lin.get(c.issue) : null
-    if (e?.ok && lineageIncludes(e.data, line.parent)) siblings.add(c.car)
+  if (!isCategory) {
+    for (const c of openCars) {
+      const e = c.issue ? lin.get(c.issue) : null
+      if (e?.ok && lineageIncludes(e.data, line.parent)) siblings.add(c.car)
+    }
   }
   siblings.delete(tag)
 
@@ -154,8 +163,8 @@ export async function planDispatch(rawForm, cfg, deps) {
   const plan = {
     tag,
     line: form.line,
-    lineParent: line.parent,
-    team: line.team || null,
+    lineParent: line?.parent || null,
+    team: line?.team || null,
     issue: form.issue,
     newIssue: form.newIssue,
     issueText,
@@ -177,6 +186,7 @@ export async function planDispatch(rawForm, cfg, deps) {
     eta: bjtStamp(etaMs),
     command: `mkdir -p ${shellQuote(paths.tmp)} && cd ${shellQuote(W)} && ${Object.entries(env).map(([k, v]) => `${k}=${shellQuote(v)}`).join(' ')} timeout ${cfg.dispatchTimeoutSec} ${argv.map(shellQuote).join(' ')}`,
   }
-  plan.summary = `派车 ${tag} | 线 ${form.line}（${line.parent}）| 单 ${form.issue || `新建「${form.newIssue?.title}」`} | 池 ${pool || '—（GLM）'} | ${model?.label || form.model} ${form.effort} | 硬顶 ${form.hardCapHours} 小时 | 预计交付 ${plan.eta}`
+  const lineDesc = line ? `${form.line}（${line.parent}）` : `${form.line}（${form.line === 'daily' ? '每日' : '杂项'}，无 Linear 单）`
+  plan.summary = `派车 ${tag} | 线 ${lineDesc}| 单 ${form.issue || `新建「${form.newIssue?.title}」`} | 池 ${pool || '—（GLM）'} | ${model?.label || form.model} ${form.effort} | 硬顶 ${form.hardCapHours} 小时 | 预计交付 ${plan.eta}`
   return { ok: errors.length === 0, errors, form, plan }
 }

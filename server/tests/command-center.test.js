@@ -280,6 +280,38 @@ describe('buildCommandCenterView', () => {
     assert.deepEqual(v.events, [])
     assert.equal(v.summary.cars, null)
   })
+
+  // dailycat_0955 (owner 2026-11-24 令): daily:/misc: cars get their own groups, never
+  // "unassigned"; the old none:<reason> spelling (gate still accepts it) folds in too —
+  // none:daily-* → daily, every other none:* → misc — "maintenance" is retired.
+  it('daily:/misc:/none: cars land in their own groups, not unassigned, with the name after the colon kept', () => {
+    const v = buildCommandCenterView({
+      linear: okLinear(),
+      cars: okCars([
+        bar(),
+        bar({ trace_id: 'car_daily', car: 'car_daily', issue: 'daily:optscan' }),
+        bar({ trace_id: 'car_misc', car: 'car_misc', issue: 'misc:video_demo' }),
+        bar({ trace_id: 'car_none_misc', car: 'car_none_misc', issue: 'none:cleanup' }),
+        bar({ trace_id: 'car_none_daily', car: 'car_none_daily', issue: 'none:daily-optscan' }),
+      ]),
+    })
+    assert.deepEqual(v.daily.cars.map((c) => [c.traceId, c.categoryNote]), [['car_daily', 'optscan'], ['car_none_daily', 'daily-optscan']])
+    assert.deepEqual(v.misc.cars.map((c) => [c.traceId, c.categoryNote]), [['car_misc', 'video_demo'], ['car_none_misc', 'cleanup']])
+    assert.deepEqual(v.unassigned.cars, [])
+    assert.ok(!('maintenance' in v.unassigned.reasons))
+    assert.equal(v.daily.key, '_daily')
+    assert.equal(v.misc.key, '_misc')
+    assert.equal(v.summary.cars, 5)
+  })
+  it('tracker down: daily:/misc: cars still skip the fallback per-car event list and land in their groups', () => {
+    const v = buildCommandCenterView({
+      linear: { ok: false, checkedAt: 'now', lastOkAt: '2026-01-01T00:00:00Z', error: 'down', data: null },
+      cars: okCars([bar({ issue: 'daily:optscan' }), bar({ trace_id: 'x', issue: 'misc:video' })]),
+    })
+    assert.deepEqual(v.events, [])
+    assert.equal(v.daily.cars.length, 1)
+    assert.equal(v.misc.cars.length, 1)
+  })
 })
 
 // ─── config + sources ───────────────────────────────────────────────────────

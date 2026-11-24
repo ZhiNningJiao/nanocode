@@ -116,10 +116,17 @@ export function startsExpanded(e) {
   return !!(e && (e.waitingCount > 0 || ATTENTION_STATES.has(e.state)))
 }
 
-/** Events + the "unassigned" group (only when it has cars or the car source is down). */
+/**
+ * Events + daily/misc (dailycat_0955: own lanes, shown only when they carry a
+ * car) + the "unassigned" group (only when it has cars or the car source is
+ * down).
+ */
 export function eventGroups(data) {
   if (!data || !Array.isArray(data.events)) return []
   const out = [...data.events]
+  for (const g of [data.daily, data.misc]) {
+    if (g && g.cars && g.cars.length) out.push({ ...g })
+  }
   const un = data.unassigned
   if (un && ((un.cars && un.cars.length) || !data.sources?.cars?.ok)) out.push({ ...un, key: '_none', unassigned: true })
   return out

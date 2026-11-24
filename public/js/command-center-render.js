@@ -22,6 +22,8 @@ export function kindLabel(k) {
 
 export function eventTitle(e, isUnassigned) {
   if (isUnassigned) return t('plugin.cc.unassigned')
+  if (e.key === '_daily') return t('plugin.cc.dailyGroup') // dailycat_0955
+  if (e.key === '_misc') return t('plugin.cc.miscGroup')
   return e.title || `${e.key} · ${t('plugin.cc.titleUnknown')}`
 }
 

@@ -332,19 +332,29 @@ export function carIssueKeys(cars) {
 }
 
 const MAINTENANCE_PREFIX = 'none:'
+// dailycat_0955 (owner 2026-11-24 令「不能说非得要 Linear 才能去做」): cars that were never
+// meant to carry a tracker issue — daily chores (早报/扫仓...) and one-off misc work
+// (视频...). These get their own top-level groups, same shape as a tracker event,
+// never fall into "unassigned". `none:<reason>` is the old maintenance-car spelling
+// (akari_dispatch.sh gate still accepts it so old scripts don't break) — it is no
+// longer its own category: `none:daily-*` folds into "daily", everything else `none:*`
+// folds into "misc" (replaces the retired "maintenance" unassigned-reason).
+const DAILY_PREFIX = 'daily:'
+const MISC_PREFIX = 'misc:'
+const NO_TRACKER_PREFIXES = [MAINTENANCE_PREFIX, DAILY_PREFIX, MISC_PREFIX]
+const NONE_DAILY_RE = /^daily/i
 
 /**
  * Join the sources. Each car goes to the root's direct child (category) its
  * issue descends from, found by walking the issue's real parent chain
  * (`lineage`, linear-lineage.js) — any depth, any team; the car also gets
  * `sub` = the nearest 【named】 issue below the category (「重定向质量 › IK」).
- * When a chain lookup failed, the car falls back to the shallow tree (the
- * category's own children). Only cars that really have no issue, or whose
- * issue is truly outside the root, land in "unassigned", each with
- * `unassignedReason`. When Linear is down the events fall back to the issue
- * keys the cars carry (title/state unknown, said so in the UI); when the car
- * export is down every event says "car data unreachable" instead of
- * claiming zero cars.
+ * Only cars that really have no issue, or whose issue is truly outside the
+ * root, land in "unassigned", each with `unassignedReason`; daily:/misc:/none:
+ * cars land in their own `daily`/`misc` groups instead (never "unassigned").
+ * When Linear is down the events fall back to the issue keys the cars carry
+ * (title/state unknown, said so in the UI); when the car export is down
+ * every event says "car data unreachable" instead of claiming zero cars.
  */
 export function buildCommandCenterView({ linear, cars, lineage = null }) {
   const carsOk = !!cars?.ok
@@ -360,7 +370,7 @@ export function buildCommandCenterView({ linear, cars, lineage = null }) {
       for (const k of e.subIssues.keys) issueToEvent.set(k, e.key)
     }
   } else {
-    const keys = [...new Set(carList.map((c) => c.issue).filter((k) => k && !k.startsWith(MAINTENANCE_PREFIX)))]
+    const keys = [...new Set(carList.map((c) => c.issue).filter((k) => k && !NO_TRACKER_PREFIXES.some((p) => k.startsWith(p))))]
     bases = keys.map((k) => ({ key: k, title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }))
     for (const k of keys) issueToEvent.set(k, k)
   }
@@ -369,10 +379,18 @@ export function buildCommandCenterView({ linear, cars, lineage = null }) {
 
   const byEvent = new Map(bases.map((e) => [e.key, []]))
   const unassigned = []
+  const daily = []
+  const misc = []
   const unassign = (c, reason, extra = {}) => unassigned.push({ ...c, unassignedReason: reason, ...extra })
   for (const c of carList) {
     if (!c.issue) { unassign(c, 'no_issue'); continue }
-    if (c.issue.startsWith(MAINTENANCE_PREFIX)) { unassign(c, 'maintenance', { unassignedNote: c.issue.slice(MAINTENANCE_PREFIX.length) }); continue }
+    if (c.issue.startsWith(DAILY_PREFIX)) { daily.push({ ...c, categoryNote: c.issue.slice(DAILY_PREFIX.length) }); continue }
+    if (c.issue.startsWith(MISC_PREFIX)) { misc.push({ ...c, categoryNote: c.issue.slice(MISC_PREFIX.length) }); continue }
+    if (c.issue.startsWith(MAINTENANCE_PREFIX)) {
+      const note = c.issue.slice(MAINTENANCE_PREFIX.length)
+      ;(NONE_DAILY_RE.test(note) ? daily : misc).push({ ...c, categoryNote: note })
+      continue
+    }
     const entry = linearOk ? lineage?.get?.(c.issue) : null
     if (entry?.ok) {
       const cls = classifyLineage(entry.data, eventKeys, rootKey)
@@ -401,10 +419,16 @@ export function buildCommandCenterView({ linear, cars, lineage = null }) {
   // why each car is unassigned, counted (the UI labels the group with it)
   unassignedGroup.reasons = {}
   for (const c of unassigned) unassignedGroup.reasons[c.unassignedReason] = (unassignedGroup.reasons[c.unassignedReason] || 0) + 1
+  // title stays null (not a hardcoded Chinese string): the client's eventTitle() looks
+  // the daily/misc labels up by key, same i18n path as "unassigned" (public/js/command-center-render.js).
+  const dailyGroup = summarizeEvent({ key: '_daily', title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }, daily, carsOk)
+  const miscGroup = summarizeEvent({ key: '_misc', title: null, url: null, trackerState: null, updatedAt: null, subIssues: null, fromTracker: false }, misc, carsOk)
   return {
     root: linearOk ? linear.data.root : null,
     events,
     unassigned: unassignedGroup,
+    daily: dailyGroup,
+    misc: miscGroup,
     summary: {
       events: events.length,
       cars: carsOk ? carList.filter(countsTowardGroup).length : null,

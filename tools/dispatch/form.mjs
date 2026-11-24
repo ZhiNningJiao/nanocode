@@ -42,6 +42,13 @@ const TOPIC_RE = /^[a-z][a-z0-9]*$/
 const ISSUE_RE = /^[A-Z][A-Z0-9]*-\d+$/
 const TAG_MAX = 40
 
+// dailycat_0955 (owner 2026-11-24 令「不能说非得要 Linear 才能去做」): two lines that
+// don't carry a tracker issue at all — `line` itself names the category, `issue`
+// must be written as "<line>:<name>" (mirrors the akari_dispatch.sh gate's
+// LINEAR_ISSUE=daily:<name> / misc:<name>; see akari_dispatch.sh linear_issue_gate).
+export const CATEGORY_LINES = Object.freeze(['daily', 'misc'])
+const categoryIssueRe = (line) => new RegExp(`^${line}:[a-z][a-z0-9_-]{0,29}$`)
+
 /** "HHMM" in Beijing time. */
 export function bjtHHMM(nowMs) {
   const d = new Date(nowMs + 8 * 3600 * 1000)
@@ -73,17 +80,25 @@ export function normalizeForm(raw, { nowMs, lines = {} }) {
     errors.push(err('missing_field', '没填 tag 时必须填 topic（小写字母数字，字母开头），tag 按「topic_HHMM」生成'))
   }
 
-  if (typeof f.line !== 'string' || !f.line) errors.push(err('missing_field', '缺 line（本地配置 lines 表里的别名）'))
-  else if (!Object.prototype.hasOwnProperty.call(lines, f.line)) errors.push(err('unknown_line', `line "${f.line}" 不在本地配置的 lines 表里（有：${Object.keys(lines).join(' / ') || '空'}）`))
+  const isCategory = CATEGORY_LINES.includes(f.line)
+  if (typeof f.line !== 'string' || !f.line) errors.push(err('missing_field', '缺 line（本地配置 lines 表里的别名，或 daily / misc）'))
+  else if (!isCategory && !Object.prototype.hasOwnProperty.call(lines, f.line)) errors.push(err('unknown_line', `line "${f.line}" 不在本地配置的 lines 表里，也不是 ${CATEGORY_LINES.join(' / ')}（有：${Object.keys(lines).join(' / ') || '空'}）`))
   form.line = f.line
 
-  const hasIssue = f.issue != null
-  const hasNew = f.newIssue != null
-  if (hasIssue === hasNew) errors.push(err('missing_field', 'issue（已有单号）和 newIssue（{ title }，在线下建子单）必须二选一'))
-  if (hasIssue && (typeof f.issue !== 'string' || !ISSUE_RE.test(f.issue))) errors.push(err('bad_issue', `issue "${f.issue}" 不是单号形状（如 ALGO-31）`))
-  if (hasNew && !(typeof f.newIssue?.title === 'string' && f.newIssue.title.trim())) errors.push(err('bad_issue', 'newIssue 要有 title'))
-  form.issue = hasIssue ? f.issue : null
-  form.newIssue = hasNew ? { title: String(f.newIssue?.title || '').trim(), description: typeof f.newIssue?.description === 'string' ? f.newIssue.description : '' } : null
+  if (isCategory) {
+    if (f.newIssue != null) errors.push(err('bad_issue', `line "${f.line}" 不建子单，别填 newIssue`))
+    if (typeof f.issue !== 'string' || !categoryIssueRe(f.line).test(f.issue)) errors.push(err('bad_issue', `line "${f.line}" 要求 issue 写成 "${f.line}:<名字>"（小写字母数字下划线短横线、字母开头、≤30 字符），如 "${f.line}:optscan"`))
+    form.issue = typeof f.issue === 'string' ? f.issue : null
+    form.newIssue = null
+  } else {
+    const hasIssue = f.issue != null
+    const hasNew = f.newIssue != null
+    if (hasIssue === hasNew) errors.push(err('missing_field', 'issue（已有单号）和 newIssue（{ title }，在线下建子单）必须二选一'))
+    if (hasIssue && (typeof f.issue !== 'string' || !ISSUE_RE.test(f.issue))) errors.push(err('bad_issue', `issue "${f.issue}" 不是单号形状（如 ALGO-31）`))
+    if (hasNew && !(typeof f.newIssue?.title === 'string' && f.newIssue.title.trim())) errors.push(err('bad_issue', 'newIssue 要有 title'))
+    form.issue = hasIssue ? f.issue : null
+    form.newIssue = hasNew ? { title: String(f.newIssue?.title || '').trim(), description: typeof f.newIssue?.description === 'string' ? f.newIssue.description : '' } : null
+  }
 
   const model = MODELS[f.model]
   if (!model) errors.push(err('bad_model', `model "${f.model}" 不合法：只许短名 ${Object.keys(MODELS).filter((m) => !MODELS[m].ownerOnly).join(' / ')}（写全名会被派车脚本悄悄退回 GLM）`))
