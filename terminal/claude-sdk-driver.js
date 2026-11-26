@@ -1,6 +1,6 @@
 import { query as defaultQuery } from '@anthropic-ai/claude-agent-sdk'
 import { createPersistentSpawnHook } from './claude-persistent-spawn.js'
-import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
+import { resolveClaudeConfigDir, buildClaudeSpawnEnv, prepareClaudeAuth, claudeAuthForSpawn, wrapSpawnForAuth, recordTabAuthMode, logClaudeAuth } from './claude-env.js'
 import { pickFallbackTeam, teamModelDefaults, copyTranscriptToTeam, teamHasHeadroom, isRateLimitError } from './team-failover.js'
 import { loadPersonalConfig } from './personal-config.js'
 
@@ -360,11 +360,21 @@ export function createClaudeSdkDriver({
   // global Team setting, else default ~/.claude). The SDK driver previously
   // ignored the team config dir entirely — only the CLI driver honoured it —
   // so Team switch + cross-team resume silently broke under the SDK driver.
-  function wrapSpawnWithTeamEnv(baseSpawn, cs) {
+  //
+  // Long-token pools: the credential was resolved (prepareClaudeAuth) at the
+  // start of this turn; the spawn gets the token file on fd 3 and the tab
+  // records which credential its live process actually uses. `onAuth` lets the
+  // caller forward that record (the tmux bridge has no store of its own).
+  function wrapSpawnWithTeamEnv(baseSpawn, cs, onAuth = null) {
     return function spawnClaudeCodeProcess(spawnOpts) {
       const configDir = resolveClaudeConfigDir({ cs, store, home })
-      const teamEnv = buildClaudeSpawnEnv(spawnOpts?.env, { configDir })
-      return baseSpawn({ ...spawnOpts, env: teamEnv })
+      const auth = claudeAuthForSpawn(cs, configDir)
+      const teamEnv = buildClaudeSpawnEnv(spawnOpts?.env, { configDir, auth })
+      const proxy = baseSpawn({ ...spawnOpts, ...wrapSpawnForAuth(spawnOpts || {}, auth), env: teamEnv })
+      logClaudeAuth('[claude:auth]', cs.sessionKey, auth)
+      recordTabAuthMode(store, cs.sessionKey, auth)
+      onAuth?.(auth)
+      return proxy
     }
   }
   // Whether to use streaming mode (single persistent query per session).
@@ -418,6 +428,7 @@ export function createClaudeSdkDriver({
     let _cliFallbackTriggered = false
 
     try {
+      await prepareClaudeAuth(cs, { store, home })
       const q = queryImpl({
         prompt: userText,
         options: {
@@ -447,10 +458,11 @@ export function createClaudeSdkDriver({
           // Persistent spawn hook so the main claude process survives nanocode,
           // and so we can record its PID for sub-agent discovery.
           spawnClaudeCodeProcess: (opts) => {
-            const proxy = wrapSpawnWithTeamEnv(_persistentSpawnHook, cs)(opts)
+            let auth = null
+            const proxy = wrapSpawnWithTeamEnv(_persistentSpawnHook, cs, (a) => { auth = a })(opts)
             if (proxy?.pid) {
               try {
-                onClaudeSpawn?.({ sessionKey, pid: proxy.pid, proxy })
+                onClaudeSpawn?.({ sessionKey, pid: proxy.pid, proxy, auth })
               } catch {}
             }
             return proxy
@@ -673,10 +685,11 @@ export function createClaudeSdkDriver({
     const options = buildStreamingOptions(cs, cwd, useResume)
     const baseSpawn = options.spawnClaudeCodeProcess || _persistentSpawnHook
     options.spawnClaudeCodeProcess = (opts) => {
-      const proxy = wrapSpawnWithTeamEnv(baseSpawn, cs)(opts)
+      let auth = null
+      const proxy = wrapSpawnWithTeamEnv(baseSpawn, cs, (a) => { auth = a })(opts)
       if (proxy?.pid) {
         try {
-          onClaudeSpawn?.({ sessionKey, pid: proxy.pid, proxy })
+          onClaudeSpawn?.({ sessionKey, pid: proxy.pid, proxy, auth })
         } catch {}
       }
       return proxy
@@ -779,6 +792,9 @@ export function createClaudeSdkDriver({
       // above — buildStreamingOptions must not recompute it (turnCount has
       // already been bumped). A fresh first turn → useResumeOnFirstTurn=false →
       // create with {sessionId}; a resumed/continued tab → true → {resume}.
+      // Resolve the credential after the fail-back above (it may have moved
+      // cs to another team) and before any spawn the session may make.
+      await prepareClaudeAuth(cs, { store, home })
       const ss = ensureStreamingSession(cs, sessionKey, cwd, useResumeOnFirstTurn)
 
       // Set cs.currentProc so interrupt() from routes.js can stop the turn.

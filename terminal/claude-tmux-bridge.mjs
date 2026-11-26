@@ -199,8 +199,14 @@ const driver = createClaudeSdkDriver({
     broadcastSystem('tmux_no_cli_fallback', 'SDK streaming error; CLI fallback not available in tmux persistent mode')
     broadcast({ type: 'result', subtype: 'error_during_execution', session_id: cs.claudeSessionId })
   },
-  onClaudeSpawn: ({ pid }) => {
-    broadcastSystem('tmux_claude_spawn', String(pid), { pid })
+  // The spawned claude's credential (long_token / interactive) rides on the
+  // spawn notice: the bridge has no store, the nanocode server records it on
+  // the tab (claude-tmux-driver.js).
+  onClaudeSpawn: ({ pid, auth }) => {
+    broadcastSystem('tmux_claude_spawn', String(pid), {
+      pid,
+      ...(auth ? { authMode: auth.authMode, tokenFile: auth.tokenFile, reason: auth.reason } : {}),
+    })
   },
 })
 

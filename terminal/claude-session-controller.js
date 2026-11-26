@@ -8,7 +8,7 @@ import { createClaudeTmuxDriver } from './claude-tmux-driver.js'
 import { createCodexSdkDriver } from './codex-sdk-driver.js'
 import { loadCodexScrollback } from './codex-history.js'
 import { createOpencodeBlockDriver } from './opencode-block-driver.js'
-import { resolveClaudeConfigDir, buildClaudeSpawnEnv } from './claude-env.js'
+import { resolveClaudeConfigDir, buildClaudeSpawnEnv, prepareClaudeAuth, claudeAuthForSpawn, bashArgsForAuth, recordTabAuthMode, logClaudeAuth } from './claude-env.js'
 import { resolvePersonaPrompt, framePersonaPrompt } from './personas.js'
 import { copyTranscriptToTeam, teamModelDefaults } from './team-failover.js'
 import { loadPersonalConfig } from './personal-config.js'
@@ -766,14 +766,31 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     }
   }
 
-  function buildClaudeChildEnv(cs) {
+  function buildClaudeCliLaunch(cs, launchCmd) {
     // 需求1 Team switch + 需求5 cross-team resume: honour a per-tab configDir
     // (cs.claudeConfigDir, set when resuming a session from another team) over
     // the global store setting, and strip nanocode-self identifiers. The same
     // shared helper is used by the SDK driver so every driver honours the team
-    // config dir consistently.
+    // config dir consistently. Long-token pools: the bash script opens the
+    // token file on fd 3 first (claude-env.js). Throws when the turn's
+    // credential was not resolved for this dir (see claudeAuthForSpawn).
     const configDir = resolveClaudeConfigDir({ cs, store, home })
-    return buildClaudeSpawnEnv(process.env, { configDir })
+    const auth = claudeAuthForSpawn(cs, configDir)
+    return { args: bashArgsForAuth(launchCmd, auth), env: buildClaudeSpawnEnv(process.env, { configDir, auth }), auth }
+  }
+
+  // A CLI turn whose credential cannot be determined does not start: it ends
+  // with a visible spawn error instead of guessing a credential.
+  function cliAuthUnresolved(cs, sessionKey) {
+    try {
+      claudeAuthForSpawn(cs, resolveClaudeConfigDir({ cs, store, home }))
+      return false
+    } catch (err) {
+      console.error(`[claude:spawn] ${sessionKey}: ${err.message}`)
+      claudeBroadcast(cs, { type: 'result', subtype: 'error' })
+      claudeBroadcast(cs, { type: 'system', subtype: 'spawn_error', text: err.message })
+      return true
+    }
   }
 
   // ── Layer 2: --continue fallback ─────────────────────────────────────────────
@@ -781,6 +798,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
   // with --continue (picks the most recent jsonl in cwd) and updates cs.claudeSessionId
   // from the init event. If --continue also fails (no jsonl), falls back to new session.
   function _runClaudeCliContinueFallback(cs, userText, sessionKey, cwd) {
+    if (cliAuthUnresolved(cs, sessionKey)) { cs.busy = false; return }
     cs.busy = true
     cs.currentProc = null
 
@@ -822,12 +840,15 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     const launchCmd = `exec ${claudeCliBin()} ${escapedArgs.join(' ')}`
 
     console.log(`[claude:continue-fallback:spawn] sessionKey=${sessionKey}`)
-    const proc = spawnInDir('bash', ['-lc', launchCmd], { // cwd on /jfs: chdir in the child
+    const launch = buildClaudeCliLaunch(cs, launchCmd)
+    const proc = spawnInDir('bash', launch.args, { // cwd on /jfs: chdir in the child
       cwd,
-      env: buildClaudeChildEnv(cs),
+      env: launch.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     })
+    logClaudeAuth('[claude:auth]', sessionKey, launch.auth)
+    recordTabAuthMode(store, sessionKey, launch.auth)
     trackClaudeMainProcess(sessionKey, proc)
     proc._nanocodeInterrupted = false
     cs.currentProc = proc
@@ -948,6 +969,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       }
       return
     }
+    if (cliAuthUnresolved(cs, sessionKey)) return
     cs.busy = true
     cs.currentProc = null
 
@@ -1009,16 +1031,19 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     const escapedArgs = launchArgs.map((a) => sq(a))
     const launchCmd = `exec ${claudeCliBin()} ${escapedArgs.join(' ')}`
 
-    const _spawnEnv = buildClaudeChildEnv(cs)
+    const launch = buildClaudeCliLaunch(cs, launchCmd)
+    const _spawnEnv = launch.env
     console.log(`[claude:spawn] sessionKey=${sessionKey} turn=${cs.turnCount} len=${userText.length} cfgDir=${cs.claudeConfigDir || '(default)'} env.CLAUDE_CONFIG_DIR=${_spawnEnv.CLAUDE_CONFIG_DIR || '(unset)'} persona=${cs.persona || '(none)'} personaPromptLen=${(cs.personaPrompt || '').length} cmd=${launchCmd.slice(0, 200)}`)
     // spawnInDir: the turn's cwd is usually on the shared /jfs home; the chdir
     // must happen in the child, not inside uv_spawn on this event loop.
-    const proc = spawnInDir('bash', ['-lc', launchCmd], {
+    const proc = spawnInDir('bash', launch.args, {
       cwd,
       env: _spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     })
+    logClaudeAuth('[claude:auth]', sessionKey, launch.auth)
+    recordTabAuthMode(store, sessionKey, launch.auth)
     trackClaudeMainProcess(sessionKey, proc)
     proc._nanocodeInterrupted = false
     cs.currentProc = proc
@@ -1207,7 +1232,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
     if (cs.claudeDriver === 'sdk') {
       return sdkDriver.runSdkTurn(cs, userText, sessionKey, cwd)
     }
-    return runClaudeCliTurn(cs, userText, sessionKey, cwd)
+    return prepareClaudeAuth(cs, { store, home }).then(() => runClaudeCliTurn(cs, userText, sessionKey, cwd))
   }
 
   dispatchCodexTurn = (cs, userText, sessionKey, cwd) => (
@@ -1512,7 +1537,7 @@ export function createClaudeSessionController({ store, home, recentAgents, testQ
       // turn (Layer 3) instead of --resume on the not-yet-existing jsonl.
       skipAutoResume: !!tab?.skipAutoResume,
       // 需求5: cross-team resume stores the session's owning team (CLAUDE_CONFIG_DIR)
-      // on the tab; carry it on cs so buildClaudeChildEnv spawns claude under that
+      // on the tab; carry it on cs so buildClaudeCliLaunch spawns claude under that
       // team. cwd follows the session's original cwd (tab.claudeSessionCwd) so
       // claude --resume finds the jsonl in the matching project-slug dir and keeps
       // the conversation's file context — falling back to the project cwd.

@@ -23,6 +23,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { timedFs } from './bounded-scan.js'
 import { listTeamsAsync, readClaudeOAuthCredentials } from './usage.js'
+import { stripClaudeTokenEnv } from './claude-env.js'
 
 export const VERIFY_MODEL = 'claude-haiku-4-5-20251001'
 export const VERIFY_PROMPT = 'Reply with exactly one short word to prove you are alive.'
@@ -211,7 +212,9 @@ export function createPoolLoginDriver({
         cols: 120,
         rows: 40,
         cwd: homedir(),
-        env: { ...process.env, CLAUDE_CONFIG_DIR: pool.configDir, BROWSER: 'echo', TERM: 'xterm-256color' },
+        // Sign-in is the interactive login by definition: never hand it a
+        // long-lived token (claude-env.js) even if this server's env has one.
+        env: { ...stripClaudeTokenEnv(process.env), CLAUDE_CONFIG_DIR: pool.configDir, BROWSER: 'echo', TERM: 'xterm-256color' },
       })
     } catch (err) {
       finishWithError(pool.id, `spawn failed: ${err.message}`)
@@ -289,7 +292,7 @@ export function verifyPool(configDir, { execFileImpl = execFile, timeoutMs = VER
     execFileImpl(
       'claude',
       ['-p', VERIFY_PROMPT, '--model', VERIFY_MODEL],
-      { env: { ...process.env, CLAUDE_CONFIG_DIR: configDir }, timeout: timeoutMs, maxBuffer: 64 * 1024 },
+      { env: { ...stripClaudeTokenEnv(process.env), CLAUDE_CONFIG_DIR: configDir }, timeout: timeoutMs, maxBuffer: 64 * 1024 },
       (err, stdout) => {
         if (err) return resolve({ ok: false, error: String(err.message || err).slice(0, 300), at: new Date().toISOString() })
         resolve({ ok: true, reply: String(stdout || '').trim().slice(0, 300), at: new Date().toISOString() })

@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import * as fsp from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { resolveClaudeConfigDir } from './claude-env.js'
+import { resolveClaudeConfigDir, claudeOAuthTokenDir, recordTabAuthMode, logClaudeAuth } from './claude-env.js'
 import { timedFs } from './bounded-scan.js'
 
 const TMUX_BIN = process.env.NANOCODE_TMUX_BIN || '/usr/bin/tmux'
@@ -267,6 +267,11 @@ async function launchBridge(sessionKey, opts) {
     // 回复无). Always pin to the nanocode server's own HOME so bridge, claude
     // child, and server agree on where ~/.claude lives.
     ...(process.env.HOME ? ['-e', `HOME=${process.env.HOME}`] : []),
+    // ── Pin the long-token dir ──────────────────────────────────────────────
+    // Same frozen-env trap: the bridge decides long_token vs interactive from
+    // CLAUDE_OAUTH_TOKEN_DIR/T<N>.token (claude-env.js), so it must look in the
+    // directory this server looks in. A path, never a token value.
+    '-e', `CLAUDE_OAUTH_TOKEN_DIR=${claudeOAuthTokenDir()}`,
     '-s', name,
     '-n', 'nanocode-claude',
     // NOTE: no bare 'exec' here. tmux runs the trailing argv directly with
@@ -601,6 +606,11 @@ export function createClaudeTmuxDriver({ store, home, claudeBroadcast, broadcast
                   store.updateTabMetadata(projectId, tabId, { claudeSessionId: event.session_id })
                 }
               }
+            }
+            if (event?.type === 'system' && event?.subtype === 'tmux_claude_spawn' && event?.authMode) {
+              const auth = { authMode: event.authMode, tokenFile: event.tokenFile, reason: event.reason }
+              logClaudeAuth('[claude:tmux:auth]', sessionKey, auth)
+              recordTabAuthMode(store, sessionKey, auth)
             }
             if (event?.type === 'result') {
               sawResult = true

@@ -232,7 +232,7 @@ export function createStore(filePath = ':memory:') {
     if (!data.tabs[projectId]) return null
     const tab = data.tabs[projectId].find((t) => t.id === tabId)
     if (!tab) return null
-    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona', 'opencodeSessionId', 'allowTeamFailover', 'modelOverride', 'effortOverride', 'favorite', 'favoriteOrder', 'renderMode']
+    const allowed = ['claudeSessionId', 'claudeSessionStarted', 'codexThreadId', 'pendingQueue', 'tmuxTarget', 'claudeConfigDir', 'claudeSessionCwd', 'persona', 'opencodeSessionId', 'allowTeamFailover', 'modelOverride', 'effortOverride', 'favorite', 'favoriteOrder', 'renderMode', 'authMode', 'authModeDetail', 'authModeAt']
     let changed = false
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
