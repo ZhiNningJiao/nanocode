@@ -623,8 +623,6 @@ export function createClaudeSdkDriver({
     const sessionOptions = useResume
       ? { resume: cs.claudeSessionId }
       : { sessionId: cs.claudeSessionId }
-      ? { resume: cs.claudeSessionId }
-      : { sessionId: cs.claudeSessionId }
     const executableOverride = getClaudeCodeExecutableOverride()
     return {
       cwd,

@@ -143,6 +143,11 @@ done
       async () => {
         const store = createStore(':memory:')
         store.setSetting('renderMode', 'block') // block-bridge path; server default is now 'terminal'
+        // The fake \`claude\` on PATH speaks the CLI driver's stream-json; pin that
+        // driver. Left on the test default (SDK streaming) this only reached the
+        // fake via the CLI fallback after a first-turn "No conversation found",
+        // i.e. it depended on the resume bug fixed in claude-sdk-driver.js.
+        store.setSetting('claude_driver', 'cli')
         const project = store.createProject('Interrupt Project', projectCwd)
         const tab = store.createTab(project.id, { type: 'claude', label: 'claude interrupt' })
         const { router, handleTerminalWs } = createTerminalRoutes(store)
