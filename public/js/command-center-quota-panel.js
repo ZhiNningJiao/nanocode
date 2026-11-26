@@ -11,6 +11,7 @@
 import { t } from './i18n.js'
 import { quotaSeverity } from './quota-levels.js'
 import { ensureCss, esc, fmtTime, fmtAgo, downBlock, headerChip, removeHeaderChip, openPluginTab } from './command-center-format.js'
+import { mountSignInControls, unmountSignInControls } from './pool-login-panel.js'
 
 const POLL_MS = 60_000
 const CHIP = 'quota'
@@ -120,14 +121,27 @@ export async function renderQuotaPane(el) {
 
 /** Drop one view (`el`), or every view when the plugin is turned off. */
 export function resetQuotaLoadState(el) {
-  if (el) views.delete(el)
-  else views.clear()
+  if (el) {
+    views.delete(el)
+    const body = el.querySelector?.('.ccq-body')
+    if (body) unmountSignInControls(body)
+  } else {
+    for (const v of views) {
+      const body = v.querySelector?.('.ccq-body')
+      if (body) unmountSignInControls(body)
+    }
+    views.clear()
+  }
   syncTimer()
 }
 
 function renderView(pane) {
   const body = pane.querySelector('.ccq-body')
   if (!body) return
+  // The sign-in slots nanologin_2250 adds live under .ccq-card — any branch
+  // below that replaces body.innerHTML with something else takes them with
+  // it; only the pool-grid branch at the bottom re-mounts them.
+  unmountSignInControls(body)
   if (lastError && !last) { body.innerHTML = `<div class="rp-hint rp-error">${esc(lastError)}</div>`; return }
   if (!last) { body.innerHTML = `<div class="rp-empty">…</div>`; return }
   if (!last.configured) { body.innerHTML = `<div class="cc-block-down">${esc(t('plugin.cc.notConfigured'))}<div class="cc-sub">${esc(last.error || '')}</div></div>`; return }
@@ -139,6 +153,7 @@ function renderView(pane) {
   body.innerHTML = `
     <div class="cc-sub ccq-legend">${esc(t('plugin.ccq.legend', Math.round((last.staleSec || 900) / 60)))}</div>
     <div class="ccq-grid">${last.pools.map(poolHtml).join('')}</div>`
+  mountSignInControls(body)
 }
 
 // Only one badge in this slot, and only when there is something to act on:

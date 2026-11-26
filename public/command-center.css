@@ -238,6 +238,11 @@ a.cc-key:hover { color: var(--primary); }
 .ccq-reset { grid-area: r; font-size: 11px; color: var(--text-secondary); }
 .ccq-src { margin-top: 6px; }
 
+/* ── 一键登录 (nanologin_2250) ── */
+.ccq-signin-slot { margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.ccq-signin-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+.ccq-signin-code { width: 140px; padding: 2px 6px; font-size: 11px; }
+
 /* ── 对话抽屉 (floating button + drawer; outside the main layout) ── */
 .ccc-fab {
   position: fixed; right: 18px; bottom: 76px; z-index: 900;

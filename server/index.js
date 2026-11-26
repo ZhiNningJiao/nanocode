@@ -25,6 +25,7 @@ import { startWaker, stopWaker, restartWaker, getWakerControlState, setInterval 
 import { loadMachinesConfig, collectAllMachines, recommendHeavyWorkloadTarget } from './machines.js'
 import { PLUGINS_SETTING_KEY, isPluginEnabled } from './plugins-state.js'
 import { createCommandCenterRoutes } from './command-center.js'
+import { createPoolLoginRoutes } from './pool-login-routes.js'
 import { isSystemModeEnabled } from './system-mode-flag.js'
 import { AUTH_SETTING_KEY, LOGIN_PATH, LOGIN_API_PATH, createTokenAuth, markRemoteEntrySocket } from './token-auth.js'
 
@@ -739,6 +740,9 @@ app.get('/api/machines', (_req, res) => {
 
 // ─── Command Center (指挥舱 phase 1) — see server/command-center.js ─────────
 app.use(createCommandCenterRoutes())
+
+// ─── One-click pool login (nanologin_2250) — see server/pool-login-routes.js ─
+app.use(createPoolLoginRoutes())
 
 // The machine board is an optional plugin (default off): its SSH poll runs
 // only while the plugin is switched on (plugins_enabled), not "whether or not
