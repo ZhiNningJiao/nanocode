@@ -19,7 +19,7 @@ describe('plugin switch', () => {
     const optional = BUILTIN_PLUGINS.filter((p) => !p.defaultOn).map((p) => p.name).sort()
     assert.deepEqual(optional, [
       'akari', 'compare', 'historian', 'linear-mobile-push', 'memory', 'notify', 'persona',
-      'remote', 'rewind', 'services', 'tasks', 'tts',
+      'prompt-skills', 'remote', 'rewind', 'services', 'tasks', 'tts',
     ])
   })
 

@@ -129,6 +129,11 @@ const LAZY_PLUGINS = {
     render: (m, pane) => m.renderCommandCenterPane(pane),
     reset: (m) => m.resetCommandCenterLoadState(),
   },
+  'prompt-skills': {
+    key: 'prompt-skills-panel', imp: () => import('./prompt-skills-panel.js'),
+    render: (m, pane) => m.renderPromptSkillsPane(pane),
+    reset: (m) => m.resetPromptSkillsLoadState(),
+  },
   // `global`: UI that lives outside the right panel (header chip / floating
   // button) — mounted while the plugin is enabled, removed when it is turned off.
   'cc-waiting': {

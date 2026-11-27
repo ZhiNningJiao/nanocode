@@ -9206,3 +9206,85 @@ body.workspace-active .landing-overlay { display: none; }
   white-space: pre-wrap;
   margin: 0;
 }
+
+/* ── Prompt skills (nanoskill_1730): list in the right panel, full-window dialog for reading / editing / history / diff ── */
+.psk-list { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3); }
+.psk-list-head { display: flex; align-items: center; gap: var(--s-2); }
+.psk-list-actions { display: flex; gap: var(--s-1); margin-left: auto; }
+.psk-row {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: var(--s-2); cursor: pointer; color: var(--text); font-family: inherit;
+}
+.psk-row:hover { border-color: var(--border-active, var(--border)); background: var(--bg-hover); }
+.psk-row-top { display: flex; align-items: center; gap: var(--s-2); }
+.psk-row-title { font-size: 13px; font-weight: 600; }
+.psk-row-name { font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); }
+.psk-row-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+.psk-row-meta { font-size: 10px; color: var(--text-tertiary); }
+.psk-badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
+.psk-badge-prod { background: var(--success, #16a34a); color: #fff; }
+.psk-badge-old { background: var(--bg-hover); color: var(--warning); border: 1px solid var(--warning); }
+
+.psk-overlay {
+  position: fixed; inset: 0; z-index: 9000; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: stretch; justify-content: center; padding: 16px;
+}
+.psk-card {
+  flex: 1; max-width: 1600px; background: var(--bg, #1a1a1a); border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px); display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.psk-head {
+  display: flex; align-items: center; gap: var(--s-3); padding: 8px 12px;
+  border-bottom: 1px solid var(--border); background: var(--bg-inset, var(--bg-hover)); flex-shrink: 0;
+}
+.psk-head-title { font-weight: 600; font-size: 14px; white-space: nowrap; }
+.psk-head-sub { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.psk-close { font-size: 18px; min-width: 44px; min-height: 44px; }
+.psk-tabs { display: flex; gap: var(--s-1); padding: 6px 12px 0; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.psk-tab {
+  background: transparent; border: 1px solid transparent; border-bottom: none; color: var(--text-secondary);
+  padding: 6px 14px; font-size: 13px; cursor: pointer; border-radius: var(--radius-sm) var(--radius-sm) 0 0; font-family: inherit;
+}
+.psk-tab.active { background: var(--bg-card); border-color: var(--border); color: var(--text); font-weight: 600; }
+.psk-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: var(--s-2); }
+.psk-bar { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; flex-shrink: 0; }
+.psk-select { width: auto; max-width: 100%; }
+.psk-note { font-size: 12px; color: var(--text-secondary); }
+.psk-pre, .psk-diff {
+  flex: 1; margin: 0; font-family: var(--font-mono); font-size: 13px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word; background: var(--bg-secondary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; overflow: auto;
+}
+.psk-editor {
+  flex: 1; min-height: 320px; width: 100%; resize: none; font-family: var(--font-mono); font-size: 13px;
+  line-height: 1.55; background: var(--bg-secondary); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 12px;
+}
+.psk-editor:focus { border-color: var(--border-active); outline: none; }
+.psk-edit-meta, .psk-edit-foot { display: flex; gap: var(--s-2); align-items: flex-end; flex-wrap: wrap; flex-shrink: 0; }
+.psk-field { display: flex; flex-direction: column; gap: 2px; min-width: 320px; }
+.psk-btn { padding: 4px 10px; font-size: 12px; }
+.psk-field-wide { flex: 1; min-width: 260px; }
+.psk-field-label { font-size: 11px; font-weight: 600; color: var(--text-tertiary); }
+.psk-check { display: flex; align-items: center; gap: 4px; font-size: 12px; padding-bottom: 6px; }
+.psk-status { padding-bottom: 6px; }
+.psk-history { display: flex; flex-direction: column; gap: var(--s-1); }
+.psk-hrow {
+  display: flex; align-items: center; gap: var(--s-3); padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-card);
+}
+.psk-hrow.prod { border-color: var(--success, #16a34a); }
+.psk-hrow-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.psk-hrow-top { display: flex; align-items: center; gap: var(--s-2); }
+.psk-hver { font-family: var(--font-mono); font-weight: 600; }
+.psk-hrow-acts { display: flex; gap: var(--s-1); flex-wrap: wrap; justify-content: flex-end; }
+.psk-btn-warn { background: var(--warning, #d97706); }
+.psk-dline { white-space: pre-wrap; padding: 0 4px; }
+.psk-d-add { background: rgba(22, 163, 74, 0.18); }
+.psk-d-del { background: rgba(220, 38, 38, 0.18); text-decoration: line-through; text-decoration-color: rgba(220, 38, 38, 0.5); }
+@media (max-width: 640px) {
+  .psk-overlay { padding: 0; }
+  .psk-hrow { flex-direction: column; align-items: stretch; }
+}

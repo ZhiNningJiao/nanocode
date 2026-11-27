@@ -26,6 +26,7 @@ import { loadMachinesConfig, collectAllMachines, recommendHeavyWorkloadTarget } 
 import { PLUGINS_SETTING_KEY, isPluginEnabled } from './plugins-state.js'
 import { createCommandCenterRoutes } from './command-center.js'
 import { createPoolLoginRoutes } from './pool-login-routes.js'
+import { createPromptSkillsRoutes } from './prompt-skills-routes.js'
 import { isSystemModeEnabled } from './system-mode-flag.js'
 import { AUTH_SETTING_KEY, LOGIN_PATH, LOGIN_API_PATH, createTokenAuth, markRemoteEntrySocket } from './token-auth.js'
 
@@ -743,6 +744,12 @@ app.use(createCommandCenterRoutes())
 
 // ─── One-click pool login (nanologin_2250) — see server/pool-login-routes.js ─
 app.use(createPoolLoginRoutes())
+
+// ─── Prompt skills (nanoskill_1730) — see server/prompt-skills-routes.js ────
+// Mounted whatever the page plugin switch says: the dispatcher pulls the
+// production text from /api/prompt-skills/:name/prompt even when nobody has
+// the page open.
+app.use(createPromptSkillsRoutes())
 
 // The machine board is an optional plugin (default off): its SSH poll runs
 // only while the plugin is switched on (plugins_enabled), not "whether or not

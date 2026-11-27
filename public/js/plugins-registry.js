@@ -351,6 +351,22 @@ export const BUILTIN_PLUGINS = [
     builtin: true,
   },
   {
+    // nanoskill_1730 — prompt skills: versioned prompt templates the
+    // dispatcher pulls by name (production label, like Langfuse). The tab is
+    // the list; reading / editing / history / diff open full-window. The read
+    // API is mounted whether or not this tab is on. Optional (not in the
+    // kernel set): only an install that dispatches cars needs it.
+    name: 'prompt-skills',
+    version: '1.0.0',
+    apiVersion: '1.0',
+    group: 'monitor',
+    tab: { id: 'prompt-skills', labelKey: 'plugin.pskills.label' },
+    permissions: ['fs.read', 'fs.write'],
+    descriptionKey: 'plugin.pskills.desc',
+    refreshOnActivate: true,
+    builtin: true,
+  },
+  {
     // Command Center P0-4 — "waiting on you" (等你): cars stuck / delivered
     // (from the cars export) + owner decisions (a secretary-kept file).
     // Tab + an app-header chip with the count (right-panel `global` mount).
