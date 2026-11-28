@@ -1,6 +1,8 @@
 // Six-pool available-quota curve: series from usage_snap.log lines
 // (server/command-center-quota-series.js) + its route.
-import { describe, it, before, after } from 'node:test'
+import { describe, it } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import { writeFile, mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
@@ -85,7 +87,7 @@ describe('quota series: parse + build (pure)', () => {
 describe('quota series: source + route', () => {
   let server
   let base
-  before(async () => {
+  setupSuite(async () => {
     await mkdir(FIXTURE_DIR, { recursive: true })
     await writeFile(path.join(FIXTURE_DIR, 'usage_snap.log'), `${LOG.join('\n')}\n`)
     await writeFile(path.join(FIXTURE_DIR, 'cfg.json'), JSON.stringify({
@@ -101,11 +103,9 @@ describe('quota series: source + route', () => {
     app.use('/off', createCommandCenterRoutes({ configPath: path.join(FIXTURE_DIR, 'cfg-noquota.json') }))
     await new Promise((r) => { server = app.listen(0, 'localhost', r) })
     base = `http://localhost:${server.address().port}`
-  })
-  after(async () => {
-    await new Promise((r) => server.close(r))
-    await rm(FIXTURE_DIR, { recursive: true, force: true })
-  })
+  },
+  async () => { if (server) await new Promise((r) => server.close(r)) },
+  () => rm(FIXTURE_DIR, { recursive: true, force: true }))
 
   it('GET /api/command-center/quota/series returns the series + source, no local paths', async () => {
     const d = await (await fetch(`${base}/api/command-center/quota/series`)).json()

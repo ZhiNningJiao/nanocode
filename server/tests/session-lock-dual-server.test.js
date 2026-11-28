@@ -25,8 +25,10 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createStore } from '../store.js'
 import { createTerminalRoutes } from '../../terminal/routes.js'
+import { settleSessionLocks } from './fixtures/session-locks.mjs'
 
 const tempDirs = []
+const servers = [] // every makeServer of the running test: closed and lock-settled before its HOME goes
 const savedHome = process.env.HOME
 
 function delay(ms) {
@@ -58,7 +60,11 @@ function makeTempDir(prefix) {
   return dir
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // store.close() (idempotent) disposes the server's claude sessions; their
+  // last lock IO must land before HOME is removed, or it recreates the dir.
+  for (const { store } of servers) store.close()
+  for (const { home, claudeSessionId } of servers.splice(0)) await settleSessionLocks(home, [claudeSessionId])
   while (tempDirs.length > 0) {
     try { rmSync(tempDirs.pop(), { recursive: true, force: true }) } catch {}
   }
@@ -168,6 +174,7 @@ function makeServer(port, sharedHome, projectId, tabId, claudeSessionId) {
     testQueryImpl: factory,
     lockWatchIntervalMs: 50,
   })
+  servers.push({ store, home: sharedHome, claudeSessionId })
   return { store, project, tab, handleTerminalWs, router, state, port }
 }
 

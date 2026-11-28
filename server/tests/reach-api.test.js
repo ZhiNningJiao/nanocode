@@ -3,7 +3,7 @@
  * from the personal config (never from the repo). Parsing is unit-tested on
  * loadPersonalConfig; the route on a real server process.
  */
-import { describe, it, before, after } from 'node:test'
+import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -12,6 +12,8 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import net from 'node:net'
 import { loadPersonalConfig, resetPersonalConfigCache } from '../../terminal/personal-config.js'
+import { OWNED_NODE_ARGS, ownerEnvRemoving } from './fixtures/owner-watch.mjs'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -25,8 +27,9 @@ function freePort() {
 
 describe('personal config: reach.where', () => {
   let dir
-  before(() => { dir = mkdtempSync(join(tmpdir(), 'reach-cfg-')) })
-  after(() => { rmSync(dir, { recursive: true, force: true }); resetPersonalConfigCache() })
+  setupSuite(() => { dir = mkdtempSync(join(tmpdir(), 'reach-cfg-')) },
+    () => { if (dir) rmSync(dir, { recursive: true, force: true }) },
+    resetPersonalConfigCache)
 
   function load(obj) {
     resetPersonalConfigCache()
@@ -50,16 +53,17 @@ describe('GET /api/reach (real server)', () => {
   let child
   let port
   const logs = []
-  before(async () => {
+  setupSuite(async () => {
     dir = mkdtempSync(join(tmpdir(), 'reach-api-'))
     const home = join(dir, 'home')
     mkdirSync(home)
     const personal = join(dir, 'personal.json')
     writeFileSync(personal, JSON.stringify({ reach: { where: ['http://relay-a.example:9495/where.json', 'http://relay-b.example:9495/where.json'] } }))
     port = await freePort()
-    const env = { ...process.env, HOME: home, PORT: String(port), HOST: '127.0.0.1', NANOCODE_PERSONAL_CONFIG: personal }
+    const env = { ...process.env, ...ownerEnvRemoving(dir), HOME: home, PORT: String(port), HOST: '127.0.0.1', NANOCODE_PERSONAL_CONFIG: personal }
     for (const k of ['CLAUDE_CONFIG_DIR', 'TMUX', 'NANOCODE_REMOTE_PORT']) delete env[k]
-    child = spawn(process.execPath, [join(REPO, 'server', 'index.js')], { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    // The server exits with this process (and removes dir) even if it is killed before teardown.
+    child = spawn(process.execPath, [...OWNED_NODE_ARGS, join(REPO, 'server', 'index.js')], { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] })
     child.stdout.on('data', (d) => logs.push(String(d)))
     child.stderr.on('data', (d) => logs.push(String(d)))
     const end = Date.now() + 20000
@@ -67,11 +71,9 @@ describe('GET /api/reach (real server)', () => {
       try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) break } catch { /* not up yet */ }
       await sleep(100)
     }
-  })
-  after(() => {
-    if (child) child.kill('SIGKILL')
-    rmSync(dir, { recursive: true, force: true })
-  })
+  },
+  () => { if (child) child.kill('SIGKILL') },
+  () => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 
   it('returns the configured where.json URLs as JSON', async () => {
     const res = await fetch(`http://127.0.0.1:${port}/api/reach`)

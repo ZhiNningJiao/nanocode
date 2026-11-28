@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createStore } from '../store.js'
 import { createClaudeSessionController } from '../../terminal/claude-session-controller.js'
+import { disposeClaudeControllers } from './fixtures/session-locks.mjs'
 
 // Regression: the force-unwedge branch of _interruptRunningClaudeTurn
 // (busy=true, currentProc=null — e.g. tmux fallback leaked busy) used to call
@@ -15,6 +16,7 @@ import { createClaudeSessionController } from '../../terminal/claude-session-con
 // 500'd. This suite drives the wedge through the public handleInterrupt surface.
 
 const tempDirs = []
+const controllers = [] // { controller, home } — disposed and lock-settled before their temp dir goes
 
 function makeTempDir(prefix) {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -22,7 +24,14 @@ function makeTempDir(prefix) {
   return dir
 }
 
-afterEach(() => {
+function makeController(opts) {
+  const controller = createClaudeSessionController(opts)
+  controllers.push({ controller, home: opts.home })
+  return controller
+}
+
+afterEach(async () => {
+  for (const { controller, home } of controllers.splice(0)) await disposeClaudeControllers([controller], home)
   while (tempDirs.length > 0) {
     rmSync(tempDirs.pop(), { recursive: true, force: true })
   }
@@ -153,7 +162,7 @@ describe('claude force interrupt unwedge (busy=true, currentProc=null)', () => {
     store.setSetting('renderMode', 'block') // block-bridge path; server default is now 'terminal'
     const project = store.createProject('Unwedge Project', projectCwd)
     const tab = store.createTab(project.id, { type: 'claude', label: 'unwedge' })
-    const controller = createClaudeSessionController({
+    const controller = makeController({
       store,
       home: homeDir,
       testQueryImpl: makeInstantQueryImpl(),
@@ -215,7 +224,7 @@ describe('claude force interrupt unwedge (busy=true, currentProc=null)', () => {
     store.setSetting('renderMode', 'block') // block-bridge path; server default is now 'terminal'
     const project = store.createProject('Unwedge Soft Project', projectCwd)
     const tab = store.createTab(project.id, { type: 'claude', label: 'unwedge-soft' })
-    const controller = createClaudeSessionController({
+    const controller = makeController({
       store,
       home: homeDir,
       testQueryImpl: makeInstantQueryImpl(),

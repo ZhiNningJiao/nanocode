@@ -12,7 +12,7 @@
  * IPv4 address (the server sees that address as remoteAddress), plus pure
  * unit cases with an injected remoteAddress.
  */
-import { after, before, describe, it } from 'node:test'
+import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
@@ -33,6 +33,8 @@ import {
   safeEqual,
 } from '../token-auth.js'
 import { clearAuthToken, parseArgs, setAuthToken } from '../../tools/set-auth-token.mjs'
+import { OWNED_NODE_ARGS, ownerEnvRemoving } from './fixtures/owner-watch.mjs'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..')
@@ -127,7 +129,7 @@ describe('trust matrix over real sockets (HTTP + WebSocket)', () => {
   let token = TOKEN
   let clock = 0
   let mainServer, remoteServer, mainPort, remotePort
-  before(async () => {
+  setupSuite(async () => {
     const auth = createTokenAuth({ getToken: () => token, setToken: (t) => { token = t }, now: () => clock })
     const app = express()
     app.use(express.json())
@@ -150,8 +152,9 @@ describe('trust matrix over real sockets (HTTP + WebSocket)', () => {
     remoteServer.on('upgrade', onUpgrade)
     mainPort = await listen(mainServer, '0.0.0.0')
     remotePort = await listen(remoteServer, '127.0.0.1')
-  })
-  after(() => { mainServer?.close(); remoteServer?.close() })
+  },
+  () => mainServer?.close(),
+  () => remoteServer?.close())
 
   const loop = () => `http://127.0.0.1:${mainPort}`
   const lan = () => `http://${LAN_IP}:${mainPort}`
@@ -335,7 +338,7 @@ async function waitHealthy(url, child, timeoutMs = 30_000) {
 describe('server/index.js wiring (spawned real server, main + remote entry)', () => {
   let child, dir, port, rport
   let log = ''
-  before(async () => {
+  setupSuite(async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'nanoauth-srv-'))
     const home = path.join(dir, 'home')
     mkdirSync(home, { recursive: true })
@@ -343,11 +346,12 @@ describe('server/index.js wiring (spawned real server, main + remote entry)', ()
     writeFileSync(path.join(dir, 'data', 'nanocode.json'), JSON.stringify({ projects: [], settings: { nanocode_auth_token: TOKEN }, tabs: {} }))
     port = await freePort()
     rport = await freePort()
-    child = spawn(process.execPath, [path.join(REPO_ROOT, 'server', 'index.js')], {
+    // The server exits with this process (and removes dir) even if it is killed before teardown.
+    child = spawn(process.execPath, [...OWNED_NODE_ARGS, path.join(REPO_ROOT, 'server', 'index.js')], {
       cwd: dir,
       // Own HOME and tmux socket dir: never touch the shared per-user runtime dir.
       env: {
-        ...process.env, XDG_RUNTIME_DIR: '', NANOCODE_TMUX_SOCKET_DIR: path.join(dir, 'tmux'),
+        ...process.env, ...ownerEnvRemoving(dir), XDG_RUNTIME_DIR: '', NANOCODE_TMUX_SOCKET_DIR: path.join(dir, 'tmux'),
         HOME: home, PORT: String(port), HOST: '0.0.0.0', NANOCODE_REMOTE_PORT: String(rport),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -356,11 +360,9 @@ describe('server/index.js wiring (spawned real server, main + remote entry)', ()
     child.stderr.on('data', (d) => { log += d })
     await waitHealthy(`http://127.0.0.1:${port}/api/health`, child)
     await waitHealthy(`http://127.0.0.1:${rport}/api/health`, child)
-  })
-  after(() => {
-    child?.kill('SIGTERM')
-    if (dir) rmSync(dir, { recursive: true, force: true })
-  })
+  },
+  () => child?.kill('SIGTERM'),
+  () => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 
   it('logs the remote entry listener', () => assert.match(log, /remote entry \(token always required\)/))
   it('main loopback: /api/projects 200 and / serves the shell, no token', async () => {

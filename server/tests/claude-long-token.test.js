@@ -12,6 +12,8 @@
  * and its environment.
  */
 import { describe, it, before, after } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -239,8 +241,7 @@ function makeCs(configDir, tab = 'tab5') {
 
 for (const mode of ['per-turn', 'streaming']) {
   describe(`claude sdk driver (${mode}): pool tabs`, () => {
-    before(() => { process.env.CLAUDE_OAUTH_TOKEN_DIR = TOKEN_DIR })
-    after(() => { delete process.env.CLAUDE_OAUTH_TOKEN_DIR })
+    setupSuite(() => { process.env.CLAUDE_OAUTH_TOKEN_DIR = TOKEN_DIR }, () => { delete process.env.CLAUDE_OAUTH_TOKEN_DIR })
 
     const makeDriver = (updates, seen, spawns) => createClaudeSdkDriver({
       store: sdkStore(updates),

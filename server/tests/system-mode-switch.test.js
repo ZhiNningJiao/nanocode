@@ -15,9 +15,12 @@ import { tmpdir } from 'node:os'
 import { resolve, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isSystemModeEnabled } from '../system-mode-flag.js'
+import { OWNED_NODE_ARGS, OWNER_ENV, ownerEnvRemoving } from './fixtures/owner-watch.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const INDEX_PATH = resolve(__dirname, '..', 'index.js')
+// NANOCODE_TEST_INDEX_PATH (test-only): test-hygiene.test.js swaps in an
+// entry point that crashes on load, to prove a failed start leaves nothing behind.
+const INDEX_PATH = process.env.NANOCODE_TEST_INDEX_PATH || resolve(__dirname, '..', 'index.js')
 
 describe('isSystemModeEnabled (unit)', () => {
   it('is false when NANOCODE_SYSTEM is unset', () => {
@@ -41,11 +44,12 @@ function randomHighPort() {
 }
 
 async function spawnOnce(extraEnv, port, sockDir) {
-  const child = spawn('node', [INDEX_PATH], {
+  // The server exits with this process (and removes sockDir) even if it is killed mid-test.
+  const child = spawn(process.execPath, [...OWNED_NODE_ARGS, INDEX_PATH], {
     env: {
       ...process.env,
       ...extraEnv,
-      ...(sockDir ? { NANOCODE_TEST_SOCK_DIR: sockDir } : {}),
+      ...(sockDir ? { ...ownerEnvRemoving(sockDir), NANOCODE_TEST_SOCK_DIR: sockDir } : OWNER_ENV),
       HOST: '127.0.0.1',
       PORT: String(port),
     },
@@ -60,7 +64,7 @@ async function spawnOnce(extraEnv, port, sockDir) {
       const r = await fetch(`http://127.0.0.1:${port}/api/health`)
       if (r.ok) { ready = true; break }
     } catch {}
-    if (/EADDRINUSE/.test(out)) break
+    if (/EADDRINUSE/.test(out) || child.exitCode !== null) break
     await new Promise((r) => setTimeout(r, 150))
   }
   if (!ready) { child.kill('SIGKILL'); return { ok: false, out } }
@@ -100,20 +104,25 @@ describe('system-mode switch (integration, real server/index.js)', () => {
     // /run/nanocode/router.sock, which needs root and isn't what this test
     // is proving (the HTTP switch, not control-socket privilege handling).
     const sockDir = mkdtempSync(join(tmpdir(), 'nano-system-mode-switch-test-'))
-    const { child, port } = await spawnServer({ NANOCODE_SYSTEM: '1', NANOCODE_TEST_MODE: '1' }, undefined, sockDir)
+    // The dir is removed even when the server never comes up (spawnServer
+    // throws): that path used to leave an empty nano-system-mode-switch-test-*.
     try {
-      const health = await fetch(`http://127.0.0.1:${port}/api/health`)
-      assert.equal(health.status, 200)
-      // Router-mode test backdoor exists (NANOCODE_TEST_MODE=1), proving the
-      // router — not the single-user server — answered.
-      const issue = await fetch(`http://127.0.0.1:${port}/__test__/issue-session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid: 1000, username: 'tester', workerSock: '/nonexistent.sock' }),
-      })
-      assert.notEqual(issue.status, 404)
+      const { child, port } = await spawnServer({ NANOCODE_SYSTEM: '1', NANOCODE_TEST_MODE: '1' }, undefined, sockDir)
+      try {
+        const health = await fetch(`http://127.0.0.1:${port}/api/health`)
+        assert.equal(health.status, 200)
+        // Router-mode test backdoor exists (NANOCODE_TEST_MODE=1), proving the
+        // router — not the single-user server — answered.
+        const issue = await fetch(`http://127.0.0.1:${port}/__test__/issue-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: 1000, username: 'tester', workerSock: '/nonexistent.sock' }),
+        })
+        assert.notEqual(issue.status, 404)
+      } finally {
+        child.kill('SIGTERM')
+      }
     } finally {
-      child.kill('SIGTERM')
       rmSync(sockDir, { recursive: true, force: true })
     }
   })

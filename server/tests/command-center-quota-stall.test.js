@@ -7,7 +7,9 @@
  * does: a FIFO with no writer makes `readFile` hang exactly like a stuck
  * sshfs read, then proves the route keeps answering fast anyway.
  */
-import { describe, it, before, after } from 'node:test'
+import { describe, it } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { open as fsOpen } from 'node:fs/promises'
@@ -24,7 +26,7 @@ const BUDGET_MS = 200
 describe('quota route survives a stalled quota-dir read', { skip: !hasMkfifo && 'mkfifo not available' }, () => {
   let root, dir, server, base
 
-  before(async () => {
+  setupSuite(async () => {
     root = mkdtempSync(join(tmpdir(), 'nano-quotastall-'))
     dir = join(root, 'quota')
     mkdirSync(dir, { recursive: true })
@@ -52,16 +54,13 @@ describe('quota route survives a stalled quota-dir read', { skip: !hasMkfifo && 
     app.use(createCommandCenterRoutes({ configPath, quotaSnapshotSource: createQuotaSnapshotSource({ ttlMs: 150 }) }))
     await new Promise((r) => { server = app.listen(0, 'localhost', r) })
     base = `http://localhost:${server.address().port}`
-  })
-
-  after(async () => {
-    if (server) await new Promise((r) => server.close(r))
-    // Unblock the FIFO's pending open() (a writer appearing lets the stuck
-    // read see EOF) before removing the directory, so no libuv worker / home-fs
-    // slot (bounded-scan.js HOME_FS_CONCURRENCY) stays pinned after this test.
-    if (dir) { try { const fh = await fsOpen(join(dir, 'T2.json'), 'w'); await fh.close() } catch {} }
-    if (root) rmSync(root, { recursive: true, force: true })
-  })
+  },
+  async () => { if (server) await new Promise((r) => server.close(r)) },
+  // Unblock the FIFO's pending open() (a writer appearing lets the stuck
+  // read see EOF) before removing the directory, so no libuv worker / home-fs
+  // slot (bounded-scan.js HOME_FS_CONCURRENCY) stays pinned after this test.
+  async () => { if (dir) { try { const fh = await fsOpen(join(dir, 'T2.json'), 'w'); await fh.close() } catch {} } },
+  () => { if (root) rmSync(root, { recursive: true, force: true }) })
 
   it('keeps responding under budget once a file added to the quota dir hangs on read', async () => {
     // Wait for the first real snapshot (must show T1, not a "pending" row).
@@ -101,7 +100,7 @@ describe('quota route survives a stalled quota-dir read', { skip: !hasMkfifo && 
 describe('quota route: true cold start (no snapshot has ever completed)', () => {
   let root, dir, server, base
 
-  before(async () => {
+  setupSuite(async () => {
     root = mkdtempSync(join(tmpdir(), 'nano-quotacold-'))
     dir = join(root, 'quota')
     mkdirSync(dir, { recursive: true })
@@ -118,13 +117,10 @@ describe('quota route: true cold start (no snapshot has ever completed)', () => 
     app.use(createCommandCenterRoutes({ configPath }))
     await new Promise((r) => { server = app.listen(0, 'localhost', r) })
     base = `http://localhost:${server.address().port}`
-  })
-
-  after(async () => {
-    if (server) await new Promise((r) => server.close(r))
-    if (hasMkfifo && dir) { try { const fh = await fsOpen(join(dir, 'T1.json'), 'w'); await fh.close() } catch {} }
-    if (root) rmSync(root, { recursive: true, force: true })
-  })
+  },
+  async () => { if (server) await new Promise((r) => server.close(r)) },
+  async () => { if (hasMkfifo && dir) { try { const fh = await fsOpen(join(dir, 'T1.json'), 'w'); await fh.close() } catch {} } },
+  () => { if (root) rmSync(root, { recursive: true, force: true }) })
 
   it('the very first request (quota dir unreadable from the start) answers fast with "reading in progress", not a hang', { skip: !hasMkfifo && 'mkfifo not available' }, async () => {
     const t0 = Date.now()

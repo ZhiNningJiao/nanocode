@@ -1,4 +1,6 @@
-import { describe, it, before, after } from 'node:test'
+import { describe, it } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import { createServer } from 'node:net'
 import { mkdirSync, rmSync, existsSync, unlinkSync, readFileSync } from 'node:fs'
@@ -73,13 +75,8 @@ function createFakeBridgeServer(socketPath) {
 }
 
 describe('claude tmux driver', () => {
-  before(() => {
-    mkdirSync(TEST_DIR, { recursive: true })
-  })
-
-  after(() => {
-    try { rmSync(TEST_DIR, { recursive: true, force: true }) } catch {}
-  })
+  setupSuite(() => { mkdirSync(TEST_DIR, { recursive: true }) },
+    () => { try { rmSync(TEST_DIR, { recursive: true, force: true }) } catch {} })
 
   it('exposes the expected API and reflects tmux availability', () => {
     const driver = createClaudeTmuxDriver({

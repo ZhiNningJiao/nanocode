@@ -17,6 +17,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createClaudeSessionController } from '../../terminal/claude-session-controller.js'
 import { cwdToClaudeProjectDir } from '../../terminal/claude-history.js'
+import { disposeClaudeControllers } from './fixtures/session-locks.mjs'
 
 const { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } = fs
 
@@ -157,7 +158,8 @@ function makeController({ tabClaudeSessionId, mainSessionId, hasSeedHistory = fa
     })
   }
 
-  function cleanup() {
+  async function cleanup() {
+    await disposeClaudeControllers([controller], home)
     try { rmSync(projectCwd, { recursive: true, force: true }) } catch {}
     try { rmSync(home, { recursive: true, force: true }) } catch {}
   }
@@ -189,7 +191,7 @@ describe('claude session resume — explicit vs implicit sessionId', () => {
       assert.equal(cs.claudeSessionId, 'explicit-abc', 'explicit sessionId should not be replaced')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 
@@ -210,7 +212,7 @@ describe('claude session resume — explicit vs implicit sessionId', () => {
       assert.equal(cs.turnCount, 0, 'implicit sessionId with active guard should use new-session path (turnCount=0)')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 
@@ -228,7 +230,7 @@ describe('claude session resume — explicit vs implicit sessionId', () => {
       assert.equal(cs.claudeSessionId, 'some-other-session')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 
@@ -245,7 +247,7 @@ describe('claude session resume — explicit vs implicit sessionId', () => {
       assert.equal(cs.turnCount, 0, 'no history seed: new-session path (turnCount=0)')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 })
@@ -274,7 +276,7 @@ describe('claude session auto-recovery from jsonl', () => {
       assert.equal(cs.history[1].type, 'assistant', 'second event should be assistant')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 
@@ -299,7 +301,7 @@ describe('claude session auto-recovery from jsonl', () => {
       assert.ok(metaUpdate, 'tab metadata should be updated to fallback sessionId')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 
@@ -324,7 +326,7 @@ describe('claude session auto-recovery from jsonl', () => {
       assert.equal(cs.skipAutoResume, true, 'skipAutoResume flag should propagate to claude session')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 
@@ -350,7 +352,7 @@ describe('claude session auto-recovery from jsonl', () => {
       assert.ok(skipUpdate, 'tab metadata should be updated to fresh sessionId after skip')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 
@@ -372,7 +374,7 @@ describe('claude session auto-recovery from jsonl', () => {
       assert.equal(cs.history.length, 0, 'cs.history should be empty')
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 
@@ -394,7 +396,7 @@ describe('claude session auto-recovery from jsonl', () => {
       assert.equal(cs.history.length, 2)
     } finally {
       restoreEnv()
-      cleanup()
+      await cleanup()
     }
   })
 })
@@ -451,8 +453,11 @@ describe('claude session auto-recovery — cross-instance', () => {
       delete process.env.CLAUDE_CODE_SESSION_ID
     }
 
+    const controllers = []
     function createController() {
-      return createClaudeSessionController({ store, home, recentAgents })
+      const controller = createClaudeSessionController({ store, home, recentAgents })
+      controllers.push(controller)
+      return controller
     }
 
     function attach(controller) {
@@ -463,7 +468,8 @@ describe('claude session auto-recovery — cross-instance', () => {
       })
     }
 
-    function cleanup() {
+    async function cleanup() {
+      await disposeClaudeControllers(controllers, home)
       try { rmSync(projectCwd, { recursive: true, force: true }) } catch {}
       try { rmSync(home, { recursive: true, force: true }) } catch {}
     }
@@ -513,7 +519,7 @@ describe('claude session auto-recovery — cross-instance', () => {
       assert.equal(csB.history[1].type, 'assistant')
     } finally {
       resources.restoreEnv()
-      resources.cleanup()
+      await resources.cleanup()
     }
   })
 
@@ -542,7 +548,7 @@ describe('claude session auto-recovery — cross-instance', () => {
       assert.equal(csB.history.length, 2)
     } finally {
       resources.restoreEnv()
-      resources.cleanup()
+      await resources.cleanup()
     }
   })
 })

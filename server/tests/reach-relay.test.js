@@ -2,7 +2,9 @@
  * tools/reach/relay-forward.mjs + where-server.mjs — the two relay-side
  * services, on real loopback sockets.
  */
-import { describe, it, before, after } from 'node:test'
+import { describe, it } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import net from 'node:net'
@@ -70,7 +72,7 @@ describe('where.json server', () => {
   let dir
   let server
   let port
-  before(async () => {
+  setupSuite(async () => {
     dir = mkdtempSync(join(tmpdir(), 'reach-www-'))
     mkdirSync(join(dir, 'js'))
     writeFileSync(join(dir, 'offline.html'), '<title>find</title>')
@@ -78,11 +80,9 @@ describe('where.json server', () => {
     writeFileSync(join(dir, 'secret.txt'), 'no')
     server = createWhereServer({ www: dir })
     port = await listen(server)
-  })
-  after(async () => {
-    await close(server)
-    rmSync(dir, { recursive: true, force: true })
-  })
+  },
+  async () => { if (server) await close(server) },
+  () => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 
   it('no where.json yet → 404 (never an invented one)', async () => {
     const r = await get(port, '/where.json')

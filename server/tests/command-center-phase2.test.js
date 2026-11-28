@@ -1,6 +1,8 @@
 // Command Center phase 2: link safety (P1), bounded doc read (P3), the
 // "waiting on you" queue (P0-4) and quota per pool (P0-5).
-import { describe, it, before, after } from 'node:test'
+import { describe, it, after } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import { writeFile, mkdir, rm, utimes } from 'node:fs/promises'
 import path from 'node:path'
@@ -73,7 +75,7 @@ describe('readTextCapped + doc route (P3)', () => {
   let server
   let base
   const dir = path.join(FIXTURE_DIR, 'doc')
-  before(async () => {
+  setupSuite(async () => {
     await mkdir(dir, { recursive: true })
     await writeFile(path.join(dir, 'small.md'), 'hello')
     await writeFile(path.join(dir, 'big.md'), 'x'.repeat(512 * 1024 + 10))
@@ -92,8 +94,8 @@ describe('readTextCapped + doc route (P3)', () => {
     await new Promise((r) => { server = app.listen(0, 'localhost', r) })
     base = `http://localhost:${server.address().port}`
     await fetch(`${base}/api/command-center`)
-  })
-  after(async () => { await new Promise((r) => server.close(r)) })
+  },
+  async () => { if (server) await new Promise((r) => server.close(r)) })
 
   it('never reads more than the cap, says when it cut', async () => {
     assert.deepEqual(await readTextCapped(path.join(dir, 'small.md'), 100), { text: 'hello', truncated: false })
@@ -395,7 +397,7 @@ describe('phase 2 routes', () => {
   let server
   let base
   const dir = path.join(FIXTURE_DIR, 'routes')
-  before(async () => {
+  setupSuite(async () => {
     await mkdir(path.join(dir, 'quota'), { recursive: true })
     await writeFile(path.join(dir, 'quota', 'T3.json'), JSON.stringify({ ...READING, fetched_at: new Date().toISOString(),
       // windows must still be open at test time, or the reading is voided
@@ -415,8 +417,8 @@ describe('phase 2 routes', () => {
     app.use('/p1', createCommandCenterRoutes({ configPath: phase1Only }))
     await new Promise((r) => { server = app.listen(0, 'localhost', r) })
     base = `http://localhost:${server.address().port}`
-  })
-  after(async () => { await new Promise((r) => server.close(r)) })
+  },
+  async () => { if (server) await new Promise((r) => server.close(r)) })
 
   it('GET /api/command-center/waiting joins both sources, no local paths leak', async () => {
     const d = await (await fetch(`${base}/api/command-center/waiting`)).json()

@@ -1,4 +1,6 @@
-import { describe, it, before, after } from 'node:test'
+import { describe, it } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import { writeFile, mkdir, rm, readdir, utimes } from 'node:fs/promises'
 import path from 'node:path'
@@ -317,8 +319,7 @@ describe('buildCommandCenterView', () => {
 // ─── config + sources ───────────────────────────────────────────────────────
 
 describe('config and sources (fixtures)', () => {
-  before(async () => { await mkdir(FIXTURE_DIR, { recursive: true }) })
-  after(async () => { await rm(FIXTURE_DIR, { recursive: true, force: true }) })
+  setupSuite(() => mkdir(FIXTURE_DIR, { recursive: true }), () => rm(FIXTURE_DIR, { recursive: true, force: true }))
 
   it('config: missing file / missing fields are reported, cache floor is 60s', async () => {
     assert.match(loadCommandCenterConfig(path.join(FIXTURE_DIR, 'nope.json')).error, /unreadable/)
@@ -418,7 +419,7 @@ describe('routes', () => {
   const cfgPath = path.join(FIXTURE_DIR, 'routes-cfg.json')
   const carsPath = path.join(FIXTURE_DIR, 'routes-cars.json')
 
-  before(async () => {
+  setupSuite(async () => {
     await mkdir(docDir, { recursive: true })
     await writeFile(path.join(docDir, 'REPORT_car_a.md'), '# report body')
     await writeFile(path.join(docDir, 'OTHER.md'), 'not listed')
@@ -430,11 +431,9 @@ describe('routes', () => {
     app.use('/unconfigured', createCommandCenterRoutes({ configPath: path.join(FIXTURE_DIR, 'missing.json') }))
     await new Promise((r) => { server = app.listen(0, 'localhost', r) })
     base = `http://localhost:${server.address().port}`
-  })
-  after(async () => {
-    await new Promise((r) => server.close(r))
-    await rm(FIXTURE_DIR, { recursive: true, force: true })
-  })
+  },
+  async () => { if (server) await new Promise((r) => server.close(r)) },
+  () => rm(FIXTURE_DIR, { recursive: true, force: true }))
 
   it('GET /api/command-center returns the joined view', async () => {
     const r = await fetch(`${base}/api/command-center`)

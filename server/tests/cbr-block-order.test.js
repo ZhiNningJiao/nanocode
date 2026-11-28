@@ -1,4 +1,6 @@
-import { after, before, describe, it } from 'node:test'
+import { describe, it } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { readFileSync, existsSync } from 'node:fs'
@@ -61,17 +63,14 @@ function parallelToolHistory() {
 describe('cbr block order (history replay)', () => {
   let server, browser, baseURL
 
-  before(async () => {
+  setupSuite(async () => {
     server = await startServer()
     const { port } = server.address()
     baseURL = `http://127.0.0.1:${port}`
     browser = await chromium.launch()
-  })
-
-  after(async () => {
-    if (browser) await browser.close()
-    if (server) await new Promise((r) => server.close(r))
-  })
+  },
+  async () => { if (browser) await browser.close() },
+  async () => { if (server) await new Promise((r) => server.close(r)) })
 
   async function renderOrder(viewport) {
     const ctx = await browser.newContext({ viewport })

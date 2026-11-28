@@ -12,7 +12,9 @@
  * That is what turns it red if the driver ever connects to the legacy path
  * directly again — the call that walks the home mount on the event loop.
  */
-import { describe, it, before, after } from 'node:test'
+import { describe, it } from 'node:test'
+import { setupSuite } from './fixtures/suite-hooks.mjs'
+
 import assert from 'node:assert/strict'
 import { createConnection } from 'node:net'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, symlinkSync, rmSync, chmodSync } from 'node:fs'
@@ -40,7 +42,7 @@ describe('tmux bridge socket directory', { skip: !tmuxInstalled() && 'tmux not i
   let root, home, localDir, legacyTarget, tmux, driverMod, driver
   const savedEnv = {}
 
-  before(async () => {
+  setupSuite(async () => {
     root = mkdtempSync(join(tmpdir(), 'nano-tmuxdir-'))
     // HOME long enough that <HOME>/.nanocode/tmux-sessions/<key>.sock exceeds sun_path.
     home = join(root, 'h'.repeat(60), 'home')
@@ -56,14 +58,11 @@ describe('tmux bridge socket directory', { skip: !tmuxInstalled() && 'tmux not i
     process.env.NANOCODE_TMUX_BIN = tmux.bin // read once at module load
     driverMod = await import('../../terminal/claude-tmux-driver.js')
     driver = driverMod.createClaudeTmuxDriver({ store: { getSetting: () => null }, claudeBroadcast: () => {}, rerunTurn: () => {} })
-  })
-
-  after(() => {
-    tmux?.killServer()
-    for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
-    if (root) rmSync(root, { recursive: true, force: true })
-    assert.equal(outerTmuxAlive(), true, 'the tmux server this test runs inside must still be alive')
-  })
+  },
+  () => tmux?.killServer(),
+  () => { for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v } },
+  () => { if (root) rmSync(root, { recursive: true, force: true }) },
+  () => assert.equal(outerTmuxAlive(), true, 'the tmux server this test runs inside must still be alive'))
 
   const makeCs = (sessionKey, claudeSessionId) => ({
     sessionKey, claudeSessionId, busy: false, turnCount: 1, queue: [], explicitSessionId: true, tabLabel: '',

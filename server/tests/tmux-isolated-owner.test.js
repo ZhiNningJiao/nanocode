@@ -11,17 +11,19 @@
  * bridge via startBridge, and one launched the way the driver does it (real
  * bridge path, swapped by the wrapper), plus a stand-in for the nanocode
  * server spawned the way home-fs-stall.test.js spawns it (`--import
- * owner-watch.mjs`) — then ends the child WITHOUT any cleanup and checks the
- * tmux server, both bridges and the spawned server are gone within 5 s.
+ * owner-watch.mjs`, given a temp dir to remove) — then ends the child WITHOUT
+ * any cleanup and checks the tmux server, both bridges and the spawned server
+ * are gone within 5 s, and so is the server's temp dir.
  *
  * What turns it red: stub bridges that no longer watch the test process
  * (--owner-pid dropped from the wrapper, or the watch removed from the stub),
- * or owner-watch.mjs no longer acting as a preload.
+ * or owner-watch.mjs no longer acting as a preload or no longer removing
+ * NANOCODE_TEST_OWNER_CLEANUP.
  */
 import { describe, it, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { tmuxInstalled } from './fixtures/tmux-isolated.js'
@@ -61,6 +63,9 @@ describe('private tmux does not outlive its test process', { skip: !tmuxInstalle
       const socket = join(root, 'tmux.sock')
       const sockA = join(root, 'a.sock')
       const sockB = join(root, 'b.sock')
+      const serverTmp = join(root, 'server-tmp') // stands for the test's temp dir a killed test never removes
+      mkdirSync(serverTmp)
+      writeFileSync(join(serverTmp, 'f'), '')
       const leftover = { socket, root, pids: [] }
       leftovers.push(leftover)
 
@@ -72,7 +77,7 @@ describe('private tmux does not outlive its test process', { skip: !tmuxInstalle
         const r = tmux.run('new-session', '-d', '-s', 'owner-b', process.execPath, '/x/terminal/claude-tmux-bridge.mjs', '--socket', ${JSON.stringify(sockB)}, '--session-id', 'sid-b')
         if (r.status !== 0) throw new Error(r.stderr)
         const server = spawn(process.execPath, ['--import', ${JSON.stringify(OWNER_WATCH)}, '-e', 'setInterval(() => {}, 1000) // ' + ${JSON.stringify(root)}],
-          { env: { ...process.env, NANOCODE_TEST_OWNER_PID: String(process.pid) }, stdio: 'ignore' })
+          { env: { ...process.env, NANOCODE_TEST_OWNER_PID: String(process.pid), NANOCODE_TEST_OWNER_CLEANUP: ${JSON.stringify(serverTmp)} }, stdio: 'ignore' })
         process.stdout.write('ready ' + server.pid + '\\n')
         process.stdin.once('data', () => process.exit(1)) // ends like an after() hook that threw
         setInterval(() => {}, 1000)
@@ -102,6 +107,7 @@ describe('private tmux does not outlive its test process', { skip: !tmuxInstalle
       const gone = await waitFor(() => !pids.some(pidAlive), 5000)
       assert.equal(gone, true, `still alive 5 s after the test process ended (tmux, bridges, server = ${pids}): ${pids.filter(pidAlive)}`)
       assert.notEqual(tmux('ls').status, 0, 'private tmux server must be gone')
+      assert.equal(existsSync(serverTmp), false, 'the server removes the temp dir it was given when the test process is gone')
     })
   }
 })
