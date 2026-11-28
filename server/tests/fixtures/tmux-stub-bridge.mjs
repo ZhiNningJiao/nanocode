@@ -5,12 +5,23 @@
 // can tell which bridge process served a turn — i.e. whether a session was
 // reattached or relaunched (STUB_LOG_DIR, if set, holds the logs instead, as
 // <socket basename>.log). Writes the same <socket>.sessionId sidecar.
+//
+// --owner-pid (required; tmux-isolated.js's wrapper adds it) is the test
+// process: the bridge exits once it is gone, so a test killed before its
+// after() hook cannot leave the private tmux server running.
 import { createServer } from 'node:net'
 import { appendFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
+import { exitWithOwner } from './owner-watch.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined }
+const ownerPid = Number(arg('--owner-pid'))
+if (!(ownerPid > 0)) {
+  console.error('tmux-stub-bridge: --owner-pid <test process pid> is required')
+  process.exit(2)
+}
+exitWithOwner(ownerPid)
 const socketPath = arg('--socket')
 const sessionId = arg('--session-id') || 'stub-session'
 const logPath = process.env.STUB_LOG_DIR ? join(process.env.STUB_LOG_DIR, `${basename(socketPath)}.log`) : `${socketPath}.log`

@@ -29,10 +29,15 @@ import { join } from 'node:path'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import { OWNER_WATCH } from './fixtures/owner-watch.mjs'
 
 const REPO = fileURLToPath(new URL('../..', import.meta.url))
 const WebSocket = createRequire(import.meta.url)('ws')
 const BUDGET_MS = 100
+// The spawned server exits once this test process is gone (fixtures/owner-watch.mjs),
+// so a test killed before its after() hook does not leave it running.
+const SERVER_ARGS = ['--import', OWNER_WATCH, join(REPO, 'server', 'index.js')]
+const OWNER_ENV = { NANOCODE_TEST_OWNER_PID: String(process.pid) }
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -101,10 +106,10 @@ describe('home filesystem stall does not stall the server', { timeout: 60_000 },
 
     port = await freePort()
     logs = []
-    const env = { ...process.env, HOME: home, PORT: String(port), HOST: '127.0.0.1' }
+    const env = { ...process.env, ...OWNER_ENV, HOME: home, PORT: String(port), HOST: '127.0.0.1' }
     delete env.CLAUDE_CONFIG_DIR
     delete env.NANOCODE_PERSONAL_CONFIG
-    child = spawn(process.execPath, [join(REPO, 'server', 'index.js')], {
+    child = spawn(process.execPath, SERVER_ARGS, {
       cwd: runDir,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -226,12 +231,12 @@ describe('home filesystem stall does not stall tmux-driven injects', { timeout: 
   async function startServer() {
     port = await freePort()
     logs = []
-    const env = { ...process.env, HOME: home, PORT: String(port), HOST: '127.0.0.1',
+    const env = { ...process.env, ...OWNER_ENV, HOME: home, PORT: String(port), HOST: '127.0.0.1',
       NANOCODE_TMUX_SOCKET_DIR: localDir, NANOCODE_TMUX_BIN: tmux.bin, NANOCODE_CLAUDE_TMUX: '1',
       // A tmux failure falls back to the SDK driver; never let that reach a real claude.
       NANOCODE_CLAUDE_CODE_EXECUTABLE: '/bin/false' }
     for (const k of ['CLAUDE_CONFIG_DIR', 'NANOCODE_PERSONAL_CONFIG', 'TMUX']) delete env[k]
-    child = spawn(process.execPath, [join(REPO, 'server', 'index.js')], { cwd: runDir, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    child = spawn(process.execPath, SERVER_ARGS, { cwd: runDir, env, stdio: ['ignore', 'pipe', 'pipe'] })
     child.stdout.on('data', (b) => logs.push(String(b)))
     child.stderr.on('data', (b) => logs.push(String(b)))
     const end = Date.now() + 20_000
@@ -242,7 +247,9 @@ describe('home filesystem stall does not stall tmux-driven injects', { timeout: 
   async function stopServer() {
     for (const ws of sockets.splice(0)) try { ws.terminate() } catch {}
     if (!child) return
-    const exited = new Promise((r) => child.once('exit', r))
+    // A server that already died (e.g. crashed on load) emits no further
+    // 'exit' — waiting for one would hang the after() hook forever.
+    const exited = child.exitCode === null && child.signalCode === null && new Promise((r) => child.once('exit', r))
     child.kill('SIGKILL')
     await exited
     child = null
@@ -265,8 +272,29 @@ describe('home filesystem stall does not stall tmux-driven injects', { timeout: 
     return false
   }
 
+  async function cleanUp() {
+    try {
+      await stopServer()
+    } finally {
+      tmux?.killServer()
+      if (root) rmSync(root, { recursive: true, force: true })
+      tmux = root = null
+    }
+  }
+
+  // node 18's runner skips a suite's after() when its before() fails (e.g. the
+  // server crashed on load), so a failed setup cleans up after itself.
   before(async () => {
     if (!usable) return
+    try {
+      await setUp()
+    } catch (err) {
+      await cleanUp()
+      throw err
+    }
+  })
+
+  async function setUp() {
     root = mkdtempSync(join(tmpdir(), 'nano-tmuxstall-'))
     home = join(root, 'home')
     runDir = join(root, 'run')
@@ -295,12 +323,10 @@ describe('home filesystem stall does not stall tmux-driven injects', { timeout: 
     const end = Date.now() + 5000
     while (Date.now() < end && !(existsSync(localSock(L)) && existsSync(legacySock(O)))) await sleep(50)
     await startServer()
-  })
+  }
 
   after(async () => {
-    await stopServer()
-    tmux?.killServer()
-    if (root) rmSync(root, { recursive: true, force: true })
+    await cleanUp()
     assert.equal(outerTmuxAlive(), true, 'the tmux server this test runs inside must still be alive')
   })
 
